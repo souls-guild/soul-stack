@@ -492,7 +492,7 @@ func TestAuthMethods_PasswordAlwaysTrue(t *testing.T) {
 // TestNewSessionCookie_PathScopedToAuth — the cookie is scoped to Path=/auth
 // (NIM-77): the browser does not send it on /v1//mcp//docs.
 func TestNewSessionCookie_PathScopedToAuth(t *testing.T) {
-	c := newSessionCookie("ey.tok.jwt", time.Hour)
+	c := newSessionCookie("ey.tok.jwt", time.Hour, false)
 	if c.Path != "/auth" {
 		t.Errorf("session-cookie Path = %q, want /auth (narrowed from /)", c.Path)
 	}

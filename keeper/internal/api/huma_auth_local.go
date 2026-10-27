@@ -27,8 +27,10 @@ import (
 type LocalAuthDeps struct {
 	Authenticator localAuthenticator
 	TTL           time.Duration
-	Audit         audit.Writer
-	Logger        *slog.Logger
+	// InsecureCookies is keeper.yml auth.insecure_cookies (see newSessionCookie).
+	InsecureCookies bool
+	Audit           audit.Writer
+	Logger          *slog.Logger
 }
 
 // localAuthenticator — the narrow contract of *local.Authenticator. Unlike the
@@ -61,7 +63,7 @@ func localLoginOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/local/login",
 		Summary:       "Operator login with a local password",
-		Description:   "NIM-1051: checks the AID's local password (argon2id) and puts an internal JWT into the HttpOnly+Secure soul_session cookie; exchange it at POST /auth/token. Only operators with auth_method=local log in here. Every credential refusal is the same 401, including a password reset that landed between the check and the session. 413 - body over 4 KiB (while the login rate limit runs). Mounted only when auth.local is configured. Response body is empty.",
+		Description:   "NIM-1051: checks the AID's local password (argon2id) and puts an internal JWT into the HttpOnly soul_session cookie (Secure unless keeper.yml auth.insecure_cookies); exchange it at POST /auth/token. Only operators with auth_method=local log in here. Every credential refusal is the same 401, including a password reset that landed between the check and the session. 413 - body over 4 KiB (while the login rate limit runs). Mounted only when auth.local is configured. Response body is empty.",
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusNoContent,
 		// 413 — a body over the 4 KiB the per-AID key is read from (AuthLoginLimit).
@@ -84,7 +86,7 @@ func registerHumaLocalLogin(humaAPI huma.API, d *LocalAuthDeps) {
 			}
 			return nil, ldapLoginProblem(err)
 		}
-		cookie := newSessionCookie(token, d.TTL)
+		cookie := newSessionCookie(token, d.TTL, d.InsecureCookies)
 		if d.Audit != nil {
 			ev := &audit.Event{
 				AuditID:   audit.NewULID(),

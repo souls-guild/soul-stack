@@ -1237,6 +1237,13 @@ type KeeperAuth struct {
 	// this Keeper. `local: {}` turns it on with the defaults.
 	Local *KeeperAuthLocal `yaml:"local,omitempty"`
 
+	// InsecureCookies drops `Secure` from the session cookie (`soul_session`) of a
+	// local-password (auth.local) or LDAP login, so a browser keeps it when the UI is served over
+	// plain HTTP (NIM-1063). Dev-only: over HTTP the session travels in clear.
+	// Nothing else is relaxed, and OIDC keeps Secure on both its cookies — it
+	// cannot finish over HTTP anyway. Read at startup.
+	InsecureCookies bool `yaml:"insecure_cookies,omitempty"`
+
 	// RateLimit is the anti-bruteforce guard for public login endpoints
 	// (ADR-058(g), HIGH-3). Per-IP + per-username attempt-rate throttle + lockout
 	// after a series of failures. Optional: nil/omitted → defaults

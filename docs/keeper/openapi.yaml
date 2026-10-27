@@ -6283,7 +6283,7 @@ openapi: 3.1.0
 paths:
   /auth/ldap/login:
     post:
-      description: "Federated authentication (ADR-058): LDAP search-bind -> mapping onto operators(aid)+roles -> internal JWT in HttpOnly+Secure cookie. Response body is empty."
+      description: "Federated authentication (ADR-058): LDAP search-bind -> mapping onto operators(aid)+roles -> internal JWT in the HttpOnly soul_session cookie (Secure unless keeper.yml auth.insecure_cookies). Response body is empty."
       operationId: ldapLogin
       requestBody:
         content:
@@ -6339,7 +6339,7 @@ paths:
         - auth
   /auth/local/login:
     post:
-      description: "NIM-1051: checks the AID's local password (argon2id) and puts an internal JWT into the HttpOnly+Secure soul_session cookie; exchange it at POST /auth/token. Only operators with auth_method=local log in here. Every credential refusal is the same 401, including a password reset that landed between the check and the session. 413 - body over 4 KiB (while the login rate limit runs). Mounted only when auth.local is configured. Response body is empty."
+      description: "NIM-1051: checks the AID's local password (argon2id) and puts an internal JWT into the HttpOnly soul_session cookie (Secure unless keeper.yml auth.insecure_cookies); exchange it at POST /auth/token. Only operators with auth_method=local log in here. Every credential refusal is the same 401, including a password reset that landed between the check and the session. 413 - body over 4 KiB (while the login rate limit runs). Mounted only when auth.local is configured. Response body is empty."
       operationId: localLogin
       requestBody:
         content:

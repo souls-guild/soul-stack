@@ -4637,6 +4637,7 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		fmt.Fprintf(os.Stderr, "keeper run: setup local password auth: %v\n", err)
 		return errSetupFailed
 	}
+	warnInsecureCookies(d.logger, d.cfg.Auth)
 
 	// AuthMethods — booleans for the public GET /auth/methods (UI login form):
 	// password is always available; ldap/oidc/local — based on actual configuration.
@@ -4885,10 +4886,11 @@ func (d *daemon) setupLocalAuth() (*api.LocalAuthDeps, *operator.PasswordPolicy,
 		return nil, nil, err
 	}
 	return &api.LocalAuthDeps{
-		Authenticator: authn,
-		TTL:           ttl,
-		Audit:         d.auditWriter,
-		Logger:        d.logger,
+		Authenticator:   authn,
+		TTL:             ttl,
+		InsecureCookies: d.cfg.Auth.InsecureCookies,
+		Audit:           d.auditWriter,
+		Logger:          d.logger,
 	}, policy, nil
 }
 
@@ -4967,12 +4969,13 @@ func (d *daemon) setupLDAPAuth(ctx context.Context) (*api.LDAPAuthDeps, error) {
 		return nil, err
 	}
 	return &api.LDAPAuthDeps{
-		Authenticator: authn,
-		Mapper:        mapper,
-		Sessions:      api.OperatorSessionMinter{DB: d.pool, Issuer: d.issuer},
-		TTL:           ttl,
-		Audit:         d.auditWriter,
-		Logger:        d.logger,
+		Authenticator:   authn,
+		Mapper:          mapper,
+		Sessions:        api.OperatorSessionMinter{DB: d.pool, Issuer: d.issuer},
+		TTL:             ttl,
+		InsecureCookies: d.cfg.Auth.InsecureCookies,
+		Audit:           d.auditWriter,
+		Logger:          d.logger,
 	}, nil
 }
 
@@ -6767,4 +6770,14 @@ type cadencePoolFetcher struct{ pool *pgxpool.Pool }
 
 func (f cadencePoolFetcher) SelectMinPeriod(ctx context.Context) (cadence.MinPeriod, error) {
 	return cadence.SelectMinPeriod(ctx, f.pool)
+}
+
+// warnInsecureCookies says at start that auth.insecure_cookies is on. Config
+// warnings are not logged by `keeper run`, and this is the one switch that
+// weakens a login's own credential, so it is not left to `keeper config validate`.
+func warnInsecureCookies(logger *slog.Logger, a *config.KeeperAuth) {
+	if logger == nil || a == nil || !a.InsecureCookies {
+		return
+	}
+	logger.Warn("auth.insecure_cookies is on: the session cookie of a local-password (auth.local) or LDAP login is sent without Secure, so over plain HTTP the session travels in clear (dev-only)")
 }

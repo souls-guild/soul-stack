@@ -5,7 +5,8 @@ package api
 // (login itself, no JWT yet — RequireJWT is inapplicable). A FULL-TYPED huma operation
 // (ADR-054 pattern): typed body input → Authenticator → Mapper → MintSession (an
 // `operator_jwts` row of kind `session`, ADR-014 amendment NIM-1045) →
-// Set-Cookie (HttpOnly+Secure+SameSite=Strict, no JSON token in the body).
+// Set-Cookie (HttpOnly+SameSite=Strict, Secure unless auth.insecure_cookies; no JSON
+// token in the body).
 //
 // Audit is written by the handler ITSELF (operator.login after issuing the JWT), the huma-audit
 // middleware is NOT attached — the login event is single, payload without secrets.
@@ -31,9 +32,9 @@ import (
 // delivery, no JSON token in the body). `soul_session` — our own session name.
 const sessionCookieName = "soul_session"
 
-// newSessionCookie builds the Set-Cookie with the internal JWT — the SINGLE
-// point shared by LDAP and OIDC (ADR-058(g)/(#4): symmetry of login methods is
-// mandatory). HttpOnly+Secure+`SameSite=Strict`+`Path=/auth`.
+// newSessionCookie builds the Set-Cookie with the internal JWT — the one builder
+// for every login method that sets a session (local password, LDAP, OIDC;
+// ADR-058(g)/(#4)). HttpOnly+`SameSite=Strict`+`Path=/auth`, Secure unless insecure.
 //
 // Path=/auth (narrowed from `/`, NIM-77): the only server-side reader of the
 // cookie is POST /auth/token (exchange for a short-lived Bearer, Option B). The
@@ -49,13 +50,18 @@ const sessionCookieName = "soul_session"
 // `/ui/login?sso=done`). That navigation does NOT send the /auth-cookie (Path
 // doesn't match), but it doesn't need to: the page bootstraps the UI session
 // via a same-origin POST /auth/token (exchange for a Bearer).
-func newSessionCookie(token string, ttl time.Duration) *http.Cookie {
+//
+// insecure drops Secure only — keeper.yml auth.insecure_cookies, for a stand
+// whose UI is served over plain HTTP, where a browser discards a Secure cookie
+// (NIM-1063). The local-password and LDAP logins pass the flag; OIDC always
+// passes false (ADR-058(l)). HttpOnly, SameSite and Path stay.
+func newSessionCookie(token string, ttl time.Duration, insecure bool) *http.Cookie {
 	return &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
 		Path:     "/auth",
 		HttpOnly: true,
-		Secure:   true, // TLS-required perimeter (ADR-002 mTLS/HTTPS)
+		Secure:   !insecure, // TLS-required perimeter (ADR-002 mTLS/HTTPS)
 		SameSite: http.SameSiteStrictMode,
 		Expires:  time.Now().Add(ttl),
 	}
@@ -68,8 +74,10 @@ type LDAPAuthDeps struct {
 	Mapper        auth.Mapper
 	Sessions      SessionMinter
 	TTL           time.Duration
-	Audit         audit.Writer
-	Logger        *slog.Logger
+	// InsecureCookies is keeper.yml auth.insecure_cookies (see newSessionCookie).
+	InsecureCookies bool
+	Audit           audit.Writer
+	Logger          *slog.Logger
 }
 
 // SessionMinter mints the internal JWT a federated login puts in the session
@@ -146,7 +154,7 @@ func ldapLoginOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/ldap/login",
 		Summary:       "Operator login via LDAP",
-		Description:   "Federated authentication (ADR-058): LDAP search-bind -> mapping onto operators(aid)+roles -> internal JWT in HttpOnly+Secure cookie. Response body is empty.",
+		Description:   "Federated authentication (ADR-058): LDAP search-bind -> mapping onto operators(aid)+roles -> internal JWT in the HttpOnly soul_session cookie (Secure unless keeper.yml auth.insecure_cookies). Response body is empty.",
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusNoContent,
 		// 429 — anti-bruteforce throttle/lockout (AuthLoginLimit middleware, HIGH-3).
@@ -180,7 +188,7 @@ func registerHumaLDAPLogin(humaAPI huma.API, d *LDAPAuthDeps) {
 			return nil, huma.NewError(http.StatusInternalServerError, "internal error")
 		}
 
-		cookie := newSessionCookie(token, d.TTL)
+		cookie := newSessionCookie(token, d.TTL, d.InsecureCookies)
 
 		// audit operator.login (after issuing the JWT). WITHOUT password/bind-creds;
 		// groups are not secret, but for hygiene we put only method/aid/provisioned.

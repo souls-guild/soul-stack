@@ -52,8 +52,9 @@ A password Keeper checks itself, as a separate login method:
 
 ### The surface
 
-- **`POST /auth/local/login`** `{aid, password}` → `204` and the same `soul_session` cookie as
-  LDAP/OIDC (`newSessionCookie`: HttpOnly, Secure, `SameSite=Strict`, `Path=/auth`, lifetime
+- **`POST /auth/local/login`** `{aid, password}` → `204` and a `soul_session` cookie built by
+  the same `newSessionCookie` as LDAP/OIDC (HttpOnly, `SameSite=Strict`, `Path=/auth`, and Secure unless
+  `auth.insecure_cookies`, which OIDC ignores — ADR-058(l); lifetime
   `auth.local.session_ttl` since NIM-1050), exchanged at `POST /auth/token` like theirs. The session is an
   `operator_jwts` row of kind `session` minted through `MintJWT`, **bound to the password that
   verified**: the mint runs in one transaction that re-reads the hash `FOR SHARE` and refuses

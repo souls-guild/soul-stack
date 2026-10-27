@@ -161,6 +161,15 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 		out = append(out, checkAuthOIDC(root, c.Auth.OIDC)...)
 	}
 
+	if c.Auth != nil && c.Auth.InsecureCookies {
+		out = append(out, atPath(root, "$.auth.insecure_cookies", diag.Diagnostic{
+			Level: diag.LevelWarning, Phase: diag.PhaseSemanticValidate,
+			Code:    "auth_insecure_cookies",
+			Message: "auth.insecure_cookies: true sends the session cookie of a local-password (auth.local) or LDAP login without Secure, so the session travels in clear over plain HTTP (dev-only)",
+			Hint:    "serve the UI over HTTPS and remove the key",
+		}))
+	}
+
 	// auth.local (NIM-1051): the configured minimum must leave a password policy
 	// worth the name and still admit a password the maximum allows.
 	if c.Auth != nil && c.Auth.Local != nil {

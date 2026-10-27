@@ -158,3 +158,30 @@ func TestKeeperAuthLDAP_InsecureSkipVerifyWarns(t *testing.T) {
 		t.Fatalf("insecure_skip_verify must WARN, not error")
 	}
 }
+
+// auth.insecure_cookies (NIM-1063) loads, with a WARN, and is off by default.
+func TestKeeperAuth_InsecureCookiesWarns(t *testing.T) {
+	cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(keeperBaseRequired+"auth:\n  insecure_cookies: true\n"), ValidateOptions{})
+	warned := false
+	for _, d := range diags {
+		if d.Code == "auth_insecure_cookies" && d.Level == diag.LevelWarning {
+			warned = true
+		}
+	}
+	if !warned {
+		dump(t, diags)
+		t.Fatal("expected auth_insecure_cookies at WARN level")
+	}
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatal("insecure_cookies must WARN, not error")
+	}
+	if cfg == nil || cfg.Auth == nil || !cfg.Auth.InsecureCookies {
+		t.Fatal("auth.insecure_cookies: true did not reach KeeperAuth.InsecureCookies")
+	}
+
+	cfg, _, diags, _ = LoadKeeperFromBytes("keeper.yml", []byte(keeperBaseRequired), ValidateOptions{})
+	if hasCode(diags, "auth_insecure_cookies") || (cfg != nil && cfg.Auth != nil && cfg.Auth.InsecureCookies) {
+		t.Fatal("insecure_cookies must be off, and silent, when the key is absent")
+	}
+}

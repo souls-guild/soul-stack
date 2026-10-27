@@ -57,6 +57,8 @@ func newOIDCStateCookie(state string) *http.Cookie {
 		Value:    state,
 		Path:     "/",
 		HttpOnly: true,
+		// Never lifted by auth.insecure_cookies: a __Host- cookie without Secure is
+		// rejected by the browser outright, so OIDC needs HTTPS either way.
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(oidcStateCookieTTL / time.Second),
@@ -195,7 +197,10 @@ func registerHumaOIDCLogin(humaAPI huma.API, d *OIDCAuthDeps) {
 		// the cookie is SET on the callback response; the UI login page it
 		// redirects to sends it, same-site, to /auth/token. See the
 		// newSessionCookie doc.
-		cookie := newSessionCookie(token, d.TTL)
+		// Always Secure, whatever auth.insecure_cookies says: over plain HTTP the
+		// browser drops the __Host- state cookie and the callback is refused above,
+		// so the flag could only weaken an OIDC session that works over HTTPS.
+		cookie := newSessionCookie(token, d.TTL, false)
 
 		if d.Audit != nil {
 			ev := &audit.Event{
