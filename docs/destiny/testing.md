@@ -34,7 +34,7 @@ destiny-<name>/
         └── case.yml
 ```
 
-A working example with explanations for each block is in [examples/destiny/redis/tests/install-and-ping/case.yml](../../examples/destiny/redis/tests/install-and-ping/case.yml).
+A working example with explanations for each block is in [examples/destiny/dragonfly/tests/install-and-ping/case.yml](../../examples/destiny/dragonfly/tests/install-and-ping/case.yml).
 
 ### What `case.yml` declares
 
@@ -78,7 +78,7 @@ The entire working case (proves `daemon_reload=auto`: rewritten unit → `NeedDa
 
 ### Verify - through the same destiny as in production
 
-Verify block is structured as a sequence of tasks, each of which executes a destiny/module and compares the fields of their `output:` with those expected through the `expect:` block (see working example [`examples/destiny/redis/tests/install-and-ping/case.yml`](../../examples/destiny/redis/tests/install-and-ping/case.yml) - `verify:` with `expect: { stdout_contains: PONG }`, etc.). There is **no** separate DSL assertions - this is a conscious decision:
+Verify block is structured as a sequence of tasks, each of which executes a destiny/module and compares the fields of their `output:` with those expected through the `expect:` block (see working example [`examples/destiny/dragonfly/tests/install-and-ping/case.yml`](../../examples/destiny/dragonfly/tests/install-and-ping/case.yml) - `verify:` with `expect: { stdout_contains: PONG }`, etc.). There is **no** separate DSL assertions - this is a conscious decision:
 
 - If the host state is checked through `redis-cli ping` or `systemctl is-active`, we write this explicitly through `core.exec.run` and check `output.stdout`.
 - If the check repeats what destiny itself can do (`action: ping`, `action: replication_status`) - reuse it. Self-consistent verification: destiny is both an implementation and part of a contract.
@@ -222,7 +222,7 @@ Host record fields:
 
 **Level boundary.** `fixtures.hosts` remains **L0 render-only**: Keeper-side render-plan and `soulprint.hosts`-projections on the roster are checked, without actual per-host execution. Which host actually executes the master (`assert.dispatch`), committed cross-host `incarnation.state` after the barrier and multi-host docker `stand:` - **L3, deferred** (ADR-023 amendment 2026-06-22).
 
-The L2 form is executed **in Go tests of the keeper module** (testcontainers, oneshot `soul apply`, in-process Keeper-side render - the same `renderCase` as L0). Examples with `stand:`/`verify:` (e.g. [`redis/tests/install-and-ping/case.yml`](../../examples/destiny/redis/tests/install-and-ping/case.yml)) are marked in the header `# L2 fixture (docker stand)`; prod-`soul-trial run` skips them (`Skipped`), not taking non-passing as a regression. The L0-form is the current pilot of the framework and is always executed.
+The L2 form is executed **in Go tests of the keeper module** (testcontainers, oneshot `soul apply`, in-process Keeper-side render - the same `renderCase` as L0). Examples with `stand:`/`verify:` (e.g. [`dragonfly/tests/install-and-ping/case.yml`](../../examples/destiny/dragonfly/tests/install-and-ping/case.yml)) are marked in the header `# L2 fixture (docker stand)`; prod-`soul-trial run` skips them (`Skipped`), not taking non-passing as a regression. The L0-form is the current pilot of the framework and is always executed.
 
 #### L0-molecule for standalone destiny - scenario wrapper `apply:destiny`
 
@@ -250,7 +250,7 @@ destiny-<name>/
 1. **`apply:destiny`-name → `service.yml::destiny[]`.** The name must be declared in `destiny[]` of the case service (for a standalone wrapper - its `_trial/service.yml`). **An undeclared dependency is rejected** with the same error as in production (`apply:destiny` only references a declared dependency, ADR-007).
 2. **URL → sealed `file://`.** `case.yml::fixtures` carries the key **`default_destiny_source`** (same name as `keeper.yml`) - URL template with scheme `file://` and substitution `{name}`, path relative to the service-root of the case (e.g. `file://../../destiny/{name}` for cross-location, `file://destiny-{name}` for destiny within the service). Per-entry `destiny[].git` override defeats the template, but L0 must also have `file://`. Any non-`file://` circuit → obvious error "L0 is sealed." `{name}` must live in the last segment of the path; The securejoin boundary is at destiny-root (the part of the URL before `{name}`), so `{name}` will not break through `../` beyond the declared directory of destiny.
 
-The previous wording "the resolver goes up a couple of levels to the destiny directory" has been removed: the heuristic search `[serviceRoot, parent, grandparent]` did not reflect the product and lied on the cross-location layout (service and standalone destiny in different subtrees). Working examples - [`examples/destiny/node-exporter/_trial/`](../../examples/destiny/node-exporter/_trial/scenario/apply/main.yml), `redis-exporter/_trial/`, `service-reload/_trial/` (cross-location: service-root = `_trial/`, destiny itself is a higher level in `examples/destiny/`); cross-location service → [`examples/service/dragonfly/`](../../examples/service/dragonfly/) (destiny in `examples/destiny/`). Launch: `soul-trial run examples/destiny/<name>/_trial`.
+The previous wording "the resolver goes up a couple of levels to the destiny directory" has been removed: the heuristic search `[serviceRoot, parent, grandparent]` did not reflect the product and lied on the cross-location layout (service and standalone destiny in different subtrees). Working examples - [`examples/destiny/node-exporter/_trial/`](../../examples/destiny/node-exporter/_trial/scenario/apply/main.yml), `redis-exporter/_trial/`, `service-reload/_trial/` (cross-location: service-root = `_trial/`, destiny itself is a higher level in `examples/destiny/`); cross-location service → [`examples/service/dragonfly/`](../../examples/service/dragonfly/) (its in-tree destinies in `examples/destiny/`; `redis` is the public destiny at the pin in `scripts/destiny-source.sh`, which `make trial` places beside them). Launch: `soul-trial run examples/destiny/<name>/_trial`.
 
 ## Ideas for coverage metrics (also for development)
 

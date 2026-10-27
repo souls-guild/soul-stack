@@ -70,7 +70,7 @@ input:
     type: integer
     # Conditional requiredness - a pure function of the rest of the input.
     required_when: "input.action == 'apply'"
-  # ... other parameters - see examples/destiny/redis/destiny.yml
+  # ... other parameters - see destiny.yml of soul-stack-destiny/redis
 
 # Cross-field invariants no single input: key can express. A false rule rejects
 # the render with its own message:, before anything reaches a host.
@@ -84,7 +84,7 @@ validate:
 # required_modules: [haproxy.instance, haproxy.backend]
 ```
 
-A working example with a complete `input:` block is in [examples/destiny/redis/destiny.yml](../../examples/destiny/redis/destiny.yml).
+A working example with a complete `input:` block is the redis destiny's [destiny.yml](https://github.com/soul-stack-destiny/redis/blob/v1.0.0/destiny.yml).
 
 ## `compat` Section
 

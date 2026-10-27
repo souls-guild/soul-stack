@@ -88,7 +88,7 @@ persist file (`/etc/sysctl.d/<filename>.conf`).
       net.core.somaxconn:   "65535"
 ```
 
-(`applied` is used in the host-tuning extras of the example `examples/destiny/redis`)
+(`applied` is used in the host-tuning extras of the redis destiny, `tasks/extras.yml` in `soul-stack-destiny/redis`)
 
 ## Security
 

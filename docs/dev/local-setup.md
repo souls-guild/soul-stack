@@ -443,7 +443,7 @@ repo from `examples/` under file://-URLs pointed to
 | Artifact | git-URL (from `keeper.dev.yml`) | ref | source in `examples/` |
 |---|---|---|---|
 | service `hello-world` | `file:///tmp/keeper-dev/repos/hello-world` | `main` | `examples/service/hello-world` |
-| destiny `redis` | `file:///tmp/keeper-dev/destiny/redis` | `v1.0.0` | `examples/destiny/redis` |
+| destiny `redis` | `file:///tmp/keeper-dev/destiny/redis` | `v1.0.0` | `github.com/soul-stack-destiny/redis` at the pin in `scripts/destiny-source.sh` |
 | destiny `redis-exporter` | `file:///tmp/keeper-dev/destiny/redis-exporter` | `v1.0.0` | `examples/destiny/redis-exporter` |
 | destiny `node-exporter` | `file:///tmp/keeper-dev/destiny/node-exporter` | `v1.0.0` | `examples/destiny/node-exporter` |
 

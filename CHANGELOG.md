@@ -940,6 +940,22 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Removed
 
+- **`examples/destiny/redis` is gone; the tree takes the public destiny at a pin**
+  (NIM-1062). It had become a second copy of `github.com/soul-stack-destiny/redis`, and
+  the copy had drifted: with `install.method: binary` its redis-server ran without the
+  hardening drop-in (no `ProtectSystem=strict`, no empty `CapabilityBoundingSet`, no
+  `MemoryDenyWriteExecute`), which `v1.0.0` carries. `scripts/destiny-source.sh` pins
+  `v1.0.0` by full commit and checks the tag still names it, in a cache outside the tree
+  (`make destiny-sources`, `SOUL_STACK_DESTINY_OFFLINE=1`), as `scripts/plugin-source.sh`
+  does for plugins. Every reader moved to it: `make trial` runs the service corpus from a
+  copy with the pinned tree beside it, the redis render, config and lint tests read it, the
+  L3b fixture and `dev/provision.sh` materialize it, and `make e2e-live-gate` refuses a
+  `SOUL_STACK_DESTINY_DIR_*` override. `examples/service/dragonfly` installs the sentinel
+  package from the distro repository (`install: { repo_uri: "" }`), which the public
+  destiny's contract asks for with a distro version string.
+  `TestExamples_PinnedDestinies` fails if the copy comes back or a corpus service declares
+  the destiny at a ref other than the pinned tag. A cold cache needs github.com once.
+
 - **The e2e-live artifact mirror, and with it the unverified pin table NIM-871 left
   behind** (NIM-876). NIM-542 built it for a measured reason: six gate tests ran a live
   create, each create pulled `node_exporter`, `redis_exporter` and `vector` from

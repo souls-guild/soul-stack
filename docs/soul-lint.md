@@ -467,7 +467,7 @@ The L0 runner spells it the same way and parses it with the same loader
 (**NIM-790**), because it had the same gap and had it in all three places at once:
 
 ```sh
-soul-trial run examples/service/dragonfly --modules redis=examples/module/redis
+soul-trial run examples/service/dragonfly/scenario/add_user --modules redis=examples/module/redis
 ```
 
 L0 loaded every scenario and every destiny task file with empty validate options,

@@ -348,7 +348,7 @@ func TestDestinyTasks_IncludeOneSubdirectoryDownIsChecked(t *testing.T) {
 }
 
 // A CONDITIONAL include, which is what the corpus destinies are actually made of
-// (`examples/destiny/redis/tasks/main.yml` is five of them), and a second level below
+// (the redis destiny's `tasks/main.yml` is a stack of them), and a second level below
 // it. A gate on the include does not exempt the body from being read: expansion
 // stamps the group for render-time drop, it does not skip the file.
 func TestDestinyTasks_ConditionalAndNestedIncludesAreCheckedToo(t *testing.T) {

@@ -16,7 +16,7 @@ Division of responsibilities (ADR-009):
 
 - **destiny [`dragonfly`](../../destiny/dragonfly/)** - per-host install + render of the
   data plane (flagfile `dragonfly.conf`, `users.acl`, TLS-PEM, systemd, host tuning).
-- **destiny [`redis`](../../destiny/redis/)** in **sentinel_only** mode (`deploy_redis: false`)
+- **destiny [`redis`](https://github.com/soul-stack-destiny/redis/tree/v1.0.0)** in **sentinel_only** mode (`deploy_redis: false`)
   - a sentinel daemon over the DragonFly master. DragonFly **does not ship** `redis-sentinel`,
   so the daemon installs the distro package `redis-server` via the `redis` destiny. In `create` -
   **two** `apply: destiny` calls (dragonfly + redis).
@@ -274,18 +274,25 @@ the `content` cell (seal-masking), and the PEM ends up at
 
 ## L0 run
 
-L0 trial (Trial, render-only, hermetic) - from the `keeper/` directory:
+L0 trial (Trial, render-only, hermetic). The whole corpus - `make trial` from the repository
+root. The `create` cases apply the `redis` destiny, which is not in this tree: L0 finds it
+only beside the in-tree destinies, so they run from a copy with the pinned tree
+(`scripts/destiny-source.sh`) placed there, which is what `make trial` builds. By hand,
+from the repository root:
 
 ```sh
+d=$(mktemp -d) && cp -R examples/service examples/destiny "$d"/ \
+  && cp -R "$(scripts/destiny-source.sh dir redis)" "$d/destiny/redis"
+cd keeper
 # sentinel single-host (standalone-equivalent: 1 master + sentinel daemon)
-go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/standalone-no-replicas/case.yml
+go run ./cmd/soul-trial run "$d/service/dragonfly/scenario/create/tests/standalone-no-replicas/case.yml"
 # sentinel 1 master + 1 replica
-go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/create-sentinel-1master-1replica/case.yml
+go run ./cmd/soul-trial run "$d/service/dragonfly/scenario/create/tests/create-sentinel-1master-1replica/case.yml"
 # TLS on the main port
-go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/create-sentinel-tls/case.yml
+go run ./cmd/soul-trial run "$d/service/dragonfly/scenario/create/tests/create-sentinel-tls/case.yml"
 # mandatory monitoring (node-exporter + vector in the plan)
-go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/monitoring-observability/case.yml
-# advanced scenarios
+go run ./cmd/soul-trial run "$d/service/dragonfly/scenario/create/tests/monitoring-observability/case.yml"
+# advanced scenarios apply no out-of-tree destiny and run in place
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/add_user/tests/add-user-plaintext/case.yml
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/update_users/tests/bulk-replace-removes-user/case.yml
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/restart/tests/rolling-restart-replicas/case.yml

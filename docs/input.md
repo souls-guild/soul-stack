@@ -460,8 +460,8 @@ nothing at all — which is the shape the check exists to catch.
 > two the ADR recorded). Before it, a *map-shaped* field — `redis_config`,
 > `sysctl_settings`, `redis_sentinel.master_settings` — had no expressible form, and the
 > only way past the parser was an empty `properties: {}` written beside the real
-> declaration. That workaround is already in the tree, in an `input:` block:
-> [`examples/destiny/redis/destiny.yml`](../examples/destiny/redis/destiny.yml) → `users`.
+> declaration. That workaround is already in use, in an `input:` block:
+> the redis destiny's [`destiny.yml`](https://github.com/soul-stack-destiny/redis/blob/v1.0.0/destiny.yml) → `users`.
 > The gap was the input dialect's, not the state block's; `state_schema` only made it
 > visible. **Do not write `properties: {}` to get a field past the parser** — it is no
 > longer needed, and the existing one should go with NIM-744.

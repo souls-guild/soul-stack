@@ -172,7 +172,7 @@ to change the config/unit:
     name: node_exporter
 ```
 
-(didactic summary of the link `running` + `onchanges`-`restarted`; a similar link for redis-server is in [`examples/destiny/redis/tasks/server.yml`](../../../../examples/destiny/redis/tasks/server.yml))
+(didactic summary of the link `running` + `onchanges`-`restarted`; a similar link for redis-server is in the redis destiny's [`tasks/server.yml`](https://github.com/soul-stack-destiny/redis/blob/v1.0.0/tasks/server.yml))
 
 `onchanges:` accepts a **list** of registers - a restart is triggered if **at least one** of them has changed. So the daemon is restarted to both change the unit file and upgrade the binary:
 

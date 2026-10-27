@@ -6,11 +6,12 @@ Concrete illustrations of what Soul Stack artifacts look like in reality, for ha
 
 The one thing they are deliberately NOT is a place to keep a product service. `service/redis` — a full service repo with twelve scenarios, a fifteen-rung ladder and the L3a/L3b acceptance suites built on it — was removed by NIM-871 and now lives out of tree: a service is its own repository, and the engine bundling one made the engine's gate depend on a service's lifecycle. What stays below is the smallest artifact that demonstrates a shape.
 
+`destiny/redis` left the same way in NIM-1062. It had become a second copy of [github.com/soul-stack-destiny/redis](https://github.com/soul-stack-destiny/redis), and the two had drifted: its binary install ran redis-server without the systemd sandbox the public one has. `service/dragonfly` still applies it, so `make trial` takes the public destiny at the commit [`scripts/destiny-source.sh`](../scripts/destiny-source.sh) pins and places it beside the services.
+
 ## Contents
 
 | Folder | What |
 |---|---|
-| [`destiny/redis/`](destiny/redis/) | An atomic destiny brick for "how to install and configure Redis on a host." A separate git repo in real life. Includes `tasks/main.yml` (top-level task list without a wrapper) and [`tests/install-and-ping/case.yml`](destiny/redis/tests/install-and-ping/case.yml) — an illustration of the molecule-style destiny test format. Full format breakdown — in [docs/destiny/](../docs/destiny/README.md). Kept when the redis *service* left: a destiny is an independent artifact, and the out-of-tree service consumes this one. |
 | [`service/dragonfly/`](service/dragonfly/) | The fullest service repo in the tree: `service.yml`, a `vars/` layer stack, six scenarios, a migration ladder with `schema.lock`, and `tests/<case>/case.yml` per scenario. The reference for what a service looks like. |
 | [`service/hello-world/`](service/hello-world/) | The smallest one that actually runs — the service the dev stand registers and `make dev-smoke` exercises. |
 | [`module/redis/`](module/redis/) | A real SoulModule artifact (Go, its own `go.mod`), named after the module it serves. Built and stamped into the dev stand by `dev/provision.sh`. |
@@ -22,5 +23,5 @@ The one thing they are deliberately NOT is a place to keep a product service. `s
 
 - **YAML without secrets.** All passwords/tokens are `vault:secret/...` references.
 - **Hostnames** — `*.example`, to avoid confusion with real hosts.
-- **Versions** — git tags in `ref:` are fictitious, illustrative (see [ADR-007](../docs/adr/0007-versioning-git-ref.md#adr-007-artifact-versioning--via-git-ref-not-a-manifest-field) — there is no `version:` field in manifests).
+- **Versions** — git tags in `ref:` are fictitious, illustrative (see [ADR-007](../docs/adr/0007-versioning-git-ref.md#adr-007-artifact-versioning--via-git-ref-not-a-manifest-field) — there is no `version:` field in manifests). The exception is a destiny pinned by `scripts/destiny-source.sh`: its `ref:` is the real published tag, and `TestExamples_PinnedDestinies` holds it there.
 - If something in the architecture changes, the examples are updated alongside it.

@@ -593,10 +593,18 @@ provision_git_repo \
 # examples/service/redis out of the engine, and the destiny bricks below are
 # separate artifacts consumed by the out-of-tree service repo. The stand keeps
 # materializing them because a destiny is resolvable on its own.
+#
+# redis is github.com/soul-stack-destiny/redis at the commit scripts/destiny-source.sh
+# pins, tagged here with the tag that pin stands for.
+if ! redis_destiny_src="$("${REPO_ROOT}/scripts/destiny-source.sh" dir redis)" \
+    || ! redis_destiny_tag="$("${REPO_ROOT}/scripts/destiny-source.sh" tag redis)"; then
+    fail "could not materialize the pinned redis destiny (scripts/destiny-source.sh dir redis).
+  Fill the cache with: make destiny-sources"
+fi
 provision_git_repo \
-    "${EXAMPLES}/destiny/redis" \
+    "${redis_destiny_src}" \
     "${KEEPER_DEV_DIR}/destiny/redis" \
-    v1.0.0 "destiny redis"
+    "${redis_destiny_tag}" "destiny redis"
 provision_git_repo \
     "${EXAMPLES}/destiny/redis-exporter" \
     "${KEEPER_DEV_DIR}/destiny/redis-exporter" \

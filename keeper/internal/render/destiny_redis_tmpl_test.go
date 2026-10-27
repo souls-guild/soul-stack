@@ -9,24 +9,22 @@ import (
 	"github.com/souls-guild/soul-stack/shared/tmpl"
 )
 
-// redisTemplatesDir is the redis destiny's .tmpl directory, relative to this
-// package. Lives here for the same reason as destiny_node_exporter_tmpl_test.go:
-// this package owns the text/template engine integration (shared/tmpl) and the
-// .tmpl render path. The destiny's L0 trial asserts the PLAN and runs only the
-// CEL phase, never text/template, so a users.acl line-order regression stays
-// invisible at L0.
-const redisTemplatesDir = "../../../examples/destiny/redis/templates"
-
-// renderRedisTmpl renders one redis destiny .tmpl through the same
-// shared/tmpl.Engine as Soul (strict, missingkey=error). A Parse/Execute
-// failure fails the test.
+// renderRedisTmpl renders one .tmpl of the redis destiny — the public
+// github.com/soul-stack-destiny/redis at its pin (NIM-1062) — through the same
+// shared/tmpl.Engine as Soul (strict, missingkey=error). A Parse/Execute failure
+// fails the test.
+//
+// Lives here for the same reason as destiny_node_exporter_tmpl_test.go: this
+// package owns the text/template engine integration (shared/tmpl) and the .tmpl
+// render path. The destiny's L0 trial asserts the PLAN and runs only the CEL phase,
+// never text/template, so a users.acl line-order regression stays invisible at L0.
 func renderRedisTmpl(t *testing.T, name string, root map[string]any) string {
 	t.Helper()
 	engine, err := tmpl.New()
 	if err != nil {
 		t.Fatalf("tmpl.New: %v", err)
 	}
-	body, err := os.ReadFile(filepath.Join(redisTemplatesDir, name))
+	body, err := os.ReadFile(filepath.Join(pinnedDestinyDir(t, "redis"), "templates", name))
 	if err != nil {
 		t.Fatalf("read %s: %v", name, err)
 	}

@@ -64,7 +64,7 @@ it is compact, the field can be empty (this does not affect the `installed` flag
     version: "${ has(input.version) ? input.version : '' }"
 ```
 
-(the working installation of `redis-server` is in [`examples/destiny/redis/tasks/install.yml`](../../../../examples/destiny/redis/tasks/install.yml); there `version` is made `required: true` and reads bare `input.version`, without a ternary - this is a choice of destiny, not a module limitation: empty `version` sets the default from the repo)
+(the working installation of `redis-server` is the redis destiny's [`tasks/install.yml`](https://github.com/soul-stack-destiny/redis/blob/v1.0.0/tasks/install.yml); there `version` is required for every package install (`required_when` in its `destiny.yml`) - this is a choice of destiny, not a module limitation: empty `version` sets the default from the repo)
 
 ## Security
 

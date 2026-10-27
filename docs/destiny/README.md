@@ -26,4 +26,4 @@ Documentation on destiny - the atomic declarative brick of the Soul Stack ("how 
 - [`docs/templating.md`](../templating.md) - template engine spec (ADR-010): CEL for expressions in destiny tasks, Go text/template for `templates/*.tmpl`, marker `${ … }`, `core.file.rendered` as a render module.
 - [`docs/soul-lint.md`](../soul-lint.md) - static checks of destiny at the CI/IDE stage.
 - [`docs/module-collections.md`](../module-collections.md) — namespace prefix in module addressing.
-- [`examples/destiny/redis/`](../../examples/destiny/redis/) is a working example of a full layout.
+- [`soul-stack-destiny/redis`](https://github.com/soul-stack-destiny/redis/tree/v1.0.0) is a working example of a full layout, in a repository of its own.

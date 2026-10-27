@@ -178,8 +178,8 @@ These fields are available without explicitly passing them in `vars:` — this i
 
 | Use-case | Field | File |
 |---|---|---|
-| Destiny builds an arch-specific URL (Redis modules) | `soulprint.self.os.arch` | `examples/destiny/redis/tasks/modules.yml`, `examples/destiny/redis/destiny.yml` |
-| Render a config via `.tmpl` (bind/announce) | `.self.network.primary_ip` | `examples/destiny/redis/templates/redis.conf.tmpl` |
+| Destiny builds an arch-specific URL (Redis modules) | `soulprint.self.os.arch` | `vars.yml` of `soul-stack-destiny/redis` (`redis_arch`) |
+| Render a config via `.tmpl` (bind/announce) | `.self.network.primary_ip` | `templates/redis.conf.tmpl` of `soul-stack-destiny/redis` |
 | Scenario `where:` by SID (targeting a new node) | `soulprint.self.sid == input.new_node_sid` | no in-tree scenario since NIM-871 |
 | Scenario roster → an endpoint map by hosts | `soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':6379' } })` | no in-tree scenario since NIM-871 |
 | Scenario guard "both SIDs are members of the roster" | `size(soulprint.hosts.where("sid == input.new_node_sid")) == 1` | no in-tree scenario since NIM-871 |

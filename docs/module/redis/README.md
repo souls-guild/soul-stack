@@ -228,7 +228,7 @@ idempotency on the plugin side.
 > plugin **all** `config`-map; the plugin **passes such keys** (does not fall on them),
 > hot-settable applies as usual. Changing the startup-only directive will take effect when
 > **next restart** of the process (it is triggered by a change in hardening unit, destiny
-> [`redis/tasks/server.yml`](../../../examples/destiny/redis/tasks/server.yml)).
+> [`redis/tasks/server.yml`](https://github.com/soul-stack-destiny/redis/blob/v1.0.0/tasks/server.yml)).
 > Deniliste (`startupOnlyDirectives` in [`impl.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/impl.go)):
 > `port` · `tls-port` · `bind` · `unixsocket` · `unixsocketperm` · `io-threads` ·
 > `io-threads-do-reads` · `cluster-enabled` · `cluster-config-file` · `aclfile` ·
@@ -1110,7 +1110,7 @@ that pin and run `make plugin-schema-vendor`.
   readable here. [`examples/service/dragonfly/`](../../../examples/service/dragonfly/) is
   the in-tree caller that remains, and it exercises a subset
 call the states of this plugin.
-- [examples/destiny/redis/](../../../examples/destiny/redis/) —
+- [soul-stack-destiny/redis](https://github.com/soul-stack-destiny/redis/tree/v1.0.0) —
 mode-agnostic per-host brick (install + render `redis.conf` + systemd).
 - [ADR-012](../../adr/0012-keeper-soul-grpc.md) — render Keeper-side, password
 reaches the value.

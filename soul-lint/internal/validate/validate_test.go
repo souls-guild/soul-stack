@@ -37,9 +37,9 @@ func TestGolden_DestinyExample(t *testing.T) {
 }
 
 func TestGolden_DestinyExample_FromRepo(t *testing.T) {
-	// The full example from examples/destiny/redis/destiny.yml must validate
-	// directly with 0 diagnostics — a regression contract.
-	runExpect(t, "../../../examples/destiny/redis/destiny.yml", KindDestiny, false, ExitOK, nil)
+	// The full redis destiny, at its pin, must validate directly with 0
+	// diagnostics — a regression contract.
+	runExpect(t, filepath.Join(pinnedDestinyDir(t, "redis"), "destiny.yml"), KindDestiny, false, ExitOK, nil)
 }
 
 func TestGolden_ServiceExample(t *testing.T) {

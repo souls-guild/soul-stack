@@ -9,7 +9,7 @@ import (
 )
 
 func TestLoadDestinyManifest_Golden(t *testing.T) {
-	path := filepath.FromSlash("../../examples/destiny/redis/destiny.yml")
+	path := filepath.Join(pinnedDestinyDir(t, "redis"), "destiny.yml")
 	cfg, doc, diags, err := LoadDestinyManifest(path, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("io error: %v", err)

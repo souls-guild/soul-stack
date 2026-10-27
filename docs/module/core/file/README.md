@@ -154,8 +154,8 @@ service restart when the config changes.
     group: root
 ```
 
-`rendered` from template (role `core.template`); `register` - to restart the service
-only when changing the config:
+`rendered` from template (role `core.template`); `register` - so a later step reacts
+only when the file changed (`onchanges:`, `register.<name>.changed`):
 
 ```yaml
 - name: Render redis.conf
@@ -168,11 +168,10 @@ only when changing the config:
     owner: redis
     group: redis
     vars:
-      password: "${ input.password }"
-      config:   "${ has(input.config) ? input.config : {} }"
+      config:   "${ default(input.config, {}) }"
 ```
 
-(from [`examples/destiny/redis/tasks/server.yml`](../../../../examples/destiny/redis/tasks/server.yml); the complete merged config comes with one map `config` - maxmemory/persistence/passthrough merge scenario via `merge()` even before render)
+(simplified from the redis destiny's [`tasks/server.yml`](https://github.com/soul-stack-destiny/redis/blob/v1.0.0/tasks/server.yml); the complete merged config comes with one map `config` - maxmemory/persistence/passthrough merge scenario via `merge()` even before render. That destiny restarts redis-server only on its hardening drop-in and applies a changed `redis.conf` live, [production-conventions §6a](../../../destiny/production-conventions.md))
 
 ## Security
 

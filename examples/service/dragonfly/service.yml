@@ -233,7 +233,8 @@ state_schema:
 
 # Destiny dependencies (ADR-007: dependency version = git ref, not a semver range).
 #   - `dragonfly` - the DragonFly data-plane brick (examples/destiny/dragonfly/);
-#   - `redis`     - the Redis brick (examples/destiny/redis/), used in
+#   - `redis`     - the Redis brick (github.com/soul-stack-destiny/redis; `make trial` takes
+#     it at the pin in scripts/destiny-source.sh, and `ref:` must equal that pin's tag), used in
 #     sentinel_only mode (deploy_redis=false) for the sentinel daemon over the DragonFly master
 #     (the "sentinel from destiny redis" refactor: DragonFly does not carry redis-sentinel). scenario
 #     create does TWO apply:destiny (dragonfly + redis), ADR-009.

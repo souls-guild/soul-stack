@@ -1320,7 +1320,7 @@ func recurseItemsProperties(s *InputSchema, present map[string]*ast.MappingValue
 	}
 	if kv, ok := present["additional_properties"]; ok {
 		// additional_properties: <schema> — the "map of arbitrary keys with a shared
-		// value schema" form (see examples/destiny/redis → users). A bare bool is not
+		// value schema" form (see the redis destiny's `users`). A bare bool is not
 		// validated (no nested schema there).
 		if apNode, isMap := kv.Value.(*ast.MappingNode); isMap {
 			var sub *InputSchema

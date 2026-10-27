@@ -14,7 +14,7 @@ goes through the same `redis` plugin **with no changes**.
 ## Sentinel — NOT in this building block (sentinel comes from destiny `redis`)
 
 DragonFly does not carry `redis-sentinel`, so the sentinel daemon over a DragonFly master
-fully deploys the [`redis`](../redis/README.md) destiny in **sentinel_only** mode
+fully deploys the [`redis`](https://github.com/soul-stack-destiny/redis/tree/v1.0.0) destiny in **sentinel_only** mode
 (`deploy_redis: false` → the redis-server data plane is not deployed, only the
 sentinel daemon over the external master goes up). The `dragonfly` service scenario makes a
 **second** `apply: destiny: redis` alongside `apply: destiny: dragonfly` (two `apply:destiny`
@@ -24,7 +24,7 @@ responsible for the DragonFly data plane.
 
 ## DragonFly vs `redis` (why a separate building block)
 
-The structure copies the [`redis`](../redis/README.md) destiny with three things swapped:
+The structure copies the [`redis`](https://github.com/soul-stack-destiny/redis/tree/v1.0.0) destiny with three things swapped:
 
 - **config = flagfile** (`--flag=value`, absl flags), **not** `redis.conf`. Flag
   names use underscores (`tls_cert_file`, `snapshot_cron`), values without quotes

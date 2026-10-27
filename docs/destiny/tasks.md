@@ -100,7 +100,7 @@ level **single file**. `onchanges:` in one include file on `register:` declared
 in **another** include file, raises `unknown_register_reference` - despite the fact
 that after flattening both fall into the general plan. Practical invariant: **`register:`
 and its `onchanges:`-consumer are kept in one file `tasks/<name>.yml`** (standards -
-`examples/destiny/node-exporter` and `examples/destiny/redis`: install-register and restart
+`examples/destiny/node-exporter` and `soul-stack-destiny/redis`: install-register and restart
 live together). Extending this to cross-file addressing is open Q §12.
 - **Rules:**
   - the target is `<file>.yml` or `<dir>/<file>.yml` — **at most one** directory

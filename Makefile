@@ -133,7 +133,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: plugin-sources plugin-schema-vendor gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-race test-integration e2e e2e-live e2e-live-services e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-release-gate check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test bench-linear-dispatch help dev-souls-docker dev-souls-docker-down check-plugin-schema check-banned-terms
+.PHONY: plugin-sources destiny-sources plugin-schema-vendor gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-race test-integration e2e e2e-live e2e-live-services e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-release-gate check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test bench-linear-dispatch help dev-souls-docker dev-souls-docker-down check-plugin-schema check-banned-terms
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -567,7 +567,7 @@ build-linux: bin-keeper bin-soul
 # e2e-live-services for the same reason the gate does it: the tier's real subject is an
 # out-of-tree service repository, and fetching it is named and paid for up front instead of
 # discovered inside a test that has already brought up five containers (NIM-876).
-e2e-live: build build-linux plugin-sources e2e-live-services
+e2e-live: build build-linux plugin-sources destiny-sources e2e-live-services
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
 		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
 		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
@@ -714,8 +714,17 @@ e2e-live-gate: build build-linux
 		echo "  for, one artifact over. Unset it, or bump the pin to a commit you have pushed." >&2; \
 		exit 1; \
 	fi
+	@overrides=$$(scripts/destiny-source.sh overrides) || exit 1; \
+	if [ -n "$$overrides" ]; then \
+		echo "e2e-live-gate: refusing to run - a destiny pin is overridden by a working tree:" >&2; \
+		echo "$$overrides" | sed 's/^/  /' >&2; \
+		echo "  Under SOUL_STACK_DESTINY_DIR_* the redis service test would apply a brick nobody can name." >&2; \
+		exit 1; \
+	fi
 	@$(MAKE) --no-print-directory plugin-sources \
 		|| { echo "e2e-live-gate: the pinned plugin source cache is neither warm nor fillable - the harness guards below resolve that pin, and four of the five gate tests build the artifact from it" >&2; exit 1; }
+	@$(MAKE) --no-print-directory destiny-sources \
+		|| { echo "e2e-live-gate: the pinned destiny source cache is neither warm nor fillable - the redis service tests apply the destiny from it" >&2; exit 1; }
 	@echo "e2e-live-gate: harness unit-guards (docker-free) - apply bracket NIM-46, stand readiness NIM-406"
 	@(cd tests/e2e-live && go test -count=1 ./harness/) \
 		|| { echo "e2e-live-gate: FALSE-GREEN - a docker-free harness unit-guard failed" >&2; exit 1; }
@@ -1824,6 +1833,12 @@ plugin-schema-vendor:
 plugin-sources:
 	@scripts/plugin-source.sh prime
 
+# destiny-sources — the same for the pinned out-of-tree destinies (NIM-1062). `trial`, the
+# render/config/lint tests and the L3b fixture fill it on demand; after this,
+# SOUL_STACK_DESTINY_OFFLINE=1 is safe.
+destiny-sources:
+	@scripts/destiny-source.sh prime
+
 check-all:
 	@GATE_SLOTS='$(GATE_SLOTS)' scripts/gate-slot.sh scripts/gate.sh check-all $(GATE_CHECK_TIERS) $(GATE_L1_TIERS)
 	@echo "check-all: docker-free gate + unit -race + L1 (integration, -race) + L3a (e2e) all passed"
@@ -2202,8 +2217,28 @@ stamp-examples: build
 # `lint` has carried since NIM-294: a green trial over a module nobody bound is the
 # false green this ticket removed, and it would grow back the day a corpus service
 # starts addressing an alias that is not bound above.
+#
+# The service corpus runs from a COPY of examples/ in a temporary directory, because a
+# destiny it applies may not live here (NIM-1062): `examples/service/dragonfly` applies
+# `redis`, which is github.com/soul-stack-destiny/redis at the commit
+# scripts/destiny-source.sh pins. L0 reads a destiny only from disk, beside the service
+# (`file://../../destiny/{name}`), so the pinned tree is placed in the copy's destiny/ next
+# to the in-tree ones. The destiny corpus still runs in place.
 trial: build
-	@for root in examples/service examples/destiny; do \
+	@bundle=$$(mktemp -d "$${TMPDIR:-/tmp}/soul-trial-corpus.XXXXXXXX") || exit 1; \
+	trap 'rm -rf "$$bundle"' EXIT; \
+	cp -R examples/service "$$bundle/service" && cp -R examples/destiny "$$bundle/destiny" || exit 1; \
+	for alias in $$(scripts/destiny-source.sh aliases); do \
+		if [ -e "examples/destiny/$$alias" ]; then \
+			echo "trial: examples/destiny/$$alias is back beside the pinned $$alias (scripts/destiny-source.sh)." >&2; \
+			echo "      Two sources for one destiny is the duplicate NIM-1062 removed; delete the copy." >&2; \
+			exit 1; \
+		fi; \
+		src=$$(scripts/destiny-source.sh dir "$$alias") || exit 1; \
+		cp -R "$$src" "$$bundle/destiny/$$alias" || exit 1; \
+		echo "trial: destiny $$alias@$$(scripts/destiny-source.sh tag "$$alias") from $$src"; \
+	done; \
+	for root in "$$bundle/service" examples/destiny; do \
 		for svc in "$$root"/*/; do \
 			[ -d "$$svc" ] || continue; \
 			name=$$(basename "$$svc"); \
@@ -2370,6 +2405,7 @@ help:
 	@echo "  build-soulctl     build only soulctl (operator client CLI)"
 	@echo "  test              go test ./... across all modules (no docker)"
 	@echo "  plugin-sources    fill the pinned out-of-tree plugin cache (run before going offline)"
+	@echo "  destiny-sources   fill the pinned out-of-tree destiny cache (run before going offline)"
 	@echo "  plugin-schema-vendor  re-vendor examples/module/*/schema.json from the pinned commit"
 	@echo "  test-race         go test -race -count=1 ./... — the unit corpus under the detector (no docker)"
 	@echo "  test-integration  go test -tags=integration -race over the tagged packages only (needs docker)"

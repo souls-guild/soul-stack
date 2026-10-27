@@ -518,6 +518,9 @@ tasks:
         # distro pin of the redis-server PACKAGE (carries redis-sentinel). apt form with epoch — SEPARATE
         # from sentinel_redis_version (the plugin's semver version-gate). required with package-install.
         version:  "${ compute.sentinel_redis_package_version }"
+        # The distro repository, not packages.redis.io: the destiny's default apt
+        # repository takes an upstream X.Y.Z, and the pin above is the distro string.
+        install: { repo_uri: "" }
         sentinel:
           # master_name — the same logical name for the monitored master as the DF plane.
           master_name: "${ default(vars.sentinel_master_name, 'master') }"

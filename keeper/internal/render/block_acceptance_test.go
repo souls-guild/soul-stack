@@ -14,7 +14,7 @@ import (
 )
 
 // realRedisDestinyResolver — a DestinyResolver that loads the REAL `redis` destiny
-// (manifest + tasks/main.yml + .tmpl) from disk at examples/destiny/redis/. The
+// (manifest + tasks/main.yml + .tmpl) from disk, at its pin (pinnedDestinyDir). The
 // acceptance test below gates on the destiny's own tasks (deploy_redis skipping the
 // data plane), so a synthetic one-step stand-in would assert nothing.
 type realRedisDestinyResolver struct{ dir string }
@@ -141,7 +141,7 @@ func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 		Scenario:    applyDestinyScenario("redis", applyInput),
 		Incarnation: IncarnationMeta{ID: "redis", Service: "redis"},
 		Hosts:       hosts,
-		Destiny:     realRedisDestinyResolver{dir: filepath.FromSlash("../../../examples/destiny/redis")},
+		Destiny:     realRedisDestinyResolver{dir: pinnedDestinyDir(t, "redis")},
 	}
 
 	tasks, _, err := p.Render(context.Background(), in)
