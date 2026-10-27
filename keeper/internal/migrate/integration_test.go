@@ -4,8 +4,7 @@
 //
 // They start postgres:16-alpine, run Apply on a clean DB, and verify
 // idempotency + down/up cycle. One container per package; between tests schema
-// state is dropped through resetSchema (DROP TABLE audit_log + DROP TABLE
-// schema_migrations).
+// state is dropped through resetSchema (DROP SCHEMA public CASCADE).
 //
 // Run:
 //
@@ -562,21 +561,19 @@ func TestIntegration_MigrateApply_DirtyState(t *testing.T) {
 }
 
 // TestIntegration_MigrateApply_CtxCanceled models SIGTERM arriving at Apply
-// start (pre-cancelled ctx). Interrupting migrations through GracefulStop is
-// best-effort, not a guarantee: ctx-bridge goroutine races with m.Up(), and on a
-// fresh schema migrations may buffer faster than bridge sends stop. Therefore
-// both outcomes are valid: Apply either interrupted (err != nil) or finished
-// migrating (err == nil). What the test MUST guarantee: pre-cancel does not
-// leave schema in broken/dirty state; repeated Apply on a clean ctx should pass
-// idempotently.
+// start (pre-cancelled ctx). How far Up gets is a race between the ctx bridge
+// and the migration loop; the outcome is not: a cancelled Apply is an error
+// (NIM-1060), and it leaves no dirty version behind, so a repeated Apply on a
+// live ctx finishes the ladder.
 func TestIntegration_MigrateApply_CtxCanceled(t *testing.T) {
 	resetSchema(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before start
 
-	// Does not panic; interruption error is allowed but not required (best-effort).
-	_ = keepermigrate.Apply(ctx, integrationDSN, migrations.FS, ".")
+	if err := keepermigrate.Apply(ctx, integrationDSN, migrations.FS, "."); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Apply on a cancelled ctx: err = %v, want it to wrap context.Canceled", err)
+	}
 
 	// State is consistent: repeated Apply on a live ctx brings schema to the end
 	// without dirty error; pre-cancel did not tear migration halfway.

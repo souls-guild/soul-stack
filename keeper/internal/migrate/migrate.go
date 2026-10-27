@@ -52,7 +52,8 @@ var (
 // Apply runs all up migrations from `fs` (sub-path `subdir`, e.g. `"."`) over
 // Postgres by `dsn`. It is idempotent: if all migrations are already applied,
 // it returns nil (golang-migrate returns `migrate.ErrNoChange` in that case,
-// and we swallow it).
+// and we swallow it). A cancelled ctx is always an error, so nil means the
+// schema is at the top of the ladder.
 //
 // `migrate` uses its own sql.DB (through registered driver `pgx5`), separate
 // from `keeper/internal/pg.NewPool`. This is by design: migrate tool requires
@@ -79,6 +80,11 @@ func Apply(ctx context.Context, dsn string, fs embed.FS, subdir string) error {
 	}
 	defer m.Close() //nolint:errcheck // close errors are not critical after successful Up
 
+	return up(ctx, m)
+}
+
+// up runs m.Up under ctx.
+func up(ctx context.Context, m *migrate.Migrate) error {
 	// ctx-cancellation: golang-migrate/v4 API does not accept context; the only
 	// way to interrupt a long Up is a signal to m.GracefulStop (chan bool,
 	// signal-only). Goroutine waits for ctx.Done and sends signal; local done
@@ -102,7 +108,30 @@ func Apply(ctx context.Context, dsn string, fs embed.FS, subdir string) error {
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("migrate: up: %w", err)
 	}
+	// A graceful stop ends Up between two steps with a nil error, exactly like
+	// a finished ladder, so the outcome is read off ctx and not off Up. Without
+	// this, a `keeper init` cancelled mid-ladder stopped at version 94 of 131
+	// and went on to bootstrap (NIM-1060). A ctx cancelled after the last step is
+	// reported the same way: whether Up saw the stop is a race, and the caller
+	// is shutting down either way.
+	if cause := ctx.Err(); cause != nil {
+		return interrupted(m, cause)
+	}
 	return nil
+}
+
+// interrupted wraps the cancellation cause with the version Up stopped at.
+// golang-migrate checks the stop signal only between steps, so that version
+// is never dirty and the next Apply resumes from it.
+func interrupted(m *migrate.Migrate, cause error) error {
+	version, _, err := m.Version()
+	switch {
+	case errors.Is(err, migrate.ErrNilVersion):
+		return fmt.Errorf("migrate: up interrupted before the first migration: %w", cause)
+	case err != nil:
+		return fmt.Errorf("migrate: up interrupted, version unreadable (%v): %w", err, cause)
+	}
+	return fmt.Errorf("migrate: up interrupted at version %d: %w", version, cause)
 }
 
 // toMigrateURL replaces scheme `postgres://` / `postgresql://` with

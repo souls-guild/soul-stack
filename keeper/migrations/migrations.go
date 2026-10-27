@@ -9,7 +9,7 @@ package migrations
 import "embed"
 
 // FS contains all `.sql` migrations next to this file. Passed to
-// `migrate.Apply(ctx, pool, migrations.FS, ".")`.
+// `migrate.Apply(ctx, dsn, migrations.FS, ".")`.
 //
 //go:embed *.sql
 var FS embed.FS
