@@ -94,6 +94,9 @@ var coreModuleDocs = map[string]coreModuleDoc{
 	"core.sysctl": {
 		Description: "Manage kernel parameters: one parameter at runtime and persisted, or a set as one sysctl.d drop-in.",
 	},
+	"core.task": {
+		Description: "Always fail the task: inside a rescue unit the explicit \"error not handled\", elsewhere a deliberate failure with a message (ADR-0091 amendment NIM-993).",
+	},
 	"core.url": {
 		Description: "Download a file by URL with checksum verification (state fetched).",
 	},

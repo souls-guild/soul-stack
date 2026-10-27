@@ -25,6 +25,10 @@ import (
 type HostFlow struct {
 	// Skip — `when:` is false on this host, so the task does not run there.
 	Skip bool
+	// Unrendered — with Skip: a cross-step rescue unit on a live host, where it
+	// cannot fire (ADR-0091 amendment NIM-993, rule 1). Nothing of it was rendered
+	// for this host, so a copy sent as `when: false` carries empty params.
+	Unrendered bool
 	// Failure — the task fails on this host before dispatch: its `when:` could not be
 	// evaluated, or a predicate could not be rendered.
 	Failure *FlowFailure
@@ -87,7 +91,7 @@ func (p *Pipeline) settleFlow(in RenderInput, tasks []*RenderedTask, plans []Dis
 	for _, t := range tasks {
 		contexts := t.flowContextBySID
 		t.flowContextBySID = nil
-		if (contexts == nil && t.flowFailure == nil) || (in.TaskPassage != nil && t.Passage != in.ActivePassage) {
+		if (contexts == nil && t.flowFailure == nil && t.skipSIDs == nil) || (in.TaskPassage != nil && t.Passage != in.ActivePassage) {
 			continue
 		}
 		sids := targets[t.Index]
@@ -96,12 +100,15 @@ func (p *Pipeline) settleFlow(in RenderInput, tasks []*RenderedTask, plans []Dis
 		}
 		t.FlowBySID = make(map[string]HostFlow, len(sids))
 		for _, sid := range sids {
-			if t.flowFailure != nil {
+			switch {
+			case t.skipSIDs[sid]:
+				t.FlowBySID[sid] = HostFlow{Skip: true, Unrendered: true}
+			case t.flowFailure != nil:
 				t.FlowBySID[sid] = HostFlow{Failure: t.flowFailure}
-				continue
+			case contexts != nil:
+				host := &topology.HostFacts{SID: sid}
+				t.FlowBySID[sid] = settleHostFlow(engine, t, flowControlVarsFromStruct(contexts[sid], hostRegister(in, host)))
 			}
-			host := &topology.HostFacts{SID: sid}
-			t.FlowBySID[sid] = settleHostFlow(engine, t, flowControlVarsFromStruct(contexts[sid], hostRegister(in, host)))
 		}
 	}
 	return nil

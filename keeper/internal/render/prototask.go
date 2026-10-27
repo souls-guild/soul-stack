@@ -186,6 +186,10 @@ func paramsForHost(t *RenderedTask, sid string) *structpb.Struct {
 	if sid == "" {
 		return t.Params
 	}
+	// Params of a task left unrendered for this host is another host's rendering.
+	if t.FlowBySID[sid].Unrendered {
+		return &structpb.Struct{}
+	}
 	// The WHOLE-struct case first (NIM-908): a per-host struct was rendered in this
 	// host's own environment, so it already carries this host's render_context — the
 	// single-key overlay below would only put the same value back. Returned directly,

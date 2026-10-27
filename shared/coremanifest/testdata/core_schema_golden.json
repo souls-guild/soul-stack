@@ -1238,6 +1238,20 @@
       }
     },
     {
+      "name": "task",
+      "states": {
+        "failed": {
+          "description": "Always fails its task. Inside a rescue unit it is the explicit \"error not handled\"; elsewhere it fails the task as Ansible's `fail` does. ADR-0091 amendment NIM-993.",
+          "input": {
+            "message": {
+              "type": "string",
+              "description": "The failure message. Optional inside a rescue unit, where it defaults to the original error; required anywhere else."
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "url",
       "capabilities": [
         "network_outbound",

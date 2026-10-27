@@ -26,13 +26,23 @@ func (f *fakeChangedReader) SelectFailedTaskKeys(_ context.Context, _ string) (m
 }
 
 func (f *fakeChangedReader) SelectReportedTaskKeys(_ context.Context, _ string) (map[auditpg.ChangedTaskKey]struct{}, error) {
+	return f.changedOrFailed(), f.err
+}
+
+// SelectExecutedTaskKeys — the fake records no SKIPPED key, so every key it holds
+// executed.
+func (f *fakeChangedReader) SelectExecutedTaskKeys(_ context.Context, _ string) (map[auditpg.ChangedTaskKey]struct{}, error) {
+	return f.changedOrFailed(), f.err
+}
+
+func (f *fakeChangedReader) changedOrFailed() map[auditpg.ChangedTaskKey]struct{} {
 	out := make(map[auditpg.ChangedTaskKey]struct{}, len(f.keys)+len(f.failedKeys))
 	for _, set := range []map[auditpg.ChangedTaskKey]struct{}{f.keys, f.failedKeys} {
 		for k := range set {
 			out[k] = struct{}{}
 		}
 	}
-	return out, f.err
+	return out
 }
 
 func runCompletedRunner(aw audit.Writer, ar ChangedTaskReader) *Runner {

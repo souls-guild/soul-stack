@@ -226,8 +226,9 @@ type RunFailureSourceEntry struct {
 // in the run, a host having one row per step that reached it, sent or settled by the
 // Keeper (per Passage under the deprecated staged model). failed_task_idx (local
 // index of the failed task within the row's ApplyRequest) / failed_plan_index (global
-// cross-cutting plan_index of the same task) / error_summary are filled ONLY on a
-// failed row (omitempty: nil → key omitted on success/running). status — host-level
+// cross-cutting plan_index of the same task) / error_summary are filled on a failed
+// or handled row (omitempty: nil → key omitted on any other success row and on a
+// running one). status — host-level
 // status (planned/claimed/running/dispatched/success/failed/cancelled/orphaned/no_match).
 type RunHostStatusEntry struct {
 	SID             string  `json:"sid" pattern:"^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$" doc:"host FQDN OR synthetic run sid (keeper=on:keeper, __run__=run-sentinel abort to dispatch), not addressing a Soul (NIM-36)"`
@@ -239,6 +240,7 @@ type RunHostStatusEntry struct {
 	Attempt         int32   `json:"attempt" doc:"fencing epoch of the last work-queue claim of this row; 0 if the row was never claimed (sent inline, keeper-side, or still planned). It grows across a host's rows of one run, so a later step of a host can start above 1 without ever having been re-claimed"`
 	CancelRequested bool    `json:"cancel_requested"`
 	Dropped         bool    `json:"dropped,omitempty" doc:"true on the failed or orphaned row of a host the run dropped under on_failure: host and finished without; absent on every other row, a failed row of a run that ended early included"`
+	Handled         bool    `json:"handled,omitempty" doc:"true on a row whose failures a rescue handled: a failed or orphaned row that is no failure of the run, and a success row the Soul finished after handling a failure inside its message. Such a row keeps failed_task_idx, failed_plan_index and error_summary as its first failure; absent on every other row"`
 	// Notices — advisory findings this host reported during the run (NIM-237),
 	// deduplicated by (code, module, param). Unlike error_summary, INDEPENDENT of
 	// status: the task ran and succeeded, and something about how it was asked is

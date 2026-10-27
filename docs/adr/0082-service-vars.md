@@ -578,18 +578,18 @@ not read its block + task rung. Each keeps its reason; the table in point 7 stat
   being iterated cannot depend on it. At `2cc27029` `loopInvariantVars`
   (`keeper/internal/render/loop.go:246-268`) seeded the service layer alone
   (`Vars: in.ServiceVars`, `:253`); the amendment adds the one rung above it that is not per
-  iteration (`loopAxisView`, `loop.go:318-320`).
+  iteration (`loopAxisView`, `loop.go:326-328`).
 - **The `template:` path of `core.file.rendered`** — it resolves in `keeperVars`
-  (`pipeline.go:1806-1822`), before any host, to choose the one file Keeper reads, and reads the
+  (`pipeline.go:1880-1896`), before any host, to choose the one file Keeper reads, and reads the
   service and scenario rungs.
 - **An include `when:`** — it decides whether a group of tasks exists at all, so it cannot read a
-  task's own `vars:` (`pipeline.go:984-996` builds its view without one). It reads the service and
+  task's own `vars:` (`pipeline.go:1048-1060` builds its view without one). It reads the service and
   scenario rungs, and in a destiny pass the first host's `vars.yml`.
 - **An `on:` coven list** — it chooses the roster and reads no `vars.*` at all, as at `2cc27029`
   (`resolveCovenList`, `dispatch.go:263-281`).
 - **A `core.state` capture's merge-time `match:` / `patch:`** — evaluated per element at merge, with
   no run context, and reads no `vars.*` at all, as at `2cc27029` (`StateOpEvaluators`,
-  `pipeline.go:1951-1963`: `Loop` and the scopes only).
+  `pipeline.go:2025-2037`: `Loop` and the scopes only).
 
 #### 6. Each definition keeps its own rung's environment
 
@@ -647,7 +647,7 @@ covers it per analysis:
 
 #### 7. What each context reads
 
-The service view is the service rung ALONE. A run builds it once, at run start (`run.go:349`), and it
+The service view is the service rung ALONE. A run builds it once, at run start (`run.go:363`), and it
 lives for the whole run, across Passages; the run's `compute:` reads it and nothing else, and every
 task view of the run stacks on it. `compute:` does NOT see the scenario `vars:` rung: that rung reads
 `compute.*`, so the reverse would be a cycle between namespaces.
@@ -668,36 +668,36 @@ Every other context reads a view of its own:
 | Context | Rungs of `vars.*` it reads | Host stance |
 |---|---|---|
 | a host task in the scenario pass — `params:`, `where:`, its `vars:`, `apply: input:`, `flow_context`, `render_context` values | service + scenario + block/task | host-bound, per host |
-| a static `when:`, an `assert:` and an `assert:` task's own `when:` gate (at render, and in the pre-flight gate through `EvalAsserts`, `preflight.go:212`) | the task's view, as above | decided on the roster's first host, as at `2cc27029` — see the note below the table (NIM-1020); a keeper task's static `when:` in `keeperVars` instead, where its params are read (`pipeline.go:910-928`) |
+| a static `when:`, an `assert:` and an `assert:` task's own `when:` gate (at render, and in the pre-flight gate through `EvalAsserts`, `preflight.go:212`) | the task's view, as above | decided on the roster's first host, as at `2cc27029` — see the note below the table (NIM-1020); a keeper task's static `when:` in `keeperVars` instead, where its params are read (`pipeline.go:971-989`) |
 | an `on: keeper` task | service + scenario + its block/task | `HostFreeKeeper` |
-| an include `when:` | service + scenario; in a destiny pass the first host's `vars.yml`, guarded by `HostVariantVars` (`evalIncludeWhen`, `pipeline.go:966-1006`) | `HostFreeIncludeWhen` |
-| `loop.items:` / `loop.when:` | service + scenario (point 5); none in a destiny pass, as at `2cc27029` (`loopAxisView`, `loop.go:318-320`: `runLevelView` is nil there) | `HostFreeLoopAxis` |
-| the `template:` path of `core.file.rendered` | service + scenario (`keeperVars`, `pipeline.go:1806-1822`); none in a destiny pass | `HostFreeTemplatePath` |
+| an include `when:` | service + scenario; in a destiny pass the first host's `vars.yml`, guarded by `HostVariantVars` (`evalIncludeWhen`, `pipeline.go:1030-1070`) | `HostFreeIncludeWhen` |
+| `loop.items:` / `loop.when:` | service + scenario (point 5); none in a destiny pass, as at `2cc27029` (`loopAxisView`, `loop.go:326-328`: `runLevelView` is nil there) | `HostFreeLoopAxis` |
+| the `template:` path of `core.file.rendered` | service + scenario (`keeperVars`, `pipeline.go:1880-1896`); none in a destiny pass | `HostFreeTemplatePath` |
 | `compute:` | service (`compute.go:55`) | host-free |
 | an `on:` coven list | no `vars.*`, as at `2cc27029` (`dispatch.go:263-281`) | `HostFreeCovenList` |
-| a `core.state` capture's merge-time `match:` / `patch:` | no `vars.*`, as at `2cc27029` (`pipeline.go:1951-1963`) | `HostFreeStateMatch` |
+| a `core.state` capture's merge-time `match:` / `patch:` | no `vars.*`, as at `2cc27029` (`pipeline.go:2025-2037`) | `HostFreeStateMatch` |
 | a host task in the destiny pass | `vars.yml` + block/task | host-bound, per host |
 
 Two contexts in that row change path. The first is an `assert:` task's own `when:` gate:
 - **At `2cc27029`** it was evaluated over `hostVars` alone (`evalAssertTask`,
   `pipeline.go:1216-1234`): service vars, no task `vars:`, and no `GuardHostFreePredicate`.
-- **Now** it reads the task's view on the roster's first host (`pipeline.go:1268-1272`), behind the
-  guard `staticWhenSkips` applies (`:1281`; `staticWhenSkips`' own, `:900`). So it can read its own
+- **Now** it reads the task's view on the roster's first host (`pipeline.go:1342-1346`), behind the
+  guard `staticWhenSkips` applies (`:1355`; `staticWhenSkips`' own, `:961`). So it can read its own
   task's `vars:`.
 
 The second is a keeper task's static `when:`. At `2cc27029` `staticWhenSkips` decided it on the
 roster's first host, over `hostVars`. It is now read in `keeperVars`, where the task's params are:
-no host bound, `host_count` 0 (`pipeline.go:910-928`;
+no host bound, `host_count` 0 (`pipeline.go:971-989`;
 `TestStaticWhen_AKeeperTaskIsDecidedInTheKeeperContext`).
 
 `evalAssertTask` is called from the scenario render loop and from `EvalAsserts` alone
-(`pipeline.go:259`, `:1232`), both scenario-pass paths. There the guard is inert, as for every
+(`pipeline.go:267`, `:1306`), both scenario-pass paths. There the guard is inert, as for every
 scenario-pass static `when:` (NIM-1020).
 
 A static `when:` and an `assert:` task's `when:` gate are classified static from their own text and
-decided on the first host (`config.IsStaticPredicate`; `staticWhenSkips`, `pipeline.go:883-950`, and
-the assert gate, `:1277-1297`). An `assert:`'s `that:` is always evaluated on the first host — a
-synthetic empty host on an empty roster (`pipeline.go:1268-1307`). A task-rung
+decided on the first host (`config.IsStaticPredicate`; `staticWhenSkips`, `pipeline.go:921-1003`, and
+the assert gate, `:1351-1371`). An `assert:`'s `that:` is always evaluated on the first host — a
+synthetic empty host on an empty roster (`pipeline.go:1342-1381`). A task-rung
 `vars:` that reads `soulprint.self` or `register` behind `vars.<x>` is therefore decided for the whole
 roster by one host. That defect is older than this amendment and is filed as **NIM-1020**. In the
 scenario pass no rung adds a host root to it: the scenario rung sees run data only, and the service
@@ -711,7 +711,7 @@ rung's text names none. The amendment does open two more paths to it:
 
 In the scenario pass both paths stay with the rest of NIM-1020. In the destiny pass the defect itself
 is closed here, as a side effect of point 16. The per-host set becomes per task view, and
-`staticWhenSkips` already guards a destiny static `when:` with that set (`pipeline.go:900`). So a
+`staticWhenSkips` already guards a destiny static `when:` with that set (`pipeline.go:961`). So a
 destiny static `when:` over a host-dependent task var — or over a `vars.yml` name derived from one — is
 REFUSED by name at render instead of decided by one host. The corpus has no such task (scan below).
 
@@ -930,14 +930,14 @@ The user's decision. Static analysis is acceptable here because it runs once per
 - **(b) A strict render mode**, set by the L0 trial harness and by Go tests and never in production,
   materializes whole every TASK view the render built — each host task × host × loop iteration, each
   keeper task, each `assert:` task on the host it is decided on (`evalAssertTask`,
-  `pipeline.go:1268-1272`), each destiny task × host × loop iteration — and fails the case on any
+  `pipeline.go:1342-1346`), each destiny task × host × loop iteration — and fails the case on any
   error. The other host-free views
   — the loop axis, an include `when:`, a `template:` path — evaluate only what their cells read, as in
   production: a scenario definition reading `compute.*` is refused on the loop axis by design (point
   6), and materializing that view whole would fail a valid case. Nor is a view on the stand-in host
   of an empty target or roster materialized: a host task whose `where:` targets no host
-  (`len(targeted) > 0`, `pipeline.go:709`), an `assert:` on an empty roster (`:1310`), an applier
-  with no targets (`destiny.go:532`). That host is no host, and a definition over its
+  (`len(targeted) > 0`, `pipeline.go:747`), an `assert:` on an empty roster (`:1384`), an applier
+  with no targets (`destiny.go:615`). That host is no host, and a definition over its
   `soulprint.self` would fail though no host reads it.
   `TestStrictVars_LeavesTheViewsItDoesNotClaimAlone` pins the three stand-in host cases (the host
   task, the applier with no targets, the `assert:` on an empty roster) and the three host-free views.
@@ -1045,7 +1045,7 @@ analyses below. It does not apply to every analysis of task text: the Passage cu
 
 - the seal (point 15);
 - NIM-908's host-variance classification (`hostVariantInputNames`, `hostVariantDestinyVars`,
-  `render/destiny.go:588`, `:748`, built over the view by `viewClosure`, `render/varview.go:137`);
+  `render/destiny.go:671`, `:831`, built over the view by `viewClosure`, `render/varview.go:137`);
 - `soul_needs`' targeting and moving-state sets (`targetingKnown` and `movingVars`,
   `render/soul_needs.go:234`, `:333`), and its include-`when:` test in `off()` (`:206-207`). At
   `2cc27029` that test passed no vars at all (`movesWithState(task.IncludeWhen, step, nil, nil)`,

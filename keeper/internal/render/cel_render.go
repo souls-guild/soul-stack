@@ -551,6 +551,29 @@ func flowVarsSection(vars cel.Vars, reads flowContextReads) (map[string]any, err
 	return lookupVars(vars.View, slices.Sorted(maps.Keys(r.Fields)))
 }
 
+// withoutVarReads is reads reading none of leftOut from view, a whole read of `vars`
+// narrowed to its other names; reads itself when there is nothing to leave out.
+func withoutVarReads(reads flowContextReads, view *cel.VarView, leftOut map[string]bool) flowContextReads {
+	if len(leftOut) == 0 || view == nil {
+		return reads
+	}
+	r, named := reads[flowContextVarsKey]
+	fields := make(map[string]bool, len(r.Fields))
+	if !named || r.Whole {
+		for _, name := range view.Names() {
+			fields[name] = true
+		}
+	} else {
+		maps.Copy(fields, r.Fields)
+	}
+	for name := range leftOut {
+		delete(fields, name)
+	}
+	out := maps.Clone(reads)
+	out[flowContextVarsKey] = cel.RootReads{Fields: fields}
+	return out
+}
+
 // orEmptyMap turns a nil map into empty (structpb.NewStruct doesn't accept nil
 // nesting uniformly; an empty map yields a normal no-such-key on Soul, not a
 // panic). Local duplicate of unexported shared/cel.orEmpty — not worth
@@ -610,18 +633,18 @@ func covensList(items []string) []any {
 // soulprint.hosts: the stable layer (sid/role/covens/choirs/network/os,
 // orchestration.md §4.1). network/os come from the host's last-reported
 // Soulprint map; covens/role/choirs are registry data (HostFacts.Coven/Role/
-// Choirs). A host the run dropped stays listed with `dropped: true` ([runHosts]).
-// Not projected in the destiny pass (nil) — the accessor is cut off there by
-// isolation.
+// Choirs). A host the run holds or dropped stays listed, `held: true` or
+// `dropped: true` ([runHosts]). Not projected in the destiny pass (nil) — the
+// accessor is cut off there by isolation.
 func soulprintHosts(in RenderInput) []map[string]any {
 	hosts := runHosts(in)
 	if in.destinyIsolated || len(hosts) == 0 {
 		return nil
 	}
-	dropped := droppedSIDs(in)
+	dropped, held := droppedSIDs(in), sidSet(in.HeldHosts)
 	out := make([]map[string]any, 0, len(hosts))
 	for _, h := range hosts {
-		out = append(out, hostFactsToMap(h, dropped[h.SID]))
+		out = append(out, hostFactsToMap(h, dropped[h.SID], held[h.SID]))
 	}
 	return out
 }
@@ -631,9 +654,12 @@ func soulprintHosts(in RenderInput) []map[string]any {
 // an operator-set key-value map (ADR-060, registry projection); network/os are
 // Soulprint submaps (missing → empty map, field access yields a normal
 // no-such-key). dropped — the run dropped the host under `on_failure: host`
-// (settings.md §4): all hosts are `soulprint.hosts`, the ones still in the run
-// `soulprint.hosts.filter(h, !h.dropped)`.
-func hostFactsToMap(h *topology.HostFacts, dropped bool) map[string]any {
+// (settings.md §4); held — the run holds its failure for a rescue ahead
+// (ADR-0091 amendment NIM-993, rule 2), which leaves `dropped` false because the
+// host may return. All hosts are `soulprint.hosts`, the ones in the run's outcome
+// `soulprint.hosts.filter(h, !h.dropped)`, the ones receiving tasks now
+// `soulprint.hosts.filter(h, !h.dropped && !h.held)`.
+func hostFactsToMap(h *topology.HostFacts, dropped, held bool) map[string]any {
 	return map[string]any{
 		"sid":     h.SID,
 		"role":    h.Role,
@@ -643,6 +669,7 @@ func hostFactsToMap(h *topology.HostFacts, dropped bool) map[string]any {
 		"network": soulprintSection(h.Soulprint, "network"),
 		"os":      soulprintSection(h.Soulprint, "os"),
 		"dropped": dropped,
+		"held":    held,
 	}
 }
 

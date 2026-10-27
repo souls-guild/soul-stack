@@ -1,0 +1,6 @@
+name: changed-when-on-task-failed
+tasks:
+  - name: Refuse an unsupported release
+    module: core.task.failed
+    changed_when: "true"
+    params: { message: the legacy release is not supported }

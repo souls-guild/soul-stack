@@ -19,7 +19,21 @@ func judgeOf(owner string, tasks ...*render.RenderedTask) *stepJudge {
 	for _, t := range tasks {
 		byIndex[t.Index] = t
 	}
-	return &stepJudge{step: 2, owner: settings, byIndex: byIndex, sent: map[string][]*render.RenderedTask{}, judged: map[string]bool{}}
+	return &stepJudge{
+		step: 2, owner: settings, byIndex: byIndex, sent: map[string][]*render.RenderedTask{},
+		recorded: map[string]map[int]bool{}, replayed: map[string]bool{}, decided: map[string]bool{},
+	}
+}
+
+// judgeAtOnce is the entry j's barrier judges a host's row by, in a run whose plan
+// holds no rescue unit: every failure is judged where it failed.
+func judgeAtOnce(t *testing.T, j *stepJudge, hs applyrun.HostStatus) failureEntry {
+	t.Helper()
+	got := newRunFailures().barrier(j, []applyrun.HostStatus{hs}, []*topology.HostFacts{{SID: hs.SID}}, true)
+	if len(got) != 1 {
+		t.Fatalf("barrier judged %v, want one entry for %s", got, hs.SID)
+	}
+	return got[0]
 }
 
 func failedRow(sid string, planIndex *int) applyrun.HostStatus {
@@ -30,44 +44,46 @@ func failedRow(sid string, planIndex *int) applyrun.HostStatus {
 func idx(i int) *int { return &i }
 
 // ★ GUARD (settings.md §4). A host is judged by the radius of the task it failed at;
-// a later failure on the same host under `scenario` — a rescue left at the default —
-// ends the run although the first was under `host`; the FAILED records the Keeper
-// wrote for the rest of a message it never sent are not judged; a failure tied to
-// no task takes the barrier owner's radius; a cancel ends the run whatever the
-// radius.
+// a later failure on the same host, of a task under `scenario`, ends the run although
+// the first was under `host`; the FAILED records the Keeper wrote for the rest of a
+// message it never sent are not judged; a failure tied to no task takes the barrier
+// owner's radius; a cancel ends the run whatever the radius.
 //
-// Mutations: judge by the first failure only → the rescue case reads `host`; judge
-// the Keeper's sibling records → the settled case reads `scenario`; default a
+// Mutations: judge by the first failure only → the later failure's case reads `host`;
+// judge the Keeper's sibling records → the settled case reads `scenario`; default a
 // failure with no task to `scenario` → the owner's `host` is lost.
 func TestStepJudge_VerdictFollowsTheFailedTask(t *testing.T) {
 	install := &render.RenderedTask{Index: 4, Name: "install", OnFailure: config.OnFailureHost}
-	rescue := &render.RenderedTask{Index: 5, Name: "rescue", OnFailure: config.OnFailureScenario}
+	smoke := &render.RenderedTask{Index: 5, Name: "smoke", OnFailure: config.OnFailureScenario}
 
-	j := judgeOf(config.OnFailureScenario, install, rescue)
-	if e := j.verdict(failedRow("a", idx(4))); e.radius != config.OnFailureHost || e.task != "install" {
+	j := judgeOf(config.OnFailureScenario, install, smoke)
+	j.sent["a"] = []*render.RenderedTask{install, smoke}
+	if e := judgeAtOnce(t, j, failedRow("a", idx(4))); e.radius != config.OnFailureHost || e.task != "install" {
 		t.Errorf("first failure under host = %+v, want host at install", e)
 	}
 
 	j.failedAt = map[string]map[int]bool{"b": {4: true, 5: true}}
-	if e := j.verdict(failedRow("b", idx(4))); e.radius != config.OnFailureScenario || e.task != "rescue" {
-		t.Errorf("a scenario-radius rescue failing after = %+v, want scenario at rescue", e)
+	j.sent["b"] = []*render.RenderedTask{install, smoke}
+	if e := judgeAtOnce(t, j, failedRow("b", idx(4))); e.radius != config.OnFailureScenario || e.task != "smoke" {
+		t.Errorf("a later task under scenario failing too = %+v, want scenario at smoke", e)
 	}
 
 	j.settled = map[string]*settledHost{"c": {failed: true, records: []keeperRecord{
 		{task: install, status: keeperv1.TaskStatus_TASK_STATUS_FAILED},
-		{task: rescue, status: keeperv1.TaskStatus_TASK_STATUS_FAILED},
+		{task: smoke, localIdx: 1, status: keeperv1.TaskStatus_TASK_STATUS_FAILED},
 	}}}
-	if e := j.verdict(failedRow("c", nil)); e.radius != config.OnFailureHost || e.task != "install" {
+	if e := judgeAtOnce(t, j, failedRow("c", nil)); e.radius != config.OnFailureHost || e.task != "install" {
 		t.Errorf("a host the Keeper failed = %+v, want judged by the cause alone", e)
 	}
 
 	owner := judgeOf(config.OnFailureHost, install)
-	if e := owner.verdict(failedRow("d", nil)); e.radius != config.OnFailureHost || e.task != "" {
+	owner.sent["d"] = []*render.RenderedTask{install}
+	if e := judgeAtOnce(t, owner, failedRow("d", nil)); e.radius != config.OnFailureHost || e.task != "" {
 		t.Errorf("a failure tied to no task = %+v, want the owner's host", e)
 	}
 
 	cancelled := applyrun.HostStatus{SID: "e", Status: applyrun.StatusCancelled, Passage: 2}
-	if e := owner.verdict(cancelled); e.radius != radiusCancelled {
+	if e := judgeAtOnce(t, owner, cancelled); e.radius != radiusCancelled {
 		t.Errorf("a cancelled row = %+v, want %s", e, radiusCancelled)
 	}
 }
@@ -82,8 +98,8 @@ func TestRunFailures_EndingErrorListsEveryEntry(t *testing.T) {
 
 	roster := []*topology.HostFacts{{SID: "a"}, {SID: "b"}, {SID: "c"}}
 	drops, err := f.settle(0, []failureEntry{{step: 0, sid: "a", radius: config.OnFailureHost, reason: "first"}}, owner, 3, roster)
-	if err != nil || len(drops) != 1 || f.dropped["a"].facts != roster[0] {
-		t.Fatalf("settle(host) = %v, %v, dropped %v, want host a dropped with its facts", drops, err, f.dropped)
+	if err != nil || len(drops) != 1 || !f.isDropped("a") || f.hosts["a"].facts != roster[0] {
+		t.Fatalf("settle(host) = %v, %v, dropped %v, want host a dropped with its facts", drops, err, f.drops())
 	}
 
 	_, err = f.settle(1, []failureEntry{
@@ -93,7 +109,7 @@ func TestRunFailures_EndingErrorListsEveryEntry(t *testing.T) {
 	if !errors.Is(err, errRunEnded) || !f.ended || f.endedAt != 1 {
 		t.Fatalf("a scenario-radius failure = %v (ended %v at %d), want the run ended at step 1", err, f.ended, f.endedAt)
 	}
-	if _, gone := f.dropped["c"]; gone {
+	if f.isDropped("c") {
 		t.Error("a host-radius failure beside the one that ended the run was committed as a drop")
 	}
 
@@ -111,7 +127,7 @@ func TestRunFailures_EndingErrorListsEveryEntry(t *testing.T) {
 // A dropped host stays out of a roster read again later.
 func TestRunFailures_LiveDropsTheDroppedFromAFreshRoster(t *testing.T) {
 	f := newRunFailures()
-	f.dropped["b"] = droppedHost{facts: &topology.HostFacts{SID: "b"}}
+	f.drop([]failureEntry{{step: 0, sid: "b", radius: config.OnFailureHost}}, nil)
 	got := f.live([]*topology.HostFacts{{SID: "a"}, {SID: "b"}, {SID: "c"}})
 	if len(got) != 2 || got[0].SID != "a" || got[1].SID != "c" {
 		t.Errorf("live = %v, want [a c]", got)

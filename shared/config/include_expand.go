@@ -165,6 +165,7 @@ func expandIncludes(tasks []Task, resolve IncludeResolver, destinyTasks bool, mo
 	if !diag.HasErrors(e.diags) {
 		e.diags = append(e.diags, validateFlatTaskAddresses(out)...)
 		e.diags = append(e.diags, validateFlatBlockKeeperSide(out)...)
+		e.diags = append(e.diags, validateFlatRescueUnits(out)...)
 		if destinyTasks {
 			e.diags = append(e.diags, validateFlatDestinyRegisterReads(out)...)
 		}

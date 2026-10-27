@@ -172,7 +172,7 @@ func TestIntegration_PushBranch_ScenarioTaskRunsOverSSHAndFillsRegister(t *testi
 	}
 
 	// (1) THE BARRIER. Returns only once the host's row is terminal and benign.
-	if err := runner.dispatchPassage(ctx, spec, discardLog(), 0, tasks, plans, nil, hosts, nil, nil); err != nil {
+	if err := runner.dispatchPassage(ctx, spec, discardLog(), 0, tasks, plans, nil, hosts, nil, nil, false); err != nil {
 		t.Fatalf("dispatchPassage over push: %v\n\tapply_runs=%s", err, applyRunDump(ctx, t, spec.ApplyID))
 	}
 
@@ -263,7 +263,7 @@ func TestIntegration_PushBranch_FailingTaskBreaksTheBarrierWithItsReason(t *test
 		ScenarioName: "live", StartedByAID: "archon-live",
 	}
 
-	err = runner.dispatchPassage(ctx, spec, discardLog(), 0, tasks, plans, nil, hosts, nil, nil)
+	err = runner.dispatchPassage(ctx, spec, discardLog(), 0, tasks, plans, nil, hosts, nil, nil, false)
 	if err == nil {
 		t.Fatal("a failing push task returned a green barrier")
 	}

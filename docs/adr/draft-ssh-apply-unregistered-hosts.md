@@ -1,6 +1,6 @@
 ## ADR-draft. `core.ssh.apply` — a destiny applied over SSH to hosts addressed by a list, not by the registry
 
-**Status:** accepted 2026-10-05 (number stamped at squash-merge, `docs/adr/draft-ssh-apply-unregistered-hosts.md` until then)
+**Status:** accepted 2026-10-05 (number stamped at squash-merge, `docs/adr/draft-ssh-apply-unregistered-hosts.md` until then); **amended 2026-10-14 (NIM-993, design — not built)**: a destiny's in-message rescue pairs carry `rescue_unit` marks here too (see the amendment at the end)
 **Amends:** [ADR-063](0063-bootstrap-token-delivery.md) (its 2026-09-12 ready-made VM chain gains a destiny form beside the shell one; on teleport the join wait stops retrying a rejected host key, and an identity file with no SSH CA is refused at start and at every dial), [ADR-0089](0089-scenario-push-branch.md) (strikes "bootstrapping a bare VM" from its *still not solved* list — for applying a destiny; module delivery stays there), [ADR-032](0032-push-orchestrator.md) (the push executor is shared by two addressings)
 **Leaves unchanged:** [ADR-0088](0088-task-transport-key.md) §4 — the `transport:` key still names no address; [ADR-012](0012-keeper-soul-grpc.md)(d) — params are rendered on the Keeper, the Soul executes
 **Implemented by:** NIM-905
@@ -391,3 +391,7 @@ on a keeper-side task. The Acolyte path does not touch it: keeper-side steps run
 - The `soul` destiny repository (`soul-stack-destiny/soul`) names this state `core.ssh.applied` in
   its README; correcting that and calling `core.ssh.apply` from it is a follow-up in that
   repository.
+
+## Amendment 2026-10-14 (NIM-993): a destiny's rescues handle its failures here too
+
+*Design — not built.* Under the [ADR-0091 amendment of NIM-993](0091-scenario-linear-barrier.md#amendment-2026-10-14-nim-993-a-rescue-that-succeeds-handles-the-failure), a rescue that succeeds inside one message handles the failure, and the Soul applies that rule to a message whose tasks carry `rescue_unit` marks. `core.ssh.apply` marks the destiny's in-message source/unit pairs the same way a scenario step does, so a destiny whose own rescue succeeds ends `SUCCESS` here as well. An older binary keeps fail-stop and reports `failed`.

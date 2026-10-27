@@ -76,6 +76,35 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   rescue step goes through the work-queue, its row carrying the routing (ADR-027 amend (s)). ⚠ A
   keeper-side task's own failure still aborts the run at once, before any rescue of it.
 
+- **A rescue that succeeds handles the failure (NIM-993, [rescues.md](docs/scenario/rescues.md), [ADR-0091
+  amendment](docs/adr/0091-scenario-linear-barrier.md#amendment-2026-10-14-nim-993-a-rescue-that-succeeds-handles-the-failure)).**
+  In a run executing linearly, a failure that a later `onfail:` rescue names is held instead of
+  judged: the run does not end, the host is not dropped, the host gets only its rescues, and the
+  later `serial:` waves go on. A rescue unit is the outermost task, `block:` or `apply:` whose
+  `onfail:` names the failed task's register. The first unit that succeeds handles the failure,
+  and the host is back in the run from the step after it. The steps it missed are not replayed,
+  and their registers read as skipped. A failure no rescue handles is judged by the failed task's
+  `on_failure` at the barrier of its last rescue; a rescue's own `on_failure` is no longer read. A
+  run whose every failure was handled ends `success`, the incarnation `ready`. Its failed rows are
+  marked `apply_runs.handled` (migration 132), keep `failed_plan_index` and `error_summary`, and
+  read `handled: true` on `GET /v1/incarnations/{id}/runs/{apply_id}`. `soulprint.hosts[]` gains
+  `held`. On a host where nothing failed, a rescue's tasks are recorded SKIPPED with their
+  `where:`, `params:` and `when:` unevaluated, so a rescue may read its own outputs; a rescue
+  with a source written before it in its own group rolled as one, and a destiny's own rescue,
+  are evaluated as before. The new
+  Soul-side module `core.task.failed` always fails its task: inside a rescue it says "not
+  handled". Refused by `soul-lint` and the Keeper: an `onfail:` naming a register set inside a
+  rescue (`onfail_names_rescue`), more than one rescue unit in a group rolled as one
+  (`group_multiple_rescue_units`), and `failed_when:` / `changed_when:` / `retry:` / `timeout:` on
+  `core.task.failed` (`<key>_on_task_failed_invalid`). The Soul announces `onfail_handled`.
+  ⚠ Not built yet ([known-limitations.md](docs/known-limitations.md#rescues-what-is-not-built-yet)):
+  inside one message — a destiny, or a group rolled as one — a rescue is still compensation,
+  because the Keeper sends no `rescue_unit` marks; `core.task.failed` has no default message; a
+  `core.task.failed` step of its own runs on the Soul; and, because no instance announces
+  `rescue_hold`, a run sends every step inline when its scenario holds a rescue with no source
+  written before it in its own group rolled as one, and every step from its first failure on when
+  the scenario holds a rescue of an earlier step's source.
+
 - **`soul-lint` answers for linear dispatch on scenario state and flow control (NIM-944, [ADR-0091](docs/adr/0091-scenario-linear-barrier.md) S1).** A `when:` /
   `changed_when:` / `failed_when:` reading a register from an earlier task is no longer reported
   (`cross_passage_when_unsupported`): the Keeper decides it for a run executing linearly, and keeps
@@ -1289,14 +1318,25 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   run, on a reload, with no binary change. Rolling the binary back instead first meets the schema.
   Against a Keeper built from `main` before this train (its last migration is 120): this train adds
   migrations 121 and 122, NIM-985 adds 123, NIM-996 adds 124, NIM-989 adds 125 and NIM-1000 adds
-  126, that Keeper refuses to start against them, and `keeper` has no down command — apply
+  126, that Keeper refuses to start against them, and `keeper` has no down command. By hand, a
+  later entry's rollback runs first, down to this train's 126: NIM-993's
+  `132_add_apply_runs_handled.down.sql` (version 132 → 131, see the **Rollback** of the NIM-993
+  entry below), then the down files of migrations 131 to 127 that other tickets added (NIM-1057,
+  NIM-1051, NIM-1052, NIM-1053, NIM-1045), newest first, of which 130's refuses while any
+  `operators` row has `auth_method = 'local'`, revoked ones included, and 127's drops the token
+  revocations, so a revoked token verifies again under the older binary until it expires (see the
+  headers of `keeper/migrations/130_create_operator_passwords.down.sql:3-8` and
+  `keeper/migrations/127_create_operator_jwts.down.sql:3-7`). Skip those down files and the
+  version set to 120 leaves their tables and columns, `apply_runs.handled` among them, in place,
+  and the next upgrade fails re-creating them — 132's `ADD COLUMN` included. Then apply
   `126_state_history_error_detail.down.sql`, `125_add_voyage_targets_error.down.sql`,
   `124_add_apply_run_plan_waves.down.sql`,
   `123_create_apply_run_plan_host_params.down.sql`, `122_add_apply_runs_dropped.down.sql` and
-  `121_add_incarnation_applying_cancel_requested.down.sql` by hand, newest first, then set the
-  recorded version back (`UPDATE schema_migrations SET version = 120, dirty = false`), which the
-  down files do not touch, or let the golang-migrate CLI's `goto 120`, pointed at this release's
-  `keeper/migrations`, do both. Past the schema, a rollback has three edges: an older Keeper
+  `121_add_incarnation_applying_cancel_requested.down.sql`, newest first, and set the recorded
+  version back (`UPDATE schema_migrations SET version = 120, dirty = false`), which the down files
+  do not touch; or let the golang-migrate CLI's `goto 120`, pointed at this release's
+  `keeper/migrations`, run all of it, 132 down to 121, and set the version.
+  Past the schema, a rollback has three edges: an older Keeper
   refuses the `settings:` key outright and a `when:`, `changed_when:` or `failed_when:` reading a
   register from another derived Passage (FC-5) — loudly, so a scenario written for linear dispatch
   may not run there — and it returns the old order **silently**: keeper tasks before host dispatch,
@@ -1319,6 +1359,42 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
   **Not changed:** an Oracle reaction still goes as one message to its sender's SID, outside the
   step model (NIM-977, [known-limitations.md](docs/known-limitations.md#an-oracle-reaction-is-not-dispatched-step-by-step)).
+
+- **A rescue that succeeds now handles the failure** (`NIM-993`,
+  [rescues.md](docs/scenario/rescues.md)).
+  What an existing scenario does differently in a run executing linearly:
+  - an `onfail:` task kept only to clean up or to notify now handles the failure when it succeeds:
+    the host comes back and the run can end `success`. To keep the run failed, put the rescue's
+    tasks and a final `core.task.failed` that carries a `message:` in one `block:` that carries
+    the `onfail:`, as in the example in [rescues.md](docs/scenario/rescues.md). The example gates
+    `core.task.failed` with a `when:`; without the `when:` the run stays failed every time. A
+    separate `onfail:` task carrying `core.task.failed` is a second unit, skipped once the first
+    succeeds, and the run still ends `success`. A rescue in the same message as its source — inside a
+    destiny, or inside a group rolled as one — behaves as before: it runs as compensation, and the
+    failure stays unhandled unless a rescue at a later step handles it;
+  - a failed host whose task a later rescue names is neither dropped nor ending the run at its
+    barrier: it waits for the rescue, and the later `serial:` waves go on. A capture written
+    between the failure and the rescue now runs;
+  - a failing rescue means "not handled": its own `on_failure` is no longer read, and the failed
+    task's radius judges at the last rescue's barrier;
+  - a rescue's tasks are no longer evaluated on a host where nothing failed, so a rescue whose
+    `when:` read a register its own tasks set no longer fails those hosts. A rescue with a source
+    written before it in its own group rolled as one, and a destiny's own rescue, are evaluated as
+    before;
+  - a run sends its steps inline, not through the work-queue, when its scenario holds a rescue
+    with no source written before it in its own group rolled as one (every step), or a rescue of
+    an earlier step's source (every step from the run's first failure on);
+  - a `core.task.failed` step needs `module:core.task` on its host: a Soul older than this release
+    ends such a run with `soul_capability_unsupported`.
+
+  **Rollback.** Migration 132 adds `apply_runs.handled`, and a Keeper without it refuses to start
+  against it: apply `132_add_apply_runs_handled.down.sql` by hand first, then set the recorded
+  version back (`UPDATE schema_migrations SET version = 131, dirty = false`), which the down file
+  does not touch, or let the golang-migrate CLI's `goto 131`, pointed at this release's
+  `keeper/migrations`, do both. An older Keeper reads a handled
+  row as a plain failure, so a run whose every failure was handled reads `failed` there. **During
+  a rolling upgrade**, an older instance that claims a queued step reading `soulprint.hosts[].held`
+  fails that host's row; such a run is safe once every instance is upgraded.
 
 - **`async:` and `require:` on a scenario task are refused wherever the Keeper parses a scenario**
   (`NIM-941`): `async_outside_destiny` / `require_outside_destiny`, at any block depth and in an

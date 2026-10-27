@@ -144,6 +144,12 @@ func (e *ValidateRuleError) Unwrap() error { return e.Err }
 // section had before NIM-833. The first false wins (short-circuit in declaration
 // order — like required_when over fields and assert over that[]).
 func EvalValidateRules(rules []ValidateRule, merged map[string]any, inc ValidateContext) (*ValidateRuleFailure, error) {
+	return evalValidateRules(rules, merged, inc, nil)
+}
+
+// evalValidateRules is [EvalValidateRules] that leaves out every rule skip reports;
+// the scope pre-pass still covers them. nil skip leaves out none.
+func evalValidateRules(rules []ValidateRule, merged map[string]any, inc ValidateContext, skip func(that string) bool) (*ValidateRuleFailure, error) {
 	if merged == nil {
 		merged = map[string]any{}
 	}
@@ -155,6 +161,9 @@ func EvalValidateRules(rules []ValidateRule, merged map[string]any, inc Validate
 
 	act := inc.activation(merged)
 	for i, rule := range rules {
+		if skip != nil && skip(rule.That) {
+			continue
+		}
 		prg, err := compileValidateRule(rule.That)
 		if err != nil {
 			return nil, fmt.Errorf("validate[%d] %q: %w", i, rule.That, err)

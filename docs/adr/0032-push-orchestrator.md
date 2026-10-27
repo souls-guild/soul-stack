@@ -186,3 +186,7 @@ text: a host certificate the Vault CAs did not sign is now a typed `push.HostKey
 and its connect error reads `host key not verified: <host:port>: …`. Anything added to
 the executor is added to both. See
 [ADR draft — core.ssh.apply](draft-ssh-apply-unregistered-hosts.md).
+
+## Amendment 2026-10-14 (NIM-993): a pushed destiny's rescues handle its failures
+
+*Design — not built.* Under the [ADR-0091 amendment of NIM-993](0091-scenario-linear-barrier.md#amendment-2026-10-14-nim-993-a-rescue-that-succeeds-handles-the-failure), a rescue that succeeds inside one message handles the failure, and the Soul applies that rule to a message whose tasks carry `rescue_unit` marks. The push orchestrator marks a pushed destiny's in-message source/unit pairs the same way the run goroutine does for a scenario step, so a destiny behaves the same on either path. A push run's outcome is the Soul's `RunResult`: an older binary keeps fail-stop and reports `failed`.

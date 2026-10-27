@@ -7,12 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
@@ -405,6 +409,101 @@ tasks:
 	disp.mu.Unlock()
 	if want := []any{"3", "2", policyHostB}; !reflect.DeepEqual(args, want) {
 		t.Errorf("soulprint.hosts at step 2 = %v, want %v (all three, two in the run, host-b dropped)", args, want)
+	}
+}
+
+// ★ GUARD (ADR-0091 amendment NIM-993, "What the run goroutine keeps"). In a plan
+// holding a cross-step rescue unit, every pass re-renders the steps before it, each
+// with the hosts as that step saw them: a host dropped at step 1 is still in the run
+// at step 0, so a step-0 task that reads the hosts in the run renders on the pass of
+// step 2 as it did on its own. `undo` is the unit, of `third`; host-b fails `second`,
+// which no rescue names, so it is dropped rather than held. Such a plan sends every
+// step inline, so no claim renders it over the recipe's one roster.
+//
+// Mutation: never set the Standing (run.go) → step 0 reads two hosts in the run on
+// the pass of step 2 and the run ends render_failed.
+func TestIntegration_LinearReRenderKeepsAHostDroppedLater(t *testing.T) {
+	seedPolicyRoster(t, "redis-prod", policyHostA, policyHostB, policyHostC)
+	gitURL := linearServiceRepo(t, "roll", `name: roll
+description: a step reading the hosts in the run, a drop after it, a step after the drop, a rescue
+settings:
+  on_failure: host
+tasks:
+  - name: first
+    module: core.exec.run
+    params:
+      cmd: first
+      args:
+        - "${ soulprint.hosts.filter(h, !h.dropped)[2].sid }"
+  - name: second
+    module: core.exec.run
+    params: { cmd: second }
+  - name: third
+    module: core.exec.run
+    register: third
+    params: { cmd: third }
+  - name: undo
+    module: core.exec.run
+    onfail: [third]
+    params: { cmd: undo }
+`)
+	disp := newFailingStepDispatcher(t, map[string]string{policyHostB: "second"})
+	applyID := startPolicyRun(t, newPolicyRunner(t, disp, nil), "redis-prod", "redis", gitURL, "roll")
+
+	inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
+	if inc.StatusDetails["reason"] != reasonPartialFailed {
+		t.Fatalf("reason = %v, want %s (details %v)", inc.StatusDetails["reason"], reasonPartialFailed, inc.StatusDetails)
+	}
+	if want := map[string][]string{policyHostA: {"third"}, policyHostC: {"third"}}; !reflect.DeepEqual(disp.sends()[2], want) {
+		t.Errorf("step 2 sent = %v, want %v", disp.sends()[2], want)
+	}
+}
+
+// ★ GUARD (until the step recipe carries the standing). A plan holding no cross-step
+// rescue unit queues its steps, and a claim re-renders the whole plan over the
+// recipe's one roster, so the run goroutine re-renders it over one roster per pass
+// as well. Step 0's loop over the hosts in the run has an iteration fewer on the pass
+// of step 2, once host-b is dropped, on both renders alike: `third` has one plan
+// index on both, and host-a and host-c are sent it through the queue.
+//
+// Mutation: set the Standing for every plan (run.go) → on the pass of step 2 the run
+// goroutine renders step 0 with three iterations and the claim with two, the claim
+// refuses host-a and host-c, and the run ends with no host left.
+func TestIntegration_LinearQueuedReRenderOfAPlanWithoutAUnitKeepsOneRoster(t *testing.T) {
+	seedPolicyRoster(t, "redis-prod", policyHostA, policyHostB, policyHostC)
+	gitURL := linearServiceRepo(t, "roll", `name: roll
+description: a loop over the hosts in the run, a drop after it, a step after the drop
+settings:
+  on_failure: host
+tasks:
+  - name: first
+    module: core.exec.run
+    loop:
+      items: "${ soulprint.hosts.filter(h, !h.dropped) }"
+    params: { cmd: first }
+  - name: second
+    module: core.exec.run
+    params: { cmd: second }
+  - name: third
+    module: core.exec.run
+    params: { cmd: third }
+`)
+	disp := newFailingStepDispatcher(t, map[string]string{policyHostB: "second"})
+	r := newLinearQueueRunner(t, disp)
+	runAcolyte(t, disp, "keeper-2")
+
+	applyID := startLinearRun(t, r, gitURL, "roll")
+	inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
+	if inc.StatusDetails["reason"] != reasonPartialFailed {
+		t.Fatalf("reason = %v, want %s (details %v)", inc.StatusDetails["reason"], reasonPartialFailed, inc.StatusDetails)
+	}
+	if want := map[string][]string{policyHostA: {"third"}, policyHostC: {"third"}}; !reflect.DeepEqual(disp.sends()[2], want) {
+		t.Errorf("step 2 sent = %v, want %v", disp.sends()[2], want)
+	}
+	for sid, row := range stepRows(t, applyID)[2] {
+		if row.kid != "keeper-2" || row.status != applyrun.StatusSuccess {
+			t.Errorf("%s's step-2 row: claim_by_kid %q, status %s - want claimed by keeper-2 and successful", sid, row.kid, row.status)
+		}
 	}
 }
 
@@ -848,6 +947,153 @@ tasks:
 		waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 		if rows := hostRows(t, applyID); len(rows) != 1 || rows[0].Status != applyrun.StatusSuccess {
 			t.Errorf("host rows = %+v, want the Soul's success", rows)
+		}
+	})
+}
+
+// unreadableExecuted is an audit reader whose executed tasks cannot be read; reads
+// counts the attempts.
+type unreadableExecuted struct {
+	ChangedTaskReader
+	reads atomic.Int64
+}
+
+func (u *unreadableExecuted) SelectExecutedTaskKeys(context.Context, string) (map[auditpg.ChangedTaskKey]struct{}, error) {
+	u.reads.Add(1)
+	return nil, errors.New("executed tasks unreadable")
+}
+
+// sweepFunc is the frame name of [Runner.sweepStep], taken from the method itself so
+// that renaming it breaks the build instead of disarming [sweepReadRefuser].
+var sweepFunc = runtime.FuncForPC(reflect.ValueOf((*Runner).sweepStep).Pointer()).Name()
+
+// sweepReadRefuser fails every query issued from [Runner.sweepStep], and counts them.
+// marks counts the `apply_runs.handled` marks written ([applyrun.MarkHandled]).
+type sweepReadRefuser struct{ refused, marks atomic.Int64 }
+
+func (s *sweepReadRefuser) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "SET handled = TRUE") {
+		s.marks.Add(1)
+	}
+	pcs := make([]uintptr, 64)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	for more := true; more; {
+		var f runtime.Frame
+		f, more = frames.Next()
+		if f.Function == sweepFunc {
+			s.refused.Add(1)
+			refused, cancel := context.WithCancel(ctx)
+			cancel()
+			return refused
+		}
+	}
+	return ctx
+}
+
+func (*sweepReadRefuser) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// ★ GUARD (ADR-0091 amendment NIM-993: a plan with no rescue unit issues the queries
+// it issued before). `deploy` rolls one host a wave and fails on host-a in the first,
+// which ends the run; the second wave sends nothing. With no rescue unit in the plan
+// the barrier reads no executed task, and the step's sweep after its last wave reads
+// nothing: both reads fail here, and the run ends as it did, with host-a's failure.
+// No row is marked handled, there nor when host-a is dropped under `host` and the run
+// finishes partial_failed, its row marked dropped as before. The refusal is armed:
+// given a rescue unit of another source, the first wave still ends the run, and the
+// sweep after the second, which sends nothing, issues its read, which is refused.
+//
+// Mutations: read the executed tasks at every replay (no carriesUnit in judgeWave) →
+// the run ends with the read's error; sweep a step in a plan with no unit (no
+// holdsUnits in sweepStep) → the run's error carries the sweep's failed read; match a
+// frame name the sweep does not have (the tracer comparing against another name) →
+// the armed case sees no sweep read; mark every failed row handled (handledRows not
+// reading the sources' states) → both runs write a handled mark.
+func TestIntegration_LinearNoRescuePlanReadsNothingNew(t *testing.T) {
+	const canary = `name: roll
+description: a canary whose first wave fails on host-a
+tasks:
+  - name: deploy
+    module: core.exec.run
+    register: deploy
+    serial: 1
+    params: { cmd: deploy }
+  - name: warm
+    module: core.exec.run
+    params: { cmd: warm }
+`
+	run := func(t *testing.T, scenario string) (*incarnation.Incarnation, *unreadableExecuted, *sweepReadRefuser, *rescueSouls) {
+		t.Helper()
+		seedPolicyRoster(t, "redis-prod", policyHostA, policyHostB)
+		souls := newRescueSouls(t, map[string][]string{policyHostA: {"deploy"}}, nil)
+		r := newPolicyRunner(t, souls, nil)
+		reader := &unreadableExecuted{ChangedTaskReader: auditpg.NewReader(integrationPool)}
+		r.deps.AuditReader = reader
+		cfg := integrationPool.Config()
+		tracer := &sweepReadRefuser{}
+		cfg.ConnConfig.Tracer = tracer
+		pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+		if err != nil {
+			t.Fatalf("pgxpool.NewWithConfig: %v", err)
+		}
+		t.Cleanup(pool.Close)
+		r.deps.DB = pool
+		applyID := startPolicyRun(t, r, "redis-prod", "redis", linearServiceRepo(t, "roll", scenario), "roll")
+		return waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked), reader, tracer, souls
+	}
+
+	t.Run("no rescue unit", func(t *testing.T) {
+		inc, reader, tracer, souls := run(t, canary)
+		if inc.StatusDetails["reason"] != "dispatch_failed" {
+			t.Errorf("reason = %v, want dispatch_failed (details %v)", inc.StatusDetails["reason"], inc.StatusDetails)
+		}
+		errText := errorOf(inc)
+		for _, want := range []string{"step 0 failed", `at task "deploy"`, "deploy failed on " + policyHostA} {
+			if !strings.Contains(errText, want) {
+				t.Errorf("run error lacks %q: %q", want, errText)
+			}
+		}
+		for _, unwanted := range []string{"executed tasks unreadable", "barrier read"} {
+			if strings.Contains(errText, unwanted) {
+				t.Errorf("run error carries %q: %q", unwanted, errText)
+			}
+		}
+		if n, m, k := reader.reads.Load(), tracer.refused.Load(), tracer.marks.Load(); n != 0 || m != 0 || k != 0 {
+			t.Errorf("executed-task reads %d, sweep reads %d, handled marks %d - want none in a plan with no rescue unit", n, m, k)
+		}
+		if got, want := souls.sends(), map[int]map[string][]string{0: {policyHostA: {"deploy"}}}; !reflect.DeepEqual(got, want) {
+			t.Errorf("sent = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("no rescue unit, a host dropped", func(t *testing.T) {
+		inc, reader, tracer, _ := run(t, strings.Replace(canary, "tasks:\n", "settings:\n  on_failure: host\ntasks:\n", 1))
+		if inc.StatusDetails["reason"] != reasonPartialFailed {
+			t.Errorf("reason = %v, want %s (details %v)", inc.StatusDetails["reason"], reasonPartialFailed, inc.StatusDetails)
+		}
+		if n, m, k := reader.reads.Load(), tracer.refused.Load(), tracer.marks.Load(); n != 0 || m != 0 || k != 0 {
+			t.Errorf("executed-task reads %d, sweep reads %d, handled marks %d - want none in a plan with no rescue unit", n, m, k)
+		}
+		applyID, _ := inc.StatusDetails["apply_id"].(string)
+		if row := rowsOf(t, applyID)[[2]any{policyHostA, 0}]; row.Status != applyrun.StatusFailed || !row.Dropped || row.HandledMark {
+			t.Errorf("host-a's row = %s dropped=%v handled=%v, want failed and dropped", row.Status, row.Dropped, row.HandledMark)
+		}
+	})
+
+	t.Run("a rescue unit arms the refusal", func(t *testing.T) {
+		inc, _, tracer, _ := run(t, canary+`  - name: probe
+    module: core.exec.run
+    register: probe
+    params: { cmd: probe }
+  - name: mend
+    module: core.exec.run
+    onfail: [probe]
+    params: { cmd: mend }
+`)
+		if tracer.refused.Load() == 0 {
+			t.Error("the tracer refused no sweep read in a plan whose sweep reads")
+		}
+		if !strings.Contains(errorOf(inc), "barrier read") {
+			t.Errorf("run error = %q, want the sweep's refused barrier read", errorOf(inc))
 		}
 	})
 }

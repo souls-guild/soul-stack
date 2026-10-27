@@ -733,14 +733,16 @@ func TestIntegration_QueuedRunCancelBeforeItsRows(t *testing.T) {
 // drop the lock from either finished_at → a finish time while the run applies.
 func TestIntegration_BetweenStepsRunReadsApplying(t *testing.T) {
 	applyID, gate, _, _ := holdBetweenSteps(t)
-	assertRunReads(t, applyID, applyrun.RunStatusApplying, false)
+	assertRunReads(t, "noop-prod", applyID, applyrun.RunStatusApplying, false)
 
 	close(gate.release)
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
-	assertRunReads(t, applyID, applyrun.RunStatusSuccess, true)
+	assertRunReads(t, "noop-prod", applyID, applyrun.RunStatusSuccess, true)
 }
 
-func assertRunReads(t *testing.T, applyID string, want applyrun.RunStatus, finished bool) {
+// assertRunReads checks that every reader of the status of run applyID, the one run
+// of incarnation inc, says want, with a finish time when finished.
+func assertRunReads(t *testing.T, inc, applyID string, want applyrun.RunStatus, finished bool) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -748,7 +750,7 @@ func assertRunReads(t *testing.T, applyID string, want applyrun.RunStatus, finis
 		t.Errorf("SelectRunStatus (the Voyage awaiter) = %q, %v; want %q", got, err, want)
 	}
 
-	runs, _, err := applyrun.ListRunsByIncarnation(ctx, integrationPool, "noop-prod", 0, 10)
+	runs, _, err := applyrun.ListRunsByIncarnation(ctx, integrationPool, inc, 0, 10)
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("ListRunsByIncarnation = %+v, %v; want one run", runs, err)
 	}
@@ -756,7 +758,7 @@ func assertRunReads(t *testing.T, applyID string, want applyrun.RunStatus, finis
 		t.Errorf("ListRunsByIncarnation: status %q finished_at %v; want %q, finished=%v", runs[0].Status, runs[0].FinishedAt, want, finished)
 	}
 
-	detail, err := applyrun.SelectRunDetail(ctx, integrationPool, applyID, "noop-prod")
+	detail, err := applyrun.SelectRunDetail(ctx, integrationPool, applyID, inc)
 	if err != nil {
 		t.Fatalf("SelectRunDetail: %v", err)
 	}

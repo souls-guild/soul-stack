@@ -80,9 +80,11 @@ func (p *Pipeline) renderBlockTask(
 	// block's hosts (scenario orchestration inside a block is allowed —
 	// orchestration.md §2.2.2); the block NARROWS the descendant's roster. A nested
 	// default block under linear dispatch holds what it resolved at its first step.
-	childTarget := func(pos int, child config.Task) ([]*topology.HostFacts, error) {
+	// in is the child's view: under a default block, the block's hosts live at the
+	// child's step.
+	childTarget := func(in RenderInput, pos int, child config.Task) ([]*topology.HostFacts, error) {
 		resolve := func() ([]*topology.HostFacts, error) {
-			return p.blockChildTargets(in, child, targeted)
+			return p.blockChildTargets(in, child, in.blockHosts)
 		}
 		if roll.overlay && child.Block != nil && !roll.steps[pos].Group {
 			return holdTargets(in, config.StepPath(roll.path, pos), resolve)
@@ -90,16 +92,19 @@ func (p *Pipeline) renderBlockTask(
 		return resolve()
 	}
 	// childRecurse: a nested block → recursion into the same renderBlockTask.
-	childRecurse := func(pos int, child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
+	childRecurse := func(in RenderInput, pos int, child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
 		cin, err := p.withRescueCover(in, child, in.rescueCover)
 		if err != nil {
 			return nil, nil, err
 		}
-		cover, err := coveredDropped(p.cel, in, child, in.droppedCover)
-		if err != nil {
+		if cin.droppedCover, cin.heldCover, _, err = coveredAway(p.cel, in, child, in.droppedCover, in.heldCover); err != nil {
 			return nil, nil, err
 		}
-		cin.droppedCover = cover
+		if in.Standing != nil {
+			if cin.coverRoster, err = coveredDropped(p.cel, in, child, in.coverRoster); err != nil {
+				return nil, nil, err
+			}
+		}
 		return p.renderBlockTask(ctx, cin, child, idx, childTargeted, includeGroups, roll.nested(pos, child, childTargeted, width))
 	}
 	var steps []config.StepNode
@@ -217,13 +222,15 @@ type blockChildGuard func(child config.Task, idx int, blockName string) error
 // blockChildTargeter resolves a block descendant's roster. The scenario layer
 // narrows the roster by the descendant's on:/where:/run_once:; the destiny layer
 // inherits the block's roster WHOLESALE (block in destiny carries no orchestration
-// — rejected by the guard). pos is the child's position in the block.
-type blockChildTargeter func(pos int, child config.Task) ([]*topology.HostFacts, error)
+// — rejected by the guard). in is the pass as the child sees it, pos the child's
+// position in the block.
+type blockChildTargeter func(in RenderInput, pos int, child config.Task) ([]*topology.HostFacts, error)
 
 // blockChildRecurser renders a NESTED block descendant (child.Block != nil). Each
 // layer supplies its own recursion (renderBlockTask / renderDestinyBlock) so
-// cascading inheritance doesn't drift between layers.
-type blockChildRecurser func(pos int, child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error)
+// cascading inheritance doesn't drift between layers. in is the pass as the child
+// sees it, at the child's plan position.
+type blockChildRecurser func(in RenderInput, pos int, child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error)
 
 // walkBlockChildren — the SINGLE traversal of a block's descendants for both
 // layers (scenario and destiny). Source of truth for descendant processing order,
@@ -255,7 +262,9 @@ type blockChildRecurser func(pos int, child config.Task, idx int, childTargeted 
 //
 // Rescue routing (scenario layer only, rescue.go) bypasses target: a rescue child is
 // routed over the block's rescue cover, and past the run's end a nested block holds
-// what its `on:` selects, its `where:` and `run_once:` not evaluated.
+// what its `on:` selects, its `where:` and `run_once:` not evaluated. A cross-step
+// unit's child, and every child of a block that is one, is routed before its static
+// `when:` is read ([Pipeline.routeUnit]).
 //
 // width — the container's wave width (serial: of the block for scenario / serial:
 // of the apply-task for destiny): threaded into every descendant's DispatchPlan
@@ -303,10 +312,15 @@ func (p *Pipeline) walkBlockChildren(
 	for i := range blockTask.Block.Block {
 		child := mergeBlockInheritance(blockTask, blockTask.Block.Block[i])
 		failing, failingIdx = child, idx
+		// The pass as this child sees it: at its plan position and, a default
+		// block's child, at its own step.
+		in := in
+		in.path = config.StepPath(in.path, i)
 		var step *config.StepNode
 		if steps != nil {
 			step = &steps[i]
 			child = linearOverlayChild(blockTask, blockTask.Block.Block[i], child)
+			in = atChildStep(in, step.Step)
 		}
 		childStart := len(tasks)
 
@@ -321,18 +335,64 @@ func (p *Pipeline) walkBlockChildren(
 			continue
 		}
 
+		// A layout-only destiny pass lays a module child out as a skip placeholder
+		// whatever its `when:`. The `when:`, the block's AND-ed in, is read only by
+		// the guards: to refuse one over a per-host name, and to lift the DSL guard's
+		// refusal ([Pipeline.layoutGuard]). A `loop:` child's `when:` gives its places,
+		// so it is decided below.
+		if in.layoutOnly && child.Block == nil && child.Loop == nil {
+			if gerr := p.layoutGuard(in, child, guard(child, i, blockTask.Name)); gerr != nil {
+				return nil, nil, gerr
+			}
+			tasks = append(tasks, unitSkipPlaceholder(child, idx, 0, in.Modules))
+			plans = append(plans, DispatchPlan{TaskIndex: idx, SerialWidth: width})
+			idx++
+			stampRescueUnit(in, tasks, childStart, in.path)
+			continue
+		}
+
+		childStep := in.groupStep
+		if step != nil {
+			childStep = step.Step
+		}
+		// A cross-step unit's child is routed before its static `when:` is read: on a
+		// live host nothing of it is evaluated (ADR-0091 amendment NIM-993, rule 1).
+		var childTargeted, notReached, skip []*topology.HostFacts
+		unit := child.Block == nil && in.crossStepUnit(child)
+		if unit {
+			var uerr error
+			if childTargeted, skip, notReached, uerr = p.routeUnit(in, child, childStep, in.rescueCover, in.droppedCover); uerr != nil {
+				return nil, nil, uerr
+			}
+		}
+
 		// Static-when-false descendant: placeholder(s) BEFORE guard/render (like the
 		// top-level Render loop). idx advances by the number of emitted placeholders.
 		// The inherited when's static-when is static exactly when both operands
 		// (block.when + child.when) are static — isStaticWhen checks the whole
-		// AND-string.
-		if skipped, serr := p.emitStaticWhenSkip(ctx, in, child, &tasks, &plans, &idx); serr != nil {
+		// AND-string. Laid out, a `loop:` child's is decided host-free, the guard's
+		// refusal standing unless that gates it off; a unit child routed to no host past
+		// the end of the run is a placeholder here, its `when:` not read
+		// ([Pipeline.unitStaticWhen]).
+		var skipped bool
+		var serr error
+		switch {
+		case unit:
+			skipped, serr = p.unitStaticWhen(ctx, in, child, childStep, childTargeted, skip, notReached, guard(child, i, blockTask.Name), &tasks, &plans, &idx)
+		case in.layoutOnly:
+			skipped, serr = p.layoutStaticWhen(ctx, in, child, in.Hosts, guard(child, i, blockTask.Name), &tasks, &plans, &idx)
+		default:
+			skipped, serr = p.emitStaticWhenSkip(ctx, in, child, in.Hosts, &tasks, &plans, &idx)
+		}
+		if serr != nil {
 			return nil, nil, serr
-		} else if skipped {
+		}
+		if skipped {
 			if step != nil {
 				stampPassage(tasks, childStart, step.Step)
 			}
 			stampOnFailure(in, tasks, childStart, child)
+			stampRescueUnit(in, tasks, childStart, in.path)
 			continue
 		}
 
@@ -340,15 +400,12 @@ func (p *Pipeline) walkBlockChildren(
 			return nil, nil, gerr
 		}
 
-		childStep := in.groupStep
-		if step != nil {
-			childStep = step.Step
-		}
 		if (step != nil && in.TaskPassage != nil && step.Step > in.ActivePassage) || (child.Block == nil && in.pastEnd(childStep) && !isRescue(child)) {
 			tasks = append(tasks, futurePlaceholder(child, idx, childStep))
 			plans = append(plans, DispatchPlan{TaskIndex: idx})
 			idx++
 			stampOnFailure(in, tasks, childStart, child)
+			stampRescueUnit(in, tasks, childStart, in.path)
 			continue
 		}
 
@@ -358,17 +415,21 @@ func (p *Pipeline) walkBlockChildren(
 		// inherited into child (mergeBlockInheritance doesn't touch it): a nested
 		// block without serial: rides its own width (0 = one wave).
 		if child.Block != nil {
-			var childTargeted []*topology.HostFacts
 			var terr error
-			if in.pastEnd(childStep) {
+			switch {
+			case in.crossStepUnit(child):
+				var routed []*topology.HostFacts
+				routed, skip, _, terr = p.routeUnit(in, child, childStep, in.rescueCover, in.droppedCover)
+				childTargeted = mergeHosts(routed, skip)
+			case in.pastEnd(childStep):
 				childTargeted, terr = p.onCover(in, child, in.blockHosts)
-			} else {
-				childTargeted, terr = target(i, child)
+			default:
+				childTargeted, terr = target(in, i, child)
 			}
 			if terr != nil {
 				return nil, nil, terr
 			}
-			bt, bp, berr := recurse(i, child, idx, childTargeted)
+			bt, bp, berr := recurse(in, i, child, idx, childTargeted)
 			if berr != nil {
 				return nil, nil, berr
 			}
@@ -382,12 +443,16 @@ func (p *Pipeline) walkBlockChildren(
 			continue
 		}
 
-		var childTargeted, notReached []*topology.HostFacts
 		var terr error
-		if in.rescueRouting() && isRescue(child) {
-			scoped := in
-			scoped.Hosts, scoped.Dropped = in.blockHosts, in.droppedCover
-			if childTargeted, notReached, terr = p.routeRescue(scoped, child, childStep, in.rescueCover, droppedSIDs(in)); terr != nil {
+		if unit || (in.rescueRouting() && isRescue(child)) {
+			if unit {
+				in.unitSkip, in.layoutOnly = skip, len(childTargeted) == 0
+			} else {
+				scoped := in
+				scoped.Hosts, scoped.Dropped, scoped.HeldHosts = in.blockHosts, in.droppedCover, in.heldCover
+				childTargeted, notReached, terr = p.routeRescue(scoped, child, childStep, in.rescueCover, notLiveSIDs(in))
+			}
+			if terr != nil {
 				return nil, nil, terr
 			}
 			if in.pastEnd(childStep) && len(childTargeted) == 0 {
@@ -395,19 +460,20 @@ func (p *Pipeline) walkBlockChildren(
 				plans = append(plans, DispatchPlan{TaskIndex: idx})
 				idx++
 				stampOnFailure(in, tasks, childStart, child)
+				stampRescueUnit(in, tasks, childStart, in.path)
 				continue
 			}
 		} else {
-			if childTargeted, terr = target(i, child); terr != nil {
+			if childTargeted, terr = target(in, i, child); terr != nil {
 				return nil, nil, terr
 			}
-			if notReached, terr = coveredDropped(p.cel, in, child, in.droppedCover); terr != nil {
+			if _, _, notReached, terr = coveredAway(p.cel, in, child, in.droppedCover, in.heldCover); terr != nil {
 				return nil, nil, terr
 			}
 		}
 		childWidth := width
 		if step != nil {
-			childWidth = serialWidth(child.Serial, len(childTargeted))
+			childWidth = serialWidth(child.Serial, len(childTargeted)+len(skip))
 		}
 
 		// apply-descendant: an isolated destiny render pass with inherited width.
@@ -441,9 +507,14 @@ func (p *Pipeline) walkBlockChildren(
 		}
 
 		// module-descendant.
-		rt, rerr := p.renderTask(ctx, in, child, idx, childTargeted)
-		if rerr != nil {
-			return nil, nil, rerr
+		var rt *RenderedTask
+		if in.layoutOnly {
+			rt = unitSkipPlaceholder(child, idx, childStep, in.Modules)
+		} else {
+			var rerr error
+			if rt, rerr = p.renderTask(ctx, in, child, idx, childTargeted); rerr != nil {
+				return nil, nil, rerr
+			}
 		}
 		tasks = append(tasks, rt)
 		plans = append(plans, DispatchPlan{
@@ -451,6 +522,7 @@ func (p *Pipeline) walkBlockChildren(
 			TargetSIDs:  sidsOf(childTargeted),
 			SerialWidth: childWidth,
 		})
+		withSkipTargets(tasks[len(tasks)-1:], plans[planStart:], skip)
 		idx++
 		if terr := stampTransport(plans[planStart:], child); terr != nil {
 			return nil, nil, terr
@@ -459,9 +531,26 @@ func (p *Pipeline) walkBlockChildren(
 			stampPassage(tasks, childStart, step.Step)
 		}
 		stampOnFailure(in, tasks, childStart, child)
+		stampRescueUnit(in, tasks, childStart, in.path)
 		stampNotReached(plans[planStart:], notReached)
 	}
 	return tasks, plans, nil
+}
+
+// atChildStep is in for a default block's child at its own step: the run as that
+// step saw it ([RenderInput.ForStep]), the block's hosts narrowed to those live
+// there — a host held or dropped since the block's first step is not reached, one
+// that returned since rejoins after the block — and the dropped and the held hosts the
+// enclosing blocks' `on:` selects at that step. nil Standing — in.
+func atChildStep(in RenderInput, step int) RenderInput {
+	if in.Standing == nil {
+		return in
+	}
+	out := in.ForStep(step)
+	out.blockHosts = keepHosts(in.blockHosts, sidSet(out.Hosts))
+	out.droppedCover = keepHosts(in.coverRoster, droppedSIDs(out))
+	out.heldCover = keepHosts(in.coverRoster, sidSet(out.HeldHosts))
+	return out
 }
 
 // linearOverlayChild is a default block's child under linear dispatch: the shared
@@ -503,9 +592,9 @@ func futurePlaceholder(task config.Task, idx, passage int) *RenderedTask {
 func (p *Pipeline) blockChildTargets(in RenderInput, child config.Task, targeted []*topology.HostFacts) ([]*topology.HostFacts, error) {
 	scoped := in
 	scoped.Hosts = targeted
-	// The dropped hosts the block's `on:` selects stand beside its hosts, so a
-	// child's where: sees the block's share of soulprint.hosts, not the run's.
-	scoped.Dropped = in.droppedCover
+	// The dropped and held hosts the block's `on:` selects stand beside its hosts, so
+	// a child's where: sees the block's share of soulprint.hosts, not the run's.
+	scoped.Dropped, scoped.HeldHosts = in.droppedCover, in.heldCover
 	childTargeted, err := p.resolveTargets(scoped, child)
 	if err != nil {
 		return nil, err

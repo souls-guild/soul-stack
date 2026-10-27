@@ -35,6 +35,7 @@ var expectedModules = map[string][]string{
 	"core.http":      {"probe", "request"},
 	"core.noop":      {"run"},                                // no-op/barrier anchor (ADR-015)
 	"core.module":    {"installed"},                          // SoulModule plugin delivery (ADR-065)
+	"core.task":      {"failed"},                             // always fails its task (ADR-0091 amendment NIM-993)
 	"core.soul":      {"registered", "forgotten"},            // keeper-side (routed by address); forgotten NIM-1040
 	"core.bootstrap": {"issued"},                             // keeper-side ready-made VM token minting (delivery removed, NIM-834)
 	"core.ssh":       {"run", "apply"},                       // keeper-side agentless transport: shell (NIM-849), destiny (NIM-905)

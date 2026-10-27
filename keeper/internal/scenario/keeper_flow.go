@@ -118,11 +118,17 @@ func settleHosts(perHost map[string][]*render.RenderedTask, gate *crossPassageGa
 }
 
 // verdict settles one task on one host. A nil gate is a step with no requisite
-// source before it.
+// source before it. A task of a rescue unit that already failed on the host is
+// skipped before anything else is read: the unit can no longer succeed, and the Soul
+// skips it there before its `when:` too (ADR-0091 amendment NIM-993, rule 1). Render
+// routes no such task to a held, dropped or past-end host ([render.Rescue.FailedUnits]),
+// so this skip is a defence: it holds should a routing path send one.
 func (g *crossPassageGate) verdict(t *render.RenderedTask, sid string, passage, pos int) taskVerdict {
 	hf := t.FlowBySID[sid]
 	v := taskVerdict{task: t, pos: pos}
 	switch {
+	case g != nil && g.unitFailed != nil && t.RescueUnit != "" && g.unitFailed(sid, t.RescueUnit):
+		v.skip = true
 	case hf.Failure.WhenFailed():
 		v.failure = hf.Failure
 	case hf.Skip:
@@ -169,10 +175,12 @@ func failedHost(verdicts []taskVerdict, cause int) *settledHost {
 // skippedOn is t as host sid is sent it once the Keeper decided it does not run
 // there: a clone, because the *RenderedTask is shared across hosts, whose only flow
 // entry is this host's skip, and with no requisites — they gate a task that runs, and
-// one into an earlier step would only travel as a dangling index.
+// one into an earlier step would only travel as a dangling index. A task left
+// unrendered for the host keeps that mark, so it is sent no params: every one it holds
+// is another host's.
 func skippedOn(t *render.RenderedTask, sid string) *render.RenderedTask {
 	clone := *t
-	clone.FlowBySID = map[string]render.HostFlow{sid: {Skip: true}}
+	clone.FlowBySID = map[string]render.HostFlow{sid: {Skip: true, Unrendered: t.FlowBySID[sid].Unrendered}}
 	clone.OnChangesIdx, clone.OnFailIdx, clone.RequireIdx, clone.RequireAll = nil, nil, nil, false
 	return &clone
 }

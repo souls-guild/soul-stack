@@ -355,7 +355,7 @@ tasks:
 	}
 }
 
-// ★ GUARD (settings.md §4, fork 1). The steps a run that a failure ended still walks to
+// ★ GUARD (rescues.md, fork 1). The steps a run that a failure ended still walks to
 // are the ones holding an `onfail:` whose source ran at an earlier step: a top-level
 // rescue, a block's `onfail:` reaching each child step, but not a rescue inside the
 // group its source sits in, nor an `onchanges:`, nor a keeper-side `onfail:` task.
@@ -409,5 +409,239 @@ tasks:
 	want := map[int][]string{1: {"deploy"}, 2: {"deploy"}, 3: {"deploy"}}
 	if got := RescueSteps(m.Tasks, steps); !reflect.DeepEqual(got, want) {
 		t.Errorf("RescueSteps = %v, want %v", got, want)
+	}
+	if got := RegisterSteps(m.Tasks, steps); !reflect.DeepEqual(got, map[string][]int{"deploy": {0}, "change": {4}}) {
+		t.Errorf("RegisterSteps = %v, want deploy at 0 and the group's change at its step 4", got)
+	}
+}
+
+// steppedPlan is a default block holding a nested one, a group and a loop: steps 0,
+// 1-3 (the outer block), 2-3 (the inner), 4 (the group) and 5 (the loop).
+const steppedPlan = `
+name: linear
+tasks:
+  - name: probe
+    module: core.exec.run
+    register: probe
+    params: { cmd: probe }
+  - name: overlay
+    block:
+      - name: a
+        module: core.exec.run
+        register: a
+        params: { cmd: a }
+      - name: inner
+        block:
+          - name: b
+            module: core.exec.run
+            register: b
+            params: { cmd: b }
+          - name: c
+            module: core.exec.run
+            params: { cmd: c }
+  - name: canary
+    serial: 1
+    settings: { serial_scope: block }
+    block:
+      - name: change
+        module: core.exec.run
+        register: change
+        params: { cmd: change }
+      - name: check
+        module: core.exec.run
+        register: check
+        params: { cmd: check }
+  - name: each
+    module: core.exec.run
+    register: each
+    loop:
+      items: "${ ['x', 'y'] }"
+    params: { cmd: "${ item }" }
+`
+
+// ★ GUARD (ADR-0091 amendment NIM-993, rule 1). Each register stands at the step of
+// the task that sets it: a default block's child at its own step, at any depth, a
+// group's child at the group's one step, a loop at its one step whatever its items.
+//
+// Mutation: number a group's children past the group (collectStepLinks gives a
+// child of a node without children a step of its own) → change and check move.
+func TestRegisterSteps_EachRegisterAtItsSettersStep(t *testing.T) {
+	m := loadLinearManifest(t, steppedPlan)
+	_, steps := LinearPassage(m.Tasks, m.Settings)
+	want := map[string][]int{"probe": {0}, "a": {1}, "b": {2}, "change": {4}, "check": {4}, "each": {5}}
+	if got := RegisterSteps(m.Tasks, steps); !reflect.DeepEqual(got, want) {
+		t.Errorf("RegisterSteps = %v, want %v", got, want)
+	}
+	if got := RegisterSteps(m.Tasks, steps[:1]); got != nil {
+		t.Errorf("RegisterSteps over another plan's shape = %v, want nil", got)
+	}
+
+	m = loadLinearManifest(t, linearOverlayAndGroup)
+	_, steps = LinearPassage(m.Tasks, m.Settings)
+	if got := RegisterSteps(m.Tasks, steps); !reflect.DeepEqual(got, map[string][]int{"probe": {0}, "a": {1}}) {
+		t.Errorf("RegisterSteps = %v, want probe at 0 and a at 1", got)
+	}
+}
+
+// ★ GUARD (ADR-0091 amendment NIM-993, rules 1-4). A construct spans from its first
+// step to its last: a default block to its last descendant's, at any depth; a task, a
+// group and anything inside a group are one step. Below any other task there is no
+// position.
+//
+// Mutations: give a default block its first step as its last → overlay spans 1-1;
+// answer a position below a task that is no group with the task's step → 0/3 and
+// 1/0/0 are found.
+func TestStepSpan_ConstructsAndTheirSteps(t *testing.T) {
+	m := loadLinearManifest(t, steppedPlan)
+	_, steps := LinearPassage(m.Tasks, m.Settings)
+	for _, tc := range []struct {
+		path        string
+		first, last int
+		ok          bool
+	}{
+		{"0", 0, 0, true},
+		{"1", 1, 3, true},
+		{"1/0", 1, 1, true},
+		{"1/1", 2, 3, true},
+		{"1/1/1", 3, 3, true},
+		{"2", 4, 4, true},
+		{"2/1", 4, 4, true},
+		{"3", 5, 5, true},
+		{"4", 0, 0, false},
+		{"1/2", 0, 0, false},
+		{"0/3", 0, 0, false},
+		{"1/0/0", 0, 0, false},
+		{"3/0", 0, 0, false},
+		{"", 0, 0, false},
+		{"x", 0, 0, false},
+		{"-1", 0, 0, false},
+	} {
+		first, last, ok := StepSpan(steps, tc.path)
+		if ok != tc.ok || (ok && (first != tc.first || last != tc.last)) {
+			t.Errorf("StepSpan(%q) = (%d, %d, %v), want (%d, %d, %v)", tc.path, first, last, ok, tc.first, tc.last, tc.ok)
+		}
+	}
+}
+
+const crossStepUnitPlan = `
+name: linear
+tasks:
+  - name: deploy
+    module: core.exec.run
+    register: deploy
+    params: { cmd: deploy }
+  - name: earlier
+    module: core.exec.run
+    onfail: [deploy]
+    params: { cmd: earlier }
+  - name: mixed
+    onfail: [deploy, verify]
+    block:
+      - name: r1
+        module: core.exec.run
+        register: r1
+        params: { cmd: r1 }
+      - name: r2
+        module: core.exec.run
+        when: register.r1.stdout == 'ok'
+        params: { cmd: r2 }
+  - name: later
+    module: core.exec.run
+    onfail: [verify]
+    params: { cmd: later }
+  - name: pair
+    serial: 2
+    settings: { serial_scope: block }
+    block:
+      - name: stage
+        module: core.exec.run
+        register: stage
+        params: { cmd: stage }
+      - name: unstage
+        module: core.exec.run
+        onfail: [stage, deploy]
+        params: { cmd: unstage }
+  - name: wrap
+    onfail: [deploy]
+    block:
+      - name: w1
+        module: core.exec.run
+        params: { cmd: w1 }
+      - name: inner
+        module: core.exec.run
+        onfail: [verify]
+        params: { cmd: inner }
+  - name: canary
+    serial: 2
+    settings: { serial_scope: block }
+    block:
+      - name: s2
+        module: core.exec.run
+        register: s2
+        params: { cmd: s2 }
+      - name: fixer
+        onfail: [deploy]
+        block:
+          - name: t
+            module: core.exec.run
+            onfail: [s2]
+            params: { cmd: t }
+  - name: app
+    register: app
+    apply:
+      destiny: d
+  - name: renew
+    module: core.exec.run
+    onfail: [app]
+    params: { cmd: renew }
+  - name: verify
+    module: core.exec.run
+    register: verify
+    params: { cmd: verify }
+  - name: ahead
+    serial: 2
+    settings: { serial_scope: block }
+    block:
+      - name: fwd
+        module: core.exec.run
+        onfail: [s3]
+        params: { cmd: fwd }
+      - name: s3
+        module: core.exec.run
+        register: s3
+        params: { cmd: s3 }
+`
+
+// ★ GUARD (ADR-0091 amendment NIM-993, rule 1 "Units with no source before them in
+// their own message"). An outermost unit is cross-step when none of its sources is set
+// at a step of its own by a task before it, whatever mix of earlier and later steps they
+// stand at: all earlier (`earlier`), earlier and later (`mixed`), only later (`later`), a
+// nested unit of another source (`wrap`), an applier's register (`renew`), a sibling in
+// its group after it (`fwd`, a forward `onfail:` the Soul reaches only after the unit).
+// A unit with a source before it in its own group is not (`unstage`), nor is one whose
+// nested unit names a sibling in the group around it (`fixer`, though its own `onfail:`
+// names only an earlier source). Only the outermost unit is listed. The applier `app` is
+// no unit. A plan with no unit, or numbered from another plan, has none.
+//
+// Mutations: take a unit by its sources at earlier steps only (s >= first refused
+// for every source) → mixed, later and wrap drop out; read the outermost construct's
+// own `onfail:` alone → fixer (6/1) counts; key every construct naming a source as a
+// unit of its own → 5/1 and 6/1 are listed; count an in-span source wherever it stands
+// in its group (no s.order < unit in sourcesOutside) → fwd (10/0) drops out.
+func TestCrossStepUnits_UnitsWithNoSourceInTheirOwnMessage(t *testing.T) {
+	m := loadLinearManifest(t, crossStepUnitPlan)
+	_, steps := LinearPassage(m.Tasks, m.Settings)
+	want := map[string]bool{"1": true, "2": true, "3": true, "5": true, "8": true, "10/0": true}
+	if got := CrossStepUnits(m.Tasks, steps); !reflect.DeepEqual(got, want) {
+		t.Errorf("CrossStepUnits = %v, want %v", got, want)
+	}
+
+	plain := loadLinearManifest(t, steppedPlan)
+	_, plainSteps := LinearPassage(plain.Tasks, plain.Settings)
+	if got := CrossStepUnits(plain.Tasks, plainSteps); got != nil {
+		t.Errorf("CrossStepUnits of a plan with no unit = %v, want nil", got)
+	}
+	if got := CrossStepUnits(m.Tasks, plainSteps); got != nil {
+		t.Errorf("CrossStepUnits over another plan's steps = %v, want nil", got)
 	}
 }

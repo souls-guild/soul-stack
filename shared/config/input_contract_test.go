@@ -187,3 +187,47 @@ func TestResolveInputContract_EmptyStringIsAbsentAtEveryLevel(t *testing.T) {
 		t.Error(`required nested property passed as "" must still be reported missing`)
 	}
 }
+
+// ★ GUARD (ADR-0091 amendment NIM-993, rule 1: a rescue unit's layout-only destiny
+// pass renders only the host-invariant inputs). An input left out with WithoutInputs
+// gets no default, no `required:` and no value check, and a rule reading it — or
+// reading the namespace by a computed key — is skipped; every other rule still holds,
+// at its own index.
+//
+// Mutations: keep a left-out input in the schema → "addr is required"; evaluate a
+// `required_when:` reading one → it fails on input.addr; evaluate a `validate:` rule
+// reading one, or one reading the namespace by a computed key → it fails on
+// input.addr; skip every rule while inputs are left out → the port rule passes.
+func TestResolveInputContract_WithoutInputs(t *testing.T) {
+	schema := InputSchemaMap{
+		"addr":  {Type: "string", Required: true, Pattern: "^10\\."},
+		"alias": {Type: "string", Default: "x"},
+		"port":  {Type: "integer", Default: 6379},
+		"tls":   {Type: "boolean", RequiredWhen: "input.addr.startsWith('10.')"},
+	}
+	rules := []ValidateRule{
+		{That: "input.addr != ''", Message: "addr reads a left-out input"},
+		{That: "input[input.alias] != ''", Message: "a computed key might read a left-out input"},
+		{That: "input.port < 1000", Message: "port must stay below 1000"},
+	}
+	merged, err := ResolveInputContract(schema, rules[:2], map[string]any{}, ValidateContext{}, WithoutInputs([]string{"addr"}))
+	if err != nil {
+		t.Fatalf("ResolveInputContract without addr: %v", err)
+	}
+	if _, ok := merged["addr"]; ok {
+		t.Errorf("merged = %v, want no addr: a left-out input gets nothing, not even a value from the schema", merged)
+	}
+	if merged["port"] != 6379 {
+		t.Errorf("port = %v, want the default 6379", merged["port"])
+	}
+
+	_, err = ResolveInputContract(schema, rules, map[string]any{}, ValidateContext{}, WithoutInputs([]string{"addr"}))
+	var fail *ValidateRuleFailure
+	if !errors.As(err, &fail) || fail.Index != 2 {
+		t.Fatalf("error = %v, want validate[2] to fail: a rule reading only rendered inputs still holds", err)
+	}
+
+	if _, err := ResolveInputContract(schema, nil, map[string]any{}, ValidateContext{}); err == nil || !strings.Contains(err.Error(), `"addr" is required`) {
+		t.Errorf("without the option: error = %v, want addr required", err)
+	}
+}

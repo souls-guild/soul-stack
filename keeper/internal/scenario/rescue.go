@@ -1,72 +1,17 @@
 package scenario
 
 import (
-	"context"
-	"fmt"
 	"slices"
 
-	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Rescue routing of a linear run (docs/scenario/settings.md §4, ADR-0091
-// fork 1): what the run goroutine tells render of its failures before each step, so
-// that a dropped host still receives the `onfail:` tasks whose source failed on it and
-// a run that a failure ended renders only those.
-
-// rescueFor is a step's view of the run's failures: nil while no host has been dropped
-// and the run goes on — the render is then exactly what it was before rescue routing.
-// tasks are the last pass's: every task that has run is resolved there, with its plan
-// index, register and step. Without an audit reader the run refused every cross-step
-// requisite before its first step, so there is no rescue to route.
-func (r *Runner) rescueFor(ctx context.Context, spec RunSpec, fails *runFailures, tasks []*render.RenderedTask) (*render.Rescue, error) {
-	if fails == nil || (len(fails.dropped) == 0 && !fails.ended) || r.deps.AuditReader == nil {
-		return nil, nil
-	}
-	keys, err := r.deps.AuditReader.SelectFailedTaskKeys(ctx, spec.ApplyID)
-	if err != nil {
-		return nil, fmt.Errorf("scenario: rescue routing: failed facts: %w", err)
-	}
-	return &render.Rescue{Ended: fails.ended, EndedAt: fails.endedAt, Failed: failedRegisters(keys, tasks)}, nil
-}
-
-// failedRegisters folds the run's FAILED/TIMED_OUT task keys into the registers that
-// failed, by host, each with the first step it failed at: a task's own register, and
-// an applier's for any of its children — the fold crosspassage.go reads an applier
-// source by. A keeper-side task's stays under render.KeeperTargetSID.
-func failedRegisters(keys map[auditpg.ChangedTaskKey]struct{}, tasks []*render.RenderedTask) map[string]map[string]int {
-	byIndex := make(map[int]*render.RenderedTask, len(tasks))
-	appliers := map[int][]*render.RenderedTask{}
-	for _, t := range tasks {
-		byIndex[t.Index] = t
-		for _, child := range t.AggregateOf {
-			appliers[child] = append(appliers[child], t)
-		}
-	}
-	out := map[string]map[string]int{}
-	note := func(sid string, t *render.RenderedTask) {
-		if t.Register == "" {
-			return
-		}
-		if out[sid] == nil {
-			out[sid] = map[string]int{}
-		}
-		if at, ok := out[sid][t.Register]; !ok || t.Passage < at {
-			out[sid][t.Register] = t.Passage
-		}
-	}
-	for k := range keys {
-		t := byIndex[k.PlanIndex]
-		if t == nil {
-			continue
-		}
-		note(k.SID, t)
-		for _, applier := range appliers[k.PlanIndex] {
-			note(k.SID, applier)
-		}
-	}
-	return out
-}
+// Rescue routing of a linear run (docs/scenario/rescues.md, ADR-0091
+// fork 1 and amendment NIM-993): what the run goroutine tells render of its failures
+// before each step ([failureView.rescue]), so that a held or dropped host still
+// receives the `onfail:` tasks whose source failed on it and a run that a failure
+// ended renders only those.
 
 // rescueIndices are the rescues among a step's tasks, as rendered: the tasks whose
 // `onfail:` names a task of an earlier step ([crossPassageGate.splitRequisite]), each
@@ -163,4 +108,32 @@ func rescueAhead(rescueSteps map[int][]string, step int) bool {
 		}
 	}
 	return false
+}
+
+// needsRescueHold reports whether a step of a linear run goes through the work-queue
+// only while every live instance holds rescues — a stopgap ahead of the per-step gate
+// of ADR-027 amend (v), until the work-queue recipe carries the failure state and
+// claimants announce `rescue_hold`. Every step of a plan holding a cross-step unit
+// ([hasCrossStepUnit]) needs it, and in a plan holding a rescue of an earlier step's
+// source ([config.RescueSteps]) every step from the run's first failure on: a unit
+// with a source in its own message is still a unit of its earlier source and can hold
+// a host (ADR-0091 amendment NIM-993, rule 7), and a claim renders over the recipe's
+// one roster, which holds no held host. The run goroutine renders such a step with
+// each host's standing as each step saw it under the same condition.
+func needsRescueHold(crossStepUnit bool, rescueSteps map[int][]string, fails *runFailures) bool {
+	return crossStepUnit || len(rescueSteps) > 0 && fails.failed()
+}
+
+// hasCrossStepUnit reports whether a linear plan holds a cross-step rescue unit, one
+// with no source before it in its own message, told as render tells one
+// ([config.CrossStepUnits]). Every step of such a plan, the ones before the unit
+// included, goes through the work-queue only while every live instance holds rescues
+// ([needsRescueHold]). A claim renders the whole plan, so an instance from before
+// NIM-993's rule-1 routing claiming any of its steps evaluates the unit's static
+// `when:` and `vars:` over the live hosts, which the run goroutine does not, and fails
+// the row where they read the unit's own register. A unit with a source before it in
+// its own message is no such unit: before the run's first failure a plan whose units are
+// all of that kind queues as before. steps is [config.LinearPassage]'s.
+func hasCrossStepUnit(tasks []config.Task, steps []config.StepNode) bool {
+	return len(config.CrossStepUnits(tasks, steps)) > 0
 }

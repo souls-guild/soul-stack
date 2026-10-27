@@ -85,6 +85,13 @@ type asyncFlow struct {
 	name   string
 	done   chan struct{}
 	failed bool
+	// cancelled: the flow ended CANCELLED, which is neither a failure nor a
+	// success of a rescue unit (ADR-0091 amendment NIM-993, rule 9). Same
+	// contract as failed.
+	cancelled bool
+	// err is the failure's TaskError, for `core.task.failed`'s default message
+	// (ADR-0091 amendment NIM-993, rule 8). Same contract as failed.
+	err *keeperv1.TaskError
 }
 
 // asyncFlows tracks one run's async flows: what has been launched, the
@@ -231,6 +238,13 @@ func (f *asyncFlows) wait() (failed bool) {
 	return false
 }
 
+// all lists every flow of the run, in launch order.
+func (f *asyncFlows) all() []*asyncFlow {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.order
+}
+
 func (f *asyncFlows) recordSendErr(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -260,6 +274,17 @@ func waitFlows(flows []*asyncFlow) {
 func anyFailed(flows []*asyncFlow) bool {
 	for _, fl := range flows {
 		if fl.failed {
+			return true
+		}
+	}
+	return false
+}
+
+// anyCancelled reports whether an awaited flow ended CANCELLED. Valid only
+// after [waitFlows] over the same set.
+func anyCancelled(flows []*asyncFlow) bool {
+	for _, fl := range flows {
+		if fl.cancelled {
 			return true
 		}
 	}

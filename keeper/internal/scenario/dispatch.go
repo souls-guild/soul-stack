@@ -55,18 +55,24 @@ import (
 //
 // A linear run (fails non-nil) judges failures instead (failure_policy.go): each
 // wave's barrier waits for every host it was sent to, a host that failed under
-// `on_failure: host` is dropped and the waves roll on, and a failure that ends the
-// run leaves the waves after its own only their rescues (settings.md §4).
+// `on_failure: host` is dropped and the waves roll on, a failure held for a rescue
+// unit ahead stops no wave (ADR-0091 amendment NIM-993, rule 2), and a failure that
+// ends the run leaves the waves after its own only their rescues (rescues.md).
+// After the last wave the step's barrier judges what its rescue units left held on
+// the hosts no wave reached ([Runner.sweepStep]).
 //
 // Barrier invariant (§7): serial never splits the state commit — dispatch
 // returns only after all waves complete (or fail-stop); state commits once in
 // run(), never per-wave.
 //
 // step is the recipe of a linear run's step rows, nil for a staged run: with it
-// the step may go through the work-queue instead ([Runner.queuesStep]).
-func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan, gate *crossPassageGate, hosts []*topology.HostFacts, step *applyrun.Recipe, fails *runFailures) error {
+// the step may go through the work-queue instead ([Runner.queuesStep]), and
+// rescueHold says whether it needs every live instance to hold rescues for that
+// ([needsRescueHold]).
+func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan, gate *crossPassageGate, hosts []*topology.HostFacts, step *applyrun.Recipe, fails *runFailures, rescueHold bool) error {
 	if fails != nil {
 		r.writeNotReached(ctx, spec, log, passage, tasks, plans)
+		fails.recordMissed(passage, tasks, plans)
 	}
 	perHost := groupByHost(tasks, plans)
 	// Cross-passage requisite gating (ADR-056 R3): per-host resolution of
@@ -99,8 +105,8 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 			slog.Int("passage", passage))
 		if fails != nil {
 			// Still a barrier: its owner's `tolerate` is checked against the hosts
-			// dropped so far.
-			return r.waitAndJudge(ctx, spec, log, newStepJudge(spec, passage, tasks, nil, nil), 0, fails, hosts, watch)
+			// dropped so far, and the units it decides are decided.
+			return r.waitAndJudge(ctx, spec, log, newStepJudge(spec, passage, tasks, nil, nil), 0, fails, hosts, watch, true)
 		}
 		return nil
 	}
@@ -112,7 +118,7 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	if len(refusals) > 0 {
 		return refusedDispatchError(refusals)
 	}
-	if step != nil && fails != nil && r.queuesStep(ctx, log, passage, plans, dispatchByHost) {
+	if step != nil && fails != nil && r.queuesStep(ctx, log, passage, plans, dispatchByHost, rescueHold) {
 		return r.dispatchStepPlanned(ctx, spec, log, passage, tasks, perHost, settled, closed, step, fails, hosts, watch)
 	}
 	// Every push host's SshProvider, resolved before this Passage's first wave —
@@ -150,7 +156,7 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	}
 	if len(sids) == 0 {
 		if judge != nil {
-			return r.waitAndJudge(ctx, spec, log, judge, dispatchedTotal, fails, hosts, watch)
+			return r.waitAndJudge(ctx, spec, log, judge, dispatchedTotal, fails, hosts, watch, true)
 		}
 		return r.waitBarrier(ctx, spec.ApplyID, passage, dispatchedTotal, log)
 	}
@@ -177,7 +183,7 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	// run is cancelled first ([stepWatch.send]).
 	for wi, wave := range waves {
 		// The waves after the one whose failure ended the run send only rescues
-		// (settings.md §4). A step past an earlier end was rendered so already.
+		// (rescues.md). A step past an earlier end was rendered so already.
 		if endedHere {
 			if wave = rescueWave(wave, perHost, failedEarly, settled, rescues, fires); len(wave) == 0 {
 				continue
@@ -202,7 +208,7 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 				// abort would force-fail rows a live host is about to report.
 				return r.failAfterSent(ctx, spec, log, passage, dispatchedTotal-watch.withdraw(), derr, watch)
 			}
-			if err := r.waitAndJudge(ctx, spec, log, judge, dispatchedTotal, fails, hosts, watch); err != nil {
+			if err := r.waitAndJudge(ctx, spec, log, judge, dispatchedTotal, fails, hosts, watch, wi == len(waves)-1); err != nil {
 				if !errors.Is(err, errRunEnded) {
 					return err
 				}
@@ -230,6 +236,16 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 		if len(waves) > 1 {
 			log.Info("scenario: serial wave completed",
 				slog.Int("wave", wi+1), slog.Int("waves_total", len(waves)), slog.Int("hosts", len(wave)))
+		}
+	}
+	if judge != nil {
+		// A last wave past the run's end that fired no rescue sent nothing and had no
+		// barrier.
+		if err := r.sweepStep(ctx, spec, log, judge, fails, hosts); err != nil {
+			if !errors.Is(err, errRunEnded) {
+				return err
+			}
+			endedHere = true
 		}
 	}
 	if endedHere {
@@ -377,7 +393,12 @@ func planIndices(tasks []*render.RenderedTask) []int {
 // does not answer counts as "cannot". A block rolled as one group always carries
 // `serial:`, so no group is queued — and the claim's check (RecipeStep.Tasks)
 // cannot tell a grouped child sent running from its `when: false` copy.
-func (r *Runner) queuesStep(ctx context.Context, log *slog.Logger, passage int, plans []render.DispatchPlan, dispatchByHost map[string]hostDispatch) bool {
+//
+// rescueHold — the step is queued only when every live instance also holds rescues
+// ([needsRescueHold]). That gate is a broader stopgap, ahead of the per-step gate of
+// ADR-027 amend (v), and stays until the work-queue recipe carries the failure state
+// and claimants announce `rescue_hold`.
+func (r *Runner) queuesStep(ctx context.Context, log *slog.Logger, passage int, plans []render.DispatchPlan, dispatchByHost map[string]hostDispatch, rescueHold bool) bool {
 	if !r.acolyteEnabled || effectiveSerialWidth(plans) > 0 {
 		return false
 	}
@@ -397,8 +418,21 @@ func (r *Runner) queuesStep(ctx context.Context, log *slog.Logger, passage int, 
 	}
 	if !ok {
 		log.Info("scenario: a live instance cannot take step rows - step goes inline", slog.Int("passage", passage))
+		return false
 	}
-	return ok
+	if !rescueHold {
+		return true
+	}
+	holds, err := r.deps.StepQueue.AllLiveHoldRescues(ctx)
+	if err != nil {
+		log.Warn("scenario: Conclave did not answer whether every instance holds rescues - step goes inline",
+			slog.Int("passage", passage), slog.Any("error", err))
+		return false
+	}
+	if !holds {
+		log.Info("scenario: the step needs every instance to hold rescues and a live instance cannot - step goes inline", slog.Int("passage", passage))
+	}
+	return holds
 }
 
 // dispatchStepPlanned puts one step of a linear run on the work-queue (ADR-027
@@ -475,7 +509,7 @@ func (r *Runner) dispatchStepPlanned(ctx context.Context, spec RunSpec, log *slo
 	if queued {
 		r.publishSummons(ctx, log)
 	}
-	return r.waitAndJudge(ctx, spec, log, newStepJudge(spec, passage, tasks, perHost, settled), total, fails, hosts, watch)
+	return r.waitAndJudge(ctx, spec, log, newStepJudge(spec, passage, tasks, perHost, settled), total, fails, hosts, watch, true)
 }
 
 // publishSummons sends one best-effort Summons signal for planned assignments

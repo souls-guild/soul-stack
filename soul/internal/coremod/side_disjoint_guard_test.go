@@ -31,7 +31,7 @@ func TestSoulSideCatalogMatchesTheSoulRegistry(t *testing.T) {
 //
 // Reading the side off the module address is only sound while no core name lives
 // on both sides. If one did, the catalog would route every task addressing it to
-// the Keeper — including the twenty-one modules that only exist on a host — and
+// the Keeper — including the twenty-two modules that only exist on a host — and
 // the step would be dropped on an executor that cannot run it. The keeper-side
 // half is guarded in `keeper/internal/coremod`; this is the side that would go
 // wrong silently, because a Soul-side module wrongly listed keeper-side fails at

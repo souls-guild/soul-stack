@@ -46,14 +46,15 @@ func (r *statusRows) Values() ([]any, error)                       { return nil,
 func (r *statusRows) RawValues() [][]byte                          { return nil }
 func (r *statusRows) Conn() *pgx.Conn                              { return nil }
 
-// Scan answers SelectRunStatus's (status, lock_held, dropped) and, for any other shape,
-// fills the leading (sid, status) of SelectStatusesByApplyID: an awaiter that
-// went back to reading the rows alone fails on its verdict, not on a scan.
+// Scan answers SelectRunStatus's (status, lock_held, dropped, handled) and, for any
+// other shape, fills the leading (sid, status) of SelectStatusesByApplyID: an awaiter
+// that went back to reading the rows alone fails on its verdict, not on a scan.
 func (r *statusRows) Scan(dest ...any) error {
-	if len(dest) == 3 {
+	if len(dest) == 4 {
 		*dest[0].(*string) = string(r.statuses[r.i])
 		*dest[1].(*bool) = r.lockHeld
 		*dest[2].(*bool) = r.i < r.dropped
+		*dest[3].(*bool) = false
 		return nil
 	}
 	*dest[0].(*string) = "host-" + string(rune('a'+r.i))

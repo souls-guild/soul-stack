@@ -17,6 +17,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
+	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	coremodutil "github.com/souls-guild/soul-stack/keeper/internal/coremod/util"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
@@ -149,8 +150,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// runResultFailed on any abort exit below; ok is set only on a successful
 	// finish.
 	abort := func(reason string, cause error) {
-		if fails != nil && fails.ended {
+		switch {
+		case fails != nil && fails.ended:
 			cause = fails.withEnd(cause)
+		case fails != nil:
+			cause = fails.withHeld(cause)
 		}
 		// cause may carry a vault:secret/-ref from a render/dispatch error. Apply
 		// the same masking as status_details in lockIncarnation to both observable
@@ -188,7 +192,17 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// sees an aborted run between two steps as `applying` only while the lock
 		// is held — after the release, as whatever its rows say (NIM-972).
 		keepRunning := errors.Is(cause, errCancelRequested)
-		r.ensureTerminalApplyRun(ctx, spec, reason, max(atStep, 0), failureTerminalStatus(cause), keepRunning, log)
+		// The handled marks go only after a row is known to carry the abort: a
+		// row a rescue handled carries none ([carriesAbort]), so with the marks
+		// written before the sentinel lands — or when it never does — an aborted
+		// run whose every failed row was handled would read success.
+		handled := fails.handledRows()
+		if r.ensureTerminalApplyRun(ctx, spec, reason, max(atStep, 0), failureTerminalStatus(cause), keepRunning, handled, log) {
+			r.markHandled(ctx, spec, handled, log)
+		} else if len(handled) > 0 {
+			log.Warn("scenario: the rows a rescue handled are left unmarked - no row is known to carry the abort, or the rows could not be read again",
+				slog.Int("rows", len(handled)))
+		}
 		finalized := r.lockIncarnation(ctx, spec, failStatus, reason, cause, failure, sealed.Paths(), log)
 
 		// Terminal run-failure event (T4 foundation, ADR-052 §k):
@@ -509,6 +523,17 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
+	// 4.921. A group holding two rescue units for outside sources (ADR-0091
+	//        amendment NIM-993, rule 1). Only linear dispatch rolls a block as
+	//        one group, so a staged run has nothing to refuse.
+	if spec.executionModel == ExecutionLinear {
+		if diags := config.GroupMultipleRescueUnits(scn.Settings, scn.Tasks); len(diags) > 0 {
+			abort(config.CodeGroupMultipleRescueUnits, fmt.Errorf("scenario %s/%s: %s",
+				spec.IncarnationName, spec.ScenarioName, diags[0].Message))
+			return
+		}
+	}
+
 	// 4.925. Cross-passage when-gating — KEEPER-SIDE FAIL-CLOSED safety net
 	//        (ADR-056:85 amend, FC-5). A task gates `when:`/`changed_when:`/
 	//        `failed_when:` by a register emitted in an EARLIER Passage.
@@ -770,25 +795,58 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		ran := map[int]render.DispatchPlan{}
 		// The steps holding a rescue — an `onfail:` task whose source runs at an
 		// earlier step — with the registers they name: the only steps a run that a
-		// failure ended walks on to (settings.md §4).
+		// failure ended walks on to (rescues.md).
 		var rescueSteps map[int][]string
+		var crossStepUnit bool
 		if spec.executionModel == ExecutionLinear {
 			fails = newRunFailures()
+			fails.useRoster(renderIn.Hosts)
 			rescueSteps = config.RescueSteps(scn.Tasks, steps)
+			crossStepUnit = hasCrossStepUnit(scn.Tasks, steps)
+			covers, cerr := r.deps.Render.RescueCovers(renderIn)
+			if cerr != nil {
+				abort("render_failed", cerr)
+				return
+			}
+			fails.setPlan(covers, steps)
 		}
 		for p := 0; p < passage.Count; p++ {
 			atStep = p
+			// A linear run's failure state as this step sees it. Its render reads the
+			// hosts' standing from it; rescue routing and the requisite gate below read
+			// it in place of the audit log's FAILED facts. SelectFailedTaskKeys is still
+			// read by a staged run's requisite gate, the barrier's replay
+			// ([Runner.judgeWave]) and a claim's requisite gate ([ClaimRunner.stepGate]).
+			var view failureView
 			var rescue *render.Rescue
+			rescueHold := needsRescueHold(crossStepUnit, rescueSteps, fails)
 			if p > 0 && fails != nil {
+				// A step a run that a failure ended does not walk to still has its
+				// barrier: a rescue unit that reached a host earlier is decided there,
+				// and a failure held for it judged (rule 4).
+				skip := func() bool {
+					if err := r.sweepStep(ctx, spec, log, newStepJudge(spec, p, nil, nil, nil), fails, allHosts(fails.view(p))); err != nil {
+						abort("dispatch_failed", err)
+						return false
+					}
+					return true
+				}
 				if fails.ended && len(rescueSteps[p]) == 0 {
+					if !skip() {
+						return
+					}
 					continue
 				}
-				var rerr error
-				if rescue, rerr = r.rescueFor(ctx, spec, fails, tasks); rerr != nil {
-					abort("register_load_failed", rerr)
-					return
+				view = fails.view(p)
+				// Without an audit reader the run refused every cross-step requisite
+				// before its first step: there is no rescue to route.
+				if r.deps.AuditReader != nil {
+					rescue = view.rescue()
 				}
 				if fails.ended && (rescue == nil || !rescue.FiresAnywhere(rescueSteps[p], p)) {
+					if !skip() {
+						return
+					}
 					continue
 				}
 			}
@@ -823,6 +881,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 					}
 					prevSize := len(renderIn.Hosts)
 					renderIn.Hosts = grown
+					live := grown
+					if fails != nil {
+						fails.useRoster(grown)
+						view = fails.view(p)
+						live, _, _ = view.split()
+					}
 					log.Info("scenario: roster re-resolved at refresh boundary - live snapshot (ADR-0061 §S3)",
 						slog.Int("passage", p), slog.Int("roster_size", len(grown)), slog.Int("prev_roster_size", prevSize))
 					// ★ Re-gate the RE-RESOLVED roster (ADR-056 §S5). The up-front gate
@@ -837,7 +901,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 					// ⚠ This is a SECOND place a staged run can refuse after Passage 0
 					// has applied and the keeper-side tasks have provisioned. Unavoidable:
 					// the host it is about did not exist when the up-front gate ran.
-					if gerr := r.gatePassageCapability(ctx, spec, fails.live(grown), passage.Count); gerr != nil {
+					if gerr := r.gatePassageCapability(ctx, spec, live, passage.Count); gerr != nil {
 						abort(reasonSoulPassageUnsupported, gerr)
 						return
 					}
@@ -894,12 +958,26 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				}
 				renderIn.TaskPassage = passage.TaskPassage
 				renderIn.ActivePassage = p
-				// A host the run dropped is out of every later step — a roster
-				// re-read at a refresh boundary included, where a fresh snapshot
-				// would re-admit it while it is still online (settings.md §6) — and
-				// still listed in soulprint.hosts.
-				renderIn.Hosts = fails.live(renderIn.Hosts)
-				renderIn.Dropped = fails.droppedFacts()
+				// A host the run holds or dropped is out of every later ordinary
+				// step — a roster re-read at a refresh boundary included, where a
+				// fresh snapshot would re-admit it while it is still online
+				// (settings.md §6) — and still listed in soulprint.hosts. Where a
+				// rescue can hold a host ([needsRescueHold]) each earlier step
+				// re-renders with each host's standing as that step saw it: one roster
+				// for the whole pass would take a host held or dropped since out of
+				// the steps it ran, and grow the roster of the steps a returned host
+				// missed. Such a step goes inline unless every live instance
+				// announces `rescue_hold` ([Runner.queuesStep]), which none may do
+				// before the work-queue recipe carries the standing. Any other plan
+				// re-renders over one roster: a claim re-renders it over the recipe's
+				// one roster and refuses a host whose plan indices differ from the run
+				// goroutine's.
+				if fails != nil {
+					if rescueHold {
+						renderIn.Standing = view.standing()
+					}
+					renderIn.Hosts, renderIn.HeldHosts, renderIn.Dropped = view.split()
+				}
 				renderIn.Rescue = rescue
 				pt, pp, rerr := r.deps.Render.Render(ctx, renderIn)
 				if rerr != nil {
@@ -989,7 +1067,9 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			// CHANGED/FAILED facts from Passage < p (from the audit log) and resolve
 			// per-host onchanges/onfail links whose source is an earlier Passage.
 			// p==0 → gate=nil (no earlier Passage). The full plan (tasks) is used
-			// for passageByIndex sources not present in the Passage-p slice.
+			// for passageByIndex sources not present in the Passage-p slice. A linear
+			// run reads its failed sources that no unit handled instead of the FAILED
+			// facts (ADR-0091 amendment NIM-993, "What the run goroutine keeps").
 			var gate *crossPassageGate
 			if p > 0 && r.deps.AuditReader != nil {
 				changed, ferr := r.deps.AuditReader.SelectChangedTaskKeys(ctx, spec.ApplyID)
@@ -997,12 +1077,17 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 					abort("register_load_failed", fmt.Errorf("scenario: cross-passage changed facts: %w", ferr))
 					return
 				}
-				failed, ferr := r.deps.AuditReader.SelectFailedTaskKeys(ctx, spec.ApplyID)
-				if ferr != nil {
+				var failed map[auditpg.ChangedTaskKey]struct{}
+				if fails != nil {
+					failed = view.unhandledKeys()
+				} else if failed, ferr = r.deps.AuditReader.SelectFailedTaskKeys(ctx, spec.ApplyID); ferr != nil {
 					abort("register_load_failed", fmt.Errorf("scenario: cross-passage failed facts: %w", ferr))
 					return
 				}
 				gate = newCrossPassageGate(tasks, plans, changed, failed)
+				if fails != nil {
+					gate.unitFailed = view.unitFailed
+				}
 			}
 			// The keeper tasks above can run for minutes; a Cancel during them
 			// must not let the hosts be sent the step.
@@ -1019,10 +1104,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			stepHosts := renderIn.Hosts
 			if spec.executionModel == ExecutionLinear {
 				step = stepRecipe(spec, art.SHA1, renderIn, regNames)
-				// A dropped host a rescue reaches is sent the step like any host of it.
-				stepHosts = append(slices.Clone(renderIn.Hosts), renderIn.Dropped...)
+				// A held or dropped host a rescue reaches is sent the step like any host
+				// of it, and a held one is still in the run at its barrier.
+				stepHosts = slices.Concat(renderIn.Hosts, renderIn.HeldHosts, renderIn.Dropped)
 			}
-			if err := r.dispatchPassage(ctx, spec, log, p, pTasks, pPlans, gate, stepHosts, step, fails); err != nil {
+			if err := r.dispatchPassage(ctx, spec, log, p, pTasks, pPlans, gate, stepHosts, step, fails, rescueHold); err != nil {
 				if !errors.Is(err, errRunEnded) || !rescueAhead(rescueSteps, p) {
 					abort(dispatchAbortReason(err), err)
 					return
@@ -1049,7 +1135,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// A run that reached its end without the hosts it dropped ends
 		// partial_failed, its incarnation error_locked (settings.md §2). A teardown
 		// has no such outcome: one without some hosts failed.
-		if fails != nil && len(fails.dropped) > 0 {
+		if fails != nil && fails.dropCount() > 0 {
 			if spec.TerminalMode == TerminalDestroy {
 				fails.close()
 				abort("dispatch_failed", fails.errorOf("the teardown finished without the hosts it dropped"))
@@ -1063,6 +1149,18 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			}
 			return
 		}
+	}
+
+	// A run that reached its end closes its failure list there. A failure still held
+	// for a rescue would be appended to it and fail the run; the rows whose every
+	// failure a rescue handled are marked with the run's terminal (rule 5).
+	var handled []runRow
+	if fails != nil {
+		if err := fails.withHeld(nil); err != nil {
+			abort("dispatch_failed", err)
+			return
+		}
+		handled = fails.handledRows()
 	}
 
 	// 6.5. Teardown finalization (TerminalMode=TerminalDestroy, S-D2b): the
@@ -1090,6 +1188,9 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			),
 		)
 		defer dspan.End()
+		// The run's rows go with the row below; marked first, a run whose delete
+		// fails still reads as the teardown that succeeded.
+		r.markHandled(ctx, spec, handled, log)
 		// S-D3: teardown passed on every host → physically drop the row. Archive
 		// (incarnation_archive / state_history_archive, migration 039) +
 		// single-winner DELETE WHERE status='destroying' + audit
@@ -1122,12 +1223,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	// 7. All tasks succeeded on all hosts → close the run: status → ready plus a
-	//    state_history row. The state itself is ALREADY in the row — each
-	//    `core.state.<verb>` task wrote its field where its value became known
-	//    ([ADR-0084]), so there is nothing left to merge here and no window in
+	// 7. Every host finished with no failure a rescue left unhandled → close the run:
+	//    status → ready plus a state_history row. The state itself is ALREADY in the
+	//    row — each `core.state.<verb>` task wrote its field where its value became
+	//    known ([ADR-0084]), so there is nothing left to merge here and no window in
 	//    which a host is configured with a value the database has not seen.
-	if err := r.commitSuccess(ctx, spec, stateBefore, prov.stamp()); err != nil {
+	if err := r.commitSuccess(ctx, spec, stateBefore, prov.stamp(), handled); err != nil {
 		// Single-winner (ADR-027(j) W1): the incarnation was already moved out
 		// of applying by another committer (recovery takeover / parallel
 		// finish) — NOT a failure. We don't abort (don't overwrite someone
@@ -1518,49 +1619,25 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, failStatus i
 	return true
 }
 
-// ensureTerminalApplyRun guarantees run `spec.ApplyID` has at least one
-// TERMINAL apply_runs row after an abort (BAG-1). Two cases:
-//
-//   - rows ALREADY exist (late abort: dispatch got as far as inserting
-//     planned/claimed/dispatched, OR Passage>0 keeper-dispatch failed AFTER a
-//     successful earlier Passage's host-dispatch — Slice 2: keeper-dispatch is
-//     now INSIDE the stage-loop) — terminalize EVERY non-terminal row to
-//     `terminal` via [applyrun.UpdateStatus] (single-winner: already-terminal
-//     rows are left alone, ADR-027(j)). running rows are left ALONE: the apply
-//     already reached the host, an honest terminal will arrive from it
-//     (RunResult). The failed Passage's keeper row is already failed
-//     (dispatchKeeperTasks wrote it BEFORE returning the error), earlier
-//     Passages' host rows stay success. No sentinel inserted while a row
-//     carries the abort ([carriesAbort]);
-//   - rows exist and none carries the abort (an abort between two steps —
-//     render, gate, roster refresh, Cancel — or a Cancel leaving running rows
-//     to finish) — the sentinel below, or the run would read success;
-//   - NO rows exist (early abort: no_hosts / scenario_load_failed /
-//     topology_failed / service_vars_failed / input_invalid / render_failed, and
-//     also keeper_dispatch_failed on Passage 0 — the first Passage's keeper
-//     tasks run BEFORE any host-dispatch) — insert ONE sentinel row
-//     [render.RunSentinelSID] with status=`terminal`, error_summary=reason and
-//     passage=step, the step the run stopped at (0 when it stopped outside a
-//     step).
-//
-// `terminal` is the failure terminal status (see [failureTerminalStatus]):
-// cancelled on operator Cancel, otherwise failed.
-//
-// reason's source of truth is the abort reason (no_hosts etc.). Write errors
-// are only logged (warn): the incarnation is already error_locked, losing a
-// barrier row degrades observability, not a reason to fail the goroutine.
-// Detached ctx — the original ctx may have been cancelled (Shutdown/timeout),
-// as in [lockIncarnation].
-
 // carriesAbort reports whether the run's rows will show the abort once
 // [Runner.ensureTerminalApplyRun] has closed them: a row already failed,
 // cancelled or orphaned, or a row it terminalizes. A running row left for an
-// honest RunResult (keepRunning) may still end in success.
-func carriesAbort(statuses []applyrun.HostStatus, keepRunning bool) bool {
+// honest RunResult (keepRunning) may still end in success. A failed or orphaned
+// row a rescue handled — marked, or in handled, to be marked — or one that dropped
+// its host, carries no abort: the fold reads it as success or partial_failed
+// ([applyrun.AggregateRunStatus]).
+func carriesAbort(statuses []applyrun.HostStatus, keepRunning bool, handled []runRow) bool {
+	toMark := make(map[runRow]bool, len(handled))
+	for _, row := range handled {
+		toMark[row] = true
+	}
 	for _, st := range statuses {
 		switch st.Status {
-		case applyrun.StatusFailed, applyrun.StatusCancelled, applyrun.StatusOrphaned,
-			applyrun.StatusPlanned, applyrun.StatusClaimed, applyrun.StatusDispatched:
+		case applyrun.StatusFailed, applyrun.StatusOrphaned:
+			if !st.HandledMark && !st.Dropped && !toMark[runRow{sid: st.SID, step: st.Passage}] {
+				return true
+			}
+		case applyrun.StatusCancelled, applyrun.StatusPlanned, applyrun.StatusClaimed, applyrun.StatusDispatched:
 			return true
 		case applyrun.StatusRunning:
 			if !keepRunning {
@@ -1583,7 +1660,49 @@ func failureTerminalStatus(cause error) applyrun.Status {
 	return applyrun.StatusFailed
 }
 
-func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reason string, step int, terminal applyrun.Status, keepRunning bool, log *slog.Logger) {
+// ensureTerminalApplyRun guarantees run `spec.ApplyID` has at least one
+// TERMINAL apply_runs row after an abort (BAG-1). Three cases:
+//
+//   - rows ALREADY exist (late abort: dispatch got as far as inserting
+//     planned/claimed/dispatched, OR Passage>0 keeper-dispatch failed AFTER a
+//     successful earlier Passage's host-dispatch — keeper-dispatch runs INSIDE
+//     the stage-loop) — terminalize EVERY non-terminal row to
+//     `terminal` via [applyrun.UpdateStatus] (single-winner: already-terminal
+//     rows are left alone, ADR-027(j)). running rows are left ALONE: the apply
+//     already reached the host, an honest terminal will arrive from it
+//     (RunResult). The failed Passage's keeper row is already failed
+//     (dispatchKeeperTasks wrote it BEFORE returning the error), earlier
+//     Passages' host rows stay success. No sentinel inserted while a row is
+//     known to carry the abort ([carriesAbort]). An update that misses — the
+//     host's own result landed after the read, or the update failed — has the
+//     rows read again, and the sentinel goes in when no settled row carries it,
+//     or when that read fails;
+//   - rows exist and none carries the abort (an abort between two steps —
+//     render, gate, roster refresh, Cancel — or a Cancel leaving running rows
+//     to finish) — the sentinel below, or the run would read success;
+//   - NO rows exist (early abort: no_hosts / scenario_load_failed /
+//     topology_failed / service_vars_failed / input_invalid / render_failed, and
+//     also keeper_dispatch_failed on Passage 0 — the first Passage's keeper
+//     tasks run BEFORE any host-dispatch) — insert ONE sentinel row
+//     [render.RunSentinelSID] with status=`terminal`, error_summary=reason and
+//     passage=step, the step the run stopped at (0 when it stopped outside a
+//     step).
+//
+// `terminal` is the failure terminal status (see [failureTerminalStatus]):
+// cancelled on operator Cancel, otherwise failed.
+//
+// handled — the rows the caller marks `apply_runs.handled` once this returns true
+// (rule 5), decided as marked already. Returns whether the handled marks may be
+// written: false when the first read fails or the sentinel could not be written, and
+// the caller then leaves them unmarked. A second read that fails writes the sentinel
+// all the same — it never makes an aborted run read success — and returns false.
+//
+// reason's source of truth is the abort reason (no_hosts etc.). Write errors
+// are only logged (warn): the incarnation is already error_locked, losing a
+// barrier row degrades observability, not a reason to fail the goroutine.
+// Detached ctx — the original ctx may have been cancelled (Shutdown/timeout),
+// as in [lockIncarnation].
+func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reason string, step int, terminal applyrun.Status, keepRunning bool, handled []runRow, log *slog.Logger) bool {
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 
@@ -1591,11 +1710,11 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 	if err != nil {
 		log.Warn("scenario: reading apply_runs to terminalize the run failed",
 			slog.String("reason", reason), slog.Any("error", err))
-		return
+		return false
 	}
 
 	summary := reason
-	if len(statuses) == 0 || !carriesAbort(statuses, keepRunning) {
+	if len(statuses) == 0 || !carriesAbort(statuses, keepRunning, handled) {
 		// Early abort: no hosts, no rows. The sentinel closes the run with a
 		// terminal so the Voyage-awaiter doesn't wait forever. reason is the
 		// abort-cause text (carries no secrets; render/dispatch cause doesn't
@@ -1604,29 +1723,7 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 		// Also an abort between two steps, or a Cancel whose running rows are left
 		// to finish: no row would carry the failure, and once the lock is released
 		// the run would read success to the runs API and the Voyage (NIM-972).
-		run := applyrun.ApplyRun{
-			ApplyID:         spec.ApplyID,
-			SID:             render.RunSentinelSID,
-			IncarnationName: spec.IncarnationName,
-			Scenario:        spec.ScenarioName,
-			Status:          terminal,
-			ErrorSummary:    &summary,
-			// The step the run stopped at: a render that fails at step 2 leaves
-			// only step 1's rows, and the sentinel is the one row naming step 2.
-			Passage:      step,
-			StartedByAID: startedByPtr(spec.StartedByAID),
-			Input:        spec.inputSnapshot,
-			// Engine provenance (ADR-0076(l)): the sentinel closes a run that never
-			// reached a host, so only the keeper that tried is recordable — and it
-			// is worth recording, since an abort at render is exactly the failure a
-			// version mismatch produces.
-			KeeperVersion: r.deps.KeeperVersion,
-		}
-		if ierr := applyrun.Insert(wctx, r.deps.DB, &run); ierr != nil {
-			log.Warn("scenario: inserting apply_runs sentinel row failed - run without a terminal row",
-				slog.String("reason", reason), slog.Any("error", ierr))
-		}
-		return
+		return r.insertRunSentinel(wctx, spec, reason, step, terminal, log)
 	}
 
 	// Late abort: terminalize real hosts' non-terminal rows to terminal
@@ -1636,6 +1733,7 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 	//     it, an honest RunResult will arrive (honest reporting).
 	//   - timeout/dead-host/ctx.Err (!keepRunning): no RunResult will arrive,
 	//     the reaper doesn't pick up running — force-fail (BAG-1 recovery).
+	missed := false
 	for _, st := range statuses {
 		switch st.Status {
 		case applyrun.StatusPlanned, applyrun.StatusClaimed, applyrun.StatusDispatched:
@@ -1649,10 +1747,65 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 			continue // already terminal
 		}
 		if uerr := applyrun.UpdateStatus(wctx, r.deps.DB, spec.ApplyID, st.SID, st.Passage, terminal, &summary); uerr != nil {
+			missed = true
 			log.Warn("scenario: terminalizing apply_runs row failed",
 				slog.String("sid", st.SID), slog.Int("passage", st.Passage), slog.String("reason", reason), slog.Any("error", uerr))
 		}
 	}
+	// Every row that carried the abort at the read still does, unless its update
+	// missed: the host's own success may have landed after the read, or may land yet,
+	// the update having failed. Were that row the one to carry the abort, the run
+	// would read success, so the rows are read again and only the settled ones count.
+	if !missed {
+		return true
+	}
+	statuses, err = applyrun.SelectStatusesByApplyID(wctx, r.deps.DB, spec.ApplyID)
+	if err != nil {
+		log.Warn("scenario: re-reading apply_runs after terminalizing the run failed",
+			slog.String("reason", reason), slog.Any("error", err))
+		// The rows may all end in success; a sentinel never makes an aborted run read so.
+		r.insertRunSentinel(wctx, spec, reason, step, terminal, log)
+		return false
+	}
+	settled := statuses[:0]
+	for _, st := range statuses {
+		if rowTerminal(st.Status) {
+			settled = append(settled, st)
+		}
+	}
+	if carriesAbort(settled, keepRunning, handled) {
+		return true
+	}
+	return r.insertRunSentinel(wctx, spec, reason, step, terminal, log)
+}
+
+// insertRunSentinel writes the run sentinel [render.RunSentinelSID] of
+// [Runner.ensureTerminalApplyRun], reporting whether it landed.
+func (r *Runner) insertRunSentinel(ctx context.Context, spec RunSpec, reason string, step int, terminal applyrun.Status, log *slog.Logger) bool {
+	run := applyrun.ApplyRun{
+		ApplyID:         spec.ApplyID,
+		SID:             render.RunSentinelSID,
+		IncarnationName: spec.IncarnationName,
+		Scenario:        spec.ScenarioName,
+		Status:          terminal,
+		ErrorSummary:    &reason,
+		// The step the run stopped at: a render that fails at step 2 leaves
+		// only step 1's rows, and the sentinel is the one row naming step 2.
+		Passage:      step,
+		StartedByAID: startedByPtr(spec.StartedByAID),
+		Input:        spec.inputSnapshot,
+		// Engine provenance (ADR-0076(l)): the sentinel closes a run with no row
+		// known to carry the abort, so only the keeper that tried is recordable —
+		// and it is worth recording, since an abort at render is exactly the
+		// failure a version mismatch produces.
+		KeeperVersion: r.deps.KeeperVersion,
+	}
+	if err := applyrun.Insert(ctx, r.deps.DB, &run); err != nil {
+		log.Warn("scenario: inserting apply_runs sentinel row failed - run without a terminal row",
+			slog.String("reason", reason), slog.Any("error", err))
+		return false
+	}
+	return true
 }
 
 // writeDestroyFailedAudit writes an incarnation.destroy_failed audit event
@@ -1754,14 +1907,18 @@ func (r *Runner) runOutcome(spec RunSpec, status incarnation.Status, cause error
 // incarnation and its state_history row. This is the ONLY commit path that
 // stamps: a successful run is the one that produced the state, so it is the one
 // entitled to say which engines produced it.
-func (r *Runner) commitSuccess(ctx context.Context, spec RunSpec, stateBefore map[string]any, engineCompat *incarnation.EngineCompat) error {
+//
+// handled — the rows whose every failure a rescue handled (rule 5), marked in the
+// same transaction: the incarnation reads ready only beside a run that reads success,
+// and a row that cannot be marked fails the commit.
+func (r *Runner) commitSuccess(ctx context.Context, spec RunSpec, stateBefore map[string]any, engineCompat *incarnation.EngineCompat, handled []runRow) error {
 	historyID := audit.NewULID()
 	return pgx.BeginFunc(ctx, r.deps.DB, func(tx pgx.Tx) error {
 		current, err := incarnation.SelectStateForUpdate(ctx, tx, spec.IncarnationName)
 		if err != nil {
 			return err
 		}
-		return incarnation.UpdateStateFromRun(
+		if err := incarnation.UpdateStateFromRun(
 			ctx, tx,
 			spec.IncarnationName, spec.ScenarioName, spec.ApplyID,
 			stateBefore, current,
@@ -1770,7 +1927,15 @@ func (r *Runner) commitSuccess(ctx context.Context, spec RunSpec, stateBefore ma
 			historyID,
 			engineCompat,
 			r.runOutcome(spec, incarnation.StatusReady, nil, nil),
-		)
+		); err != nil {
+			return err
+		}
+		for _, row := range handled {
+			if err := applyrun.MarkHandled(ctx, tx, spec.ApplyID, row.sid, row.step); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

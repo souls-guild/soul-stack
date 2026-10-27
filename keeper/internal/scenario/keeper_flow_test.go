@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"testing"
 
+	"google.golang.org/protobuf/types/known/structpb"
+
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
@@ -154,6 +156,28 @@ func TestSkippedOn_ClearsWhatGatesARunningTask(t *testing.T) {
 	}
 	if !sent.FlowBySID["h"].Skip || child.FlowBySID != nil || child.OnFailIdx == nil {
 		t.Errorf("clone or original wrong: sent=%+v original=%+v", sent.FlowBySID, child)
+	}
+}
+
+// ★ GUARD (ADR-0091 amendment NIM-993, rule 1). A grouped cross-step unit left
+// unrendered for a live host travels there as `when: false` with empty params: the
+// task's Params and ParamsBySID are the renderings of the hosts it was routed to. A
+// grouped child the Keeper skipped after rendering it keeps its own params.
+//
+// Mutation: rebuild the clone's flow without Unrendered → host b is sent a's params.
+func TestSkippedOn_AnUnrenderedChildTravelsWithNoHostsParams(t *testing.T) {
+	params := func(cmd string) *structpb.Struct {
+		return &structpb.Struct{Fields: map[string]*structpb.Value{"cmd": structpb.NewStringValue(cmd)}}
+	}
+	unit := flowTask(4, "undo", true, map[string]render.HostFlow{"a": {}, "b": {Skip: true, Unrendered: true}, "c": {Skip: true}})
+	unit.Params, unit.ParamsBySID = params("undo a"), map[string]*structpb.Struct{"a": params("undo a"), "c": params("undo c")}
+	out, _ := settleHosts(map[string][]*render.RenderedTask{"b": {unit}, "c": {unit}}, nil, 1)
+	sent := render.ToProtoTasksForHost(out["b"], "b")[0]
+	if len(sent.GetParams().GetFields()) != 0 || sent.GetWhen() != "false" {
+		t.Errorf("b is sent params %v, when %q - want no params, when false", sent.GetParams(), sent.GetWhen())
+	}
+	if got := render.ToProtoTasksForHost(out["c"], "c")[0].GetParams().GetFields()["cmd"].GetStringValue(); got != "undo c" {
+		t.Errorf("c, skipped after it rendered, is sent %q, want its own params", got)
 	}
 }
 

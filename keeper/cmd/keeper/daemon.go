@@ -5724,6 +5724,10 @@ func (c stepQueueChecker) AllLiveTakeStepRows(ctx context.Context) (bool, error)
 	return keeperredis.AllLiveHaveCapability(ctx, c.rc, keeperredis.CapabilityStepQueue)
 }
 
+func (c stepQueueChecker) AllLiveHoldRescues(ctx context.Context) (bool, error) {
+	return keeperredis.AllLiveHaveCapability(ctx, c.rc, keeperredis.CapabilityRescueHold)
+}
+
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.

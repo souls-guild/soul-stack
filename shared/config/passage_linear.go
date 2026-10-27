@@ -16,6 +16,7 @@ package config
 import (
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // StepNode is one task's place in the step order.
@@ -137,17 +138,8 @@ func CrossStepRequisite(tasks []Task, steps []StepNode) (CrossPassageInfo, bool)
 	if len(steps) != len(tasks) {
 		return CrossPassageInfo{}, false
 	}
-	var links []stepLink
-	for i := range tasks {
-		collectStepLinks(&tasks[i], steps[i], nil, &links)
-	}
-	emitted := map[string][]int{}
-	for _, l := range links {
-		if l.task.Register != "" {
-			emitted[l.task.Register] = append(emitted[l.task.Register], l.step)
-		}
-	}
-	for _, l := range links {
+	emitted := RegisterSteps(tasks, steps)
+	for _, l := range planStepLinks(tasks, steps) {
 		for _, req := range l.reqs {
 			for _, src := range emitted[req.name] {
 				if src != l.step {
@@ -167,23 +159,15 @@ func CrossStepRequisite(tasks []Task, steps []StepNode) (CrossPassageInfo, bool)
 
 // RescueSteps are the steps of a linear plan holding an `onfail:` task whose source
 // runs at an earlier step, each with the source registers its rescues name — the
-// steps a run that a failure ended still walks to (docs/scenario/settings.md §4). A
+// steps a run that a failure ended still walks to (docs/scenario/rescues.md). A
 // keeper-side `onfail:` task is no rescue: the Keeper evaluates no requisite of its
 // own tasks. steps is [LinearPassage]'s for the same tasks.
 func RescueSteps(tasks []Task, steps []StepNode) map[int][]string {
 	if len(steps) != len(tasks) {
 		return nil
 	}
-	var links []stepLink
-	for i := range tasks {
-		collectStepLinks(&tasks[i], steps[i], nil, &links)
-	}
-	emitted := map[string][]int{}
-	for _, l := range links {
-		if l.task.Register != "" {
-			emitted[l.task.Register] = append(emitted[l.task.Register], l.step)
-		}
-	}
+	links := planStepLinks(tasks, steps)
+	emitted := RegisterSteps(tasks, steps)
 	out := map[int][]string{}
 	for _, l := range links {
 		if IsKeeperSideTask(*l.task) {
@@ -202,6 +186,143 @@ func RescueSteps(tasks []Task, steps []StepNode) map[int][]string {
 		}
 	}
 	return out
+}
+
+// RegisterSteps is, for each register a linear plan sets, the steps of the tasks
+// that set it: a group's child at the group's step, an applier and a `loop:` at
+// their one step. steps is [LinearPassage]'s for the same tasks; nil when it was
+// numbered from another plan.
+func RegisterSteps(tasks []Task, steps []StepNode) map[string][]int {
+	if len(steps) != len(tasks) {
+		return nil
+	}
+	out := map[string][]int{}
+	for _, l := range planStepLinks(tasks, steps) {
+		if l.task.Register != "" {
+			out[l.task.Register] = append(out[l.task.Register], l.step)
+		}
+	}
+	return out
+}
+
+// StepSpan is the first and the last step of the construct at plan position path
+// ([StepPath] form): a default block runs from its first child's step to its last
+// descendant's, any other task — a group included — is one step, and so is every
+// position below a group, which is not checked against the group's children. ok is
+// false for a path outside steps: past a default block's last child, or below a task
+// that is neither a group nor a block with children.
+func StepSpan(steps []StepNode, path string) (first, last int, ok bool) {
+	if path == "" {
+		return 0, 0, false
+	}
+	nodes := steps
+	var node StepNode
+	parts := strings.Split(path, "/")
+	for i, part := range parts {
+		pos, err := strconv.Atoi(part)
+		if err != nil || pos < 0 || pos >= len(nodes) {
+			return 0, 0, false
+		}
+		node = nodes[pos]
+		if node.Children == nil {
+			if i < len(parts)-1 && !node.Group {
+				return 0, 0, false
+			}
+			return node.Step, node.Step, true
+		}
+		nodes = node.Children
+	}
+	tail := node
+	for len(tail.Children) > 0 {
+		tail = tail.Children[len(tail.Children)-1]
+	}
+	return node.Step, tail.Step, true
+}
+
+// CrossStepUnits are the plan positions ([StepPath]) of a linear plan's cross-step
+// rescue units: the outermost units of [RescueUnits] with no source before them in
+// their own message (ADR-0091 amendment NIM-993, rule 1). Such a unit never fires on a
+// live host.
+//
+// A unit's sources are every source its tasks name, nested units included, and each is
+// set outside the unit (onfail_names_rescue). So a source set at a step of the unit is a
+// sibling in the group the unit sits in, travelling in the unit's message. It can fire
+// the unit on a live host only if it comes before the unit: the Soul runs a message in
+// plan order, so a sibling after the unit (a forward `onfail:`) has not run when the
+// unit does. A source at any other step cannot: one at an earlier step fires the unit
+// only on a held or a judged host, neither of them live, and one at a later step cannot
+// have failed when the unit runs. A destiny's own units are another plan's, decided in
+// the destiny's message, and a source no task sets keeps its unit out.
+//
+// nil when the plan holds none. steps is [LinearPassage]'s for the same tasks.
+func CrossStepUnits(tasks []Task, steps []StepNode) map[string]bool {
+	if len(steps) != len(tasks) {
+		return nil
+	}
+	units, visits := walkRescueUnits(tasks)
+	if len(units) == 0 {
+		return nil
+	}
+	// Pre-order: every unit nested in an outermost one follows it, before any unit
+	// outside it.
+	var outer []string
+	sources := map[string][]string{}
+	for _, u := range units {
+		if n := len(outer); n == 0 || !(RescueUnit{Path: outer[n-1]}).Holds(u.Path) {
+			outer = append(outer, u.Path)
+		}
+		key := outer[len(outer)-1]
+		sources[key] = append(sources[key], u.Source)
+	}
+	order := make(map[string]int, len(visits))
+	setters := map[string][]registerSetter{}
+	for i, v := range visits {
+		order[v.path] = i
+		if v.task.Register == "" {
+			continue
+		}
+		if step, _, ok := StepSpan(steps, v.path); ok {
+			setters[v.task.Register] = append(setters[v.task.Register], registerSetter{step: step, order: i})
+		}
+	}
+	var out map[string]bool
+	for _, key := range outer {
+		first, last, ok := StepSpan(steps, key)
+		if !ok || !sourcesOutside(sources[key], first, last, order[key], setters) {
+			continue
+		}
+		if out == nil {
+			out = map[string]bool{}
+		}
+		out[key] = true
+	}
+	return out
+}
+
+// registerSetter is a task setting a register: its step, and its pre-order position
+// in the plan.
+type registerSetter struct{ step, order int }
+
+// sourcesOutside reports whether every one of sources is set, and none of them by a
+// task at a step from first to last that comes before the unit, whose pre-order
+// position is unit.
+func sourcesOutside(sources []string, first, last, unit int, setters map[string][]registerSetter) bool {
+	for _, name := range sources {
+		at := setters[name]
+		if len(at) == 0 || slices.ContainsFunc(at, func(s registerSetter) bool { return s.step >= first && s.step <= last && s.order < unit }) {
+			return false
+		}
+	}
+	return true
+}
+
+// planStepLinks is every task of a plan with its step and requisites, in plan order.
+func planStepLinks(tasks []Task, steps []StepNode) []stepLink {
+	var links []stepLink
+	for i := range tasks {
+		collectStepLinks(&tasks[i], steps[i], nil, &links)
+	}
+	return links
 }
 
 // stepLink is one task of the plan with the step it runs in and every requisite
@@ -229,6 +350,10 @@ func collectStepLinks(t *Task, node StepNode, inherited []taskRequisite, out *[]
 	for j := range t.Block.Block {
 		child := StepNode{Step: node.Step}
 		if node.Children != nil {
+			// A shape numbered from another plan: render refuses it at the block.
+			if j >= len(node.Children) {
+				return
+			}
 			child = node.Children[j]
 		}
 		collectStepLinks(&t.Block.Block[j], child, reqs, out)

@@ -253,6 +253,23 @@ message RenderedTask {
   // (a mixed `require: [a, "all"]` is a config-validation error), so when this
   // is true require_idx is empty. false = not an all-barrier.
   bool require_all = 20;
+
+  // rescue_unit: the rescue unit this task belongs to, numbered from 1 within
+  // THIS ApplyRequest; 0 = the task is in no unit. For one source register, a
+  // unit is the outermost task, `block:` or `apply:` whose own `onfail:` names it,
+  // with everything below it (ADR-0091 amendment NIM-993, rule 1). The plan Soul
+  // receives is flattened, so without the number a block of two rescue children
+  // would look the same as two separate rescues.
+  //
+  // A Soul applies the handling rule (a unit that succeeds handles its source's
+  // failure, rule 6) only to a message in which some task carries it; a message
+  // where every task carries 0 keeps fail-stop, as from an older Keeper.
+  //
+  // Half wired: the Soul reads it (NIM-993 slice S2), but nothing sets it yet, so
+  // every message carries 0 and keeps fail-stop. The Keeper sets it in a later
+  // slice of NIM-993.
+  // Forward-compat (ADR-012(c) only-add). Never reuse this field number.
+  int32 rescue_unit = 22;
 }
 
 // ApplyRequest is Keeper -> Soul's command to run a job.

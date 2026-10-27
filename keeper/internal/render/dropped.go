@@ -1,6 +1,8 @@
 package render
 
 import (
+	"slices"
+
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -32,10 +34,14 @@ func stampOnFailure(in RenderInput, tasks []*RenderedTask, from int, task config
 	}
 }
 
-// coveredDropped is the hosts among roster — dropped hosts, narrowed by the enclosing
-// blocks — that task's `on:` selects. Its `where:` is not evaluated: it would read the
-// registers of a host that left the run, which stop at the step it failed. A
-// `run_once:` task reaches one live host, so it covers none.
+// coveredDropped is the hosts among roster — dropped or held hosts, narrowed by the
+// enclosing blocks — that task's `on:` selects. Its `where:` is not evaluated: it would
+// read the registers of a host that left the run, which stop at the step it failed. A
+// `run_once:` task reaches one live host, so it covers none, and the children of a
+// `run_once:` block none either. A held host gets there what a dropped one gets: for
+// each task it does not receive, "the Keeper writes the audit SKIPPED it writes for a
+// dropped host today" (ADR-0091 amendment NIM-993, rule 3) — so under `run_once:` no
+// record, and no register is synthesized for it.
 func coveredDropped(engine *cel.Engine, in RenderInput, task config.Task, roster []*topology.HostFacts) ([]*topology.HostFacts, error) {
 	if len(roster) == 0 || task.RunOnce || in.destinyIsolated {
 		return nil, nil
@@ -62,14 +68,15 @@ func stampNotReached(plans []DispatchPlan, covered []*topology.HostFacts) {
 }
 
 // runHosts is every host of the run for `soulprint.hosts`: the roster and the hosts
-// the run dropped, in SID order, so a dropped host keeps its position and
-// `soulprint.hosts[0]` names the same host before and after a drop.
+// the run holds or dropped, in SID order, so a host keeps its position and
+// `soulprint.hosts[0]` names the same host before and after it leaves the roster.
 func runHosts(in RenderInput) []*topology.HostFacts {
-	if len(in.Dropped) == 0 {
+	if len(in.Dropped) == 0 && len(in.HeldHosts) == 0 {
 		return in.Hosts
 	}
-	out := make([]*topology.HostFacts, 0, len(in.Hosts)+len(in.Dropped))
+	out := make([]*topology.HostFacts, 0, len(in.Hosts)+len(in.HeldHosts)+len(in.Dropped))
 	out = append(out, in.Hosts...)
+	out = append(out, in.HeldHosts...)
 	out = append(out, in.Dropped...)
 	sortBySID(out)
 	return out
@@ -77,12 +84,23 @@ func runHosts(in RenderInput) []*topology.HostFacts {
 
 // droppedSIDs is the set of in.Dropped.
 func droppedSIDs(in RenderInput) map[string]bool {
-	if len(in.Dropped) == 0 {
-		return nil
+	return sidSet(in.Dropped)
+}
+
+// notLiveSIDs is the set of the hosts in.Dropped and in.HeldHosts hold: no ordinary
+// task targets them, and a rescue reaches them where it fires.
+func notLiveSIDs(in RenderInput) map[string]bool {
+	return sidSet(slices.Concat(in.Dropped, in.HeldHosts))
+}
+
+// coveredAway is [coveredDropped] over dropped and held, the two covers of an enclosing
+// scope, merged: the hosts a task of it would have reached that it may not reach.
+func coveredAway(engine *cel.Engine, in RenderInput, task config.Task, dropped, held []*topology.HostFacts) (dropCover, heldCover, both []*topology.HostFacts, err error) {
+	if dropCover, err = coveredDropped(engine, in, task, dropped); err != nil {
+		return nil, nil, nil, err
 	}
-	out := make(map[string]bool, len(in.Dropped))
-	for _, h := range in.Dropped {
-		out[h.SID] = true
+	if heldCover, err = coveredDropped(engine, in, task, held); err != nil {
+		return nil, nil, nil, err
 	}
-	return out
+	return dropCover, heldCover, mergeHosts(dropCover, heldCover), nil
 }

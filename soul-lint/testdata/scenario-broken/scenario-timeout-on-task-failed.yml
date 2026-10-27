@@ -1,0 +1,6 @@
+name: timeout-on-task-failed
+tasks:
+  - name: Refuse an unsupported release
+    module: core.task.failed
+    timeout: 30s
+    params: { message: the legacy release is not supported }

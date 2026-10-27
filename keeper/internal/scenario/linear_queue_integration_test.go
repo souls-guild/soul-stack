@@ -32,12 +32,19 @@ import (
 // goroutine decides which hosts get the step; an Acolyte that shares nothing with
 // it but PG renders the step for its host and sends it.
 
+// stepQueueAnswer answers as a cluster does today: holdRescues is false while no
+// instance announces rescue_hold.
 type stepQueueAnswer struct {
-	ok  bool
-	err error
+	ok          bool
+	err         error
+	holdRescues bool
 }
 
 func (a stepQueueAnswer) AllLiveTakeStepRows(context.Context) (bool, error) { return a.ok, a.err }
+
+func (a stepQueueAnswer) AllLiveHoldRescues(context.Context) (bool, error) {
+	return a.holdRescues, a.err
+}
 
 // newLinearQueueRunner is the instance that owns the run: Acolytes on, linear,
 // and every live instance answers that it takes step rows.

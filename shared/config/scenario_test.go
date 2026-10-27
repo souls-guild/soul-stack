@@ -495,7 +495,7 @@ tasks:
 // task is read off its MODULE, and the task does not restate it.
 //
 // The core module sets are disjoint (the seven of coremanifest.KeeperSideAddrs()
-// on the keeper, the other twenty-one on the Soul side), so the address decides on
+// on the keeper, the other twenty-two on the Soul side), so the address decides on
 // its own. What used to be here was the opposite rule — `state_capture_not_on_keeper`,
 // which refused a capture that did NOT carry `on: keeper` — and it existed only
 // to force the author to write what the engine already knew. Both halves are

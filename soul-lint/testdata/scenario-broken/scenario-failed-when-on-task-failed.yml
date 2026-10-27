@@ -1,0 +1,6 @@
+name: failed-when-on-task-failed
+tasks:
+  - name: Refuse an unsupported release
+    module: core.task.failed
+    failed_when: "false"
+    params: { message: the legacy release is not supported }

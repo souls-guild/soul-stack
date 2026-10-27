@@ -374,6 +374,16 @@ func (r *ApplyRunner) ActiveSet() []*keeperv1.ActiveApply {
 // failed_when:false (ignore_errors) makes a task OK — it triggers neither
 // fail-stop nor onfail.
 //
+// A rescue that succeeds handles the failure (ADR-0091 amendment NIM-993,
+// rule 6) — only in a message where some task carries a `rescue_unit` mark; a
+// message with none keeps the fail-stop above to the letter. With marks, a
+// failed task of no unit is a source and is held; ordinary tasks skip while any
+// failure is held; a unit runs when one of the sources its tasks name is held,
+// reading its requisite before its `when:`; a unit that executed something and
+// failed nowhere handles every source it holds, and the ordinary tasks after it
+// run again once nothing is held. RunResult is FAILED only for a failure still
+// held at the end, the final barrier's included ([rescueUnits]).
+//
 // Error strategy:
 //   - when: evaluation error → TaskEvent.status=FAILED (a runtime-error CEL is
 //     expected per templating.md §10; a compile-error is a keeper↔soul
@@ -475,11 +485,18 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 	// source failed (rescue/cleanup, destiny/tasks.md §8). RunResult still
 	// ends up FAILED — onfail compensates, it doesn't undo the failure.
 	runFailed := false
+	// units is nil unless some task carries a rescue_unit mark. With marks
+	// runFailed stays false: what is held is the units', and runStatus is decided
+	// after the final barrier.
+	units := newRescueUnits(req.GetTasks())
 	for idx, task := range req.GetTasks() {
 		// Cancel may have arrived between tasks — check before running the module.
 		if err := runCtx.Err(); err != nil {
 			runStatus = keeperv1.RunStatus_RUN_STATUS_CANCELLED
 			break
+		}
+		if units != nil {
+			units.settle(int32(idx))
 		}
 
 		// ADR-0075 barriers. What this task waits for is resolved HERE, at its
@@ -504,9 +521,31 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 		// reached for it, and the task doing the reaching skips with everything
 		// else. Flows already in flight are NOT cancelled — the final barrier
 		// collects them.
-		if anyFailed(gateWait) || (!async && anyFailed(startWait)) {
+		if units != nil {
+			units.observe(gateWait)
+			if !async {
+				units.observe(startWait)
+			}
+		} else if anyFailed(gateWait) || (!async && anyFailed(startWait)) {
 			runStatus = keeperv1.RunStatus_RUN_STATUS_FAILED
 			runFailed = true
+		}
+
+		halted := runFailed
+		if units != nil {
+			if reason, skip := units.skipUnitTask(int32(idx), task); skip {
+				ev := skippedTaskEvent(applyID, int32(idx))
+				state.record(int32(idx), task.GetRegister(), ev.GetRegisterData())
+				if err := sendTaskEvent(sink, ev, task, passage); err != nil {
+					return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
+				}
+				r.metrics.ObserveTask(taskResult(ev.GetStatus()))
+				r.metrics.ObserveSkipped(reason)
+				continue
+			}
+			// A unit task that fires runs while its sources are held; ordinary tasks
+			// wait for every held failure to be handled.
+			halted = units.anyHeld() && units.unitAt(int32(idx)) == nil
 		}
 
 		// After a run failure, ordinary (non-onfail) tasks don't execute: they're
@@ -523,14 +562,14 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 		// lost under a generic skipped). Emit the aggregate immediately: children
 		// are earlier in the plan and already in state (the terminal is last in
 		// its group; an async child was collected by the gate barrier above).
-		if runFailed && len(task.GetOnfailIdx()) == 0 {
+		if halted && len(task.GetOnfailIdx()) == 0 {
 			var ev *keeperv1.TaskEvent
 			if agg := task.GetAggregateOf(); len(agg) > 0 {
 				ev = &keeperv1.TaskEvent{
 					ApplyId:      applyID,
 					TaskIdx:      int32(idx),
 					Status:       keeperv1.TaskStatus_TASK_STATUS_OK,
-					RegisterData: aggregateRegisterData(agg, state),
+					RegisterData: aggregateRegisterData(agg, state, units),
 				}
 			} else {
 				ev = skippedTaskEvent(applyID, int32(idx))
@@ -580,8 +619,12 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 			// when-error = task FAILED → fail-stop with rescue (same as a module
 			// failure): mark the run failed but don't break the loop — onfail tasks
 			// on this task will run, the rest skip (runFailed branch).
-			runStatus = keeperv1.RunStatus_RUN_STATUS_FAILED
-			runFailed = true
+			if units != nil {
+				units.ran(int32(idx), ev)
+			} else {
+				runStatus = keeperv1.RunStatus_RUN_STATUS_FAILED
+				runFailed = true
+			}
 			continue
 		}
 
@@ -591,7 +634,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 		// task in a normal (no-failure) run is always SKIPPED, running only when
 		// its source failed (skipOnFail). Multiple requisites combine with AND.
 		if !when || skipOnChanges(task.GetOnchangesIdx(), state) ||
-			skipOnFail(task.GetOnfailIdx(), state) {
+			units.onfailUnmet(int32(idx), task, state) {
 			ev := skippedTaskEvent(applyID, int32(idx))
 			state.record(int32(idx), task.GetRegister(), ev.GetRegisterData())
 			if err := sendTaskEvent(sink, ev, task, passage); err != nil {
@@ -614,12 +657,18 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 		// flow here and the loop moves on immediately (ADR-0075(a)); its start
 		// barrier travels with it. Nothing further in this iteration concerns it —
 		// its outcome reaches the run through a barrier or the final wait.
+		if units != nil {
+			task = units.withDefaultMessage(int32(idx), task)
+		}
 		if async {
-			r.launchAsync(runCtx, flows, sink, applyID, passage, int32(idx), task, state, startWait)
+			fl := r.launchAsync(runCtx, flows, sink, applyID, passage, int32(idx), task, state, startWait)
+			if units != nil {
+				units.launched(int32(idx), fl)
+			}
 			continue
 		}
 
-		ev, err := r.executeTask(runCtx, sink, applyID, passage, int32(idx), task, state, req.GetDryRun())
+		ev, err := r.executeTask(runCtx, sink, applyID, passage, int32(idx), task, state, req.GetDryRun(), units)
 		if err != nil {
 			return err
 		}
@@ -627,7 +676,9 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 			runStatus = keeperv1.RunStatus_RUN_STATUS_CANCELLED
 			break
 		}
-		if failedStatus(ev.GetStatus()) {
+		if units != nil {
+			units.ran(int32(idx), ev)
+		} else if failedStatus(ev.GetStatus()) {
 			// Fail-stop with rescue (destiny/tasks.md §8): a failure marks
 			// RunResult FAILED irreversibly (onfail tasks are cleanup, not an undo),
 			// but the loop doesn't stop. Subsequent ordinary tasks are skipped
@@ -645,8 +696,26 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 	// might still be writing to the sink. There is no timeout: a module that
 	// ignores its context hangs the run exactly as it already does in the main
 	// flow.
+	cancelled := runStatus == keeperv1.RunStatus_RUN_STATUS_CANCELLED
+	if units != nil && !cancelled {
+		units.settle(int32(len(req.GetTasks())))
+	}
 	asyncFailed := flows.wait()
-	if asyncFailed && runStatus == keeperv1.RunStatus_RUN_STATUS_SUCCESS {
+	if units != nil {
+		// Only a failure still held fails the message, the final barrier's
+		// included: a source collected here has no unit left to handle it. A
+		// Cancel overrides that (rule 9) only where it stopped a task or a flow:
+		// the units it stopped handled nothing, and what they left held is not a
+		// FAILED. One that lands after everything finished stopped nothing, so the
+		// settled verdict stands, as on the unmarked path.
+		units.observe(flows.all())
+		switch {
+		case cancelled || anyCancelled(flows.all()):
+			runStatus = keeperv1.RunStatus_RUN_STATUS_CANCELLED
+		case units.anyHeld():
+			runStatus = keeperv1.RunStatus_RUN_STATUS_FAILED
+		}
+	} else if asyncFailed && runStatus == keeperv1.RunStatus_RUN_STATUS_SUCCESS {
 		// An async failure nobody awaited still fails the run — the third barrier
 		// is where it surfaces. CANCELLED is not downgraded: cancellation is the
 		// overriding fact about the run.
@@ -683,7 +752,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 // flow stops on CANCELLED and engages fail-stop on a failure, an async flow only
 // records the verdict for whoever awaits it. The error is a sink I/O failure
 // (broken stream), already wrapped for return from Run.
-func (r *ApplyRunner) executeTask(runCtx context.Context, sink EventSink, applyID string, passage, idx int32, task *keeperv1.RenderedTask, state *registerIndex, dryRun bool) (*keeperv1.TaskEvent, error) {
+func (r *ApplyRunner) executeTask(runCtx context.Context, sink EventSink, applyID string, passage, idx int32, task *keeperv1.RenderedTask, state *registerIndex, dryRun bool, units *rescueUnits) (*keeperv1.TaskEvent, error) {
 	var ev *keeperv1.TaskEvent
 	if runCtx.Err() != nil {
 		// Cancelled before the module could start. Only an async flow reaches this
@@ -722,7 +791,7 @@ func (r *ApplyRunner) executeTask(runCtx context.Context, sink EventSink, applyI
 		// override happens AFTER the cancel branch (a cancelled task keeps
 		// CANCELLED) and BEFORE the send/record — both the TaskEvent sent to
 		// Keeper and the register used by later gating carry the aggregate.
-		ev.RegisterData = aggregateRegisterData(agg, state)
+		ev.RegisterData = aggregateRegisterData(agg, state, units)
 	}
 
 	if err := sendTaskEvent(sink, ev, task, passage); err != nil {
@@ -756,7 +825,7 @@ func (r *ApplyRunner) executeTask(runCtx context.Context, sink EventSink, applyI
 // The concurrency slot is taken AFTER the barrier, so a flow that is waiting
 // never occupies one — otherwise a full ceiling could wedge a run whose queued
 // flows are waiting for flows that cannot get in.
-func (r *ApplyRunner) launchAsync(runCtx context.Context, flows *asyncFlows, sink EventSink, applyID string, passage, idx int32, task *keeperv1.RenderedTask, state *registerIndex, wait []*asyncFlow) {
+func (r *ApplyRunner) launchAsync(runCtx context.Context, flows *asyncFlows, sink EventSink, applyID string, passage, idx int32, task *keeperv1.RenderedTask, state *registerIndex, wait []*asyncFlow) *asyncFlow {
 	fl := &asyncFlow{idx: idx, name: task.GetRegister(), done: make(chan struct{})}
 	flows.add(fl)
 	state.markConcurrent()
@@ -767,15 +836,20 @@ func (r *ApplyRunner) launchAsync(runCtx context.Context, flows *asyncFlows, sin
 		release := flows.acquire(runCtx)
 		defer release()
 
-		ev, err := r.executeTask(runCtx, sink, applyID, passage, idx, task, state, false)
+		// No rescue units here: they are the main flow's alone, and the one task
+		// that reads them, an applier's terminal, is never async.
+		ev, err := r.executeTask(runCtx, sink, applyID, passage, idx, task, state, false, nil)
 		if err != nil {
 			flows.recordSendErr(err)
 		}
 		// Written before the close, read only after: that ordering is the whole
 		// synchronization contract of a barrier.
 		fl.failed = failedStatus(ev.GetStatus())
+		fl.cancelled = ev.GetStatus() == keeperv1.TaskStatus_TASK_STATUS_CANCELLED
+		fl.err = ev.GetError()
 		close(fl.done)
 	}()
+	return fl
 }
 
 // sendTaskEvent stamps the TaskEvent with an echo of
@@ -1533,13 +1607,21 @@ func buildRegisterData(status keeperv1.TaskStatus, last *pluginv1.ApplyEvent) *s
 // Child tasks' output fields are NOT projected (out of scope — propagating a
 // declared top-level output: destiny into register.<applier>.<field> is a
 // separate slice). Only DSL-core changed/failed/timed_out/skipped.
-func aggregateRegisterData(aggregateOf []int32, state *registerIndex) *structpb.Struct {
+//
+// units is the message's rescue-unit state, nil without marks: with it, a child
+// failure counts only while unhandled ([rescueUnits.failureCounts]), so a
+// destiny that handled its own failure reads failed=false and an outer
+// `onfail: [<applier>]` does not fire (ADR-0091 amendment NIM-993, rule 6).
+func aggregateRegisterData(aggregateOf []int32, state *registerIndex, units *rescueUnits) *structpb.Struct {
 	var changed, failed, timedOut bool
 	for _, idx := range aggregateOf {
 		rd := state.get(idx)
 		fields := rd.GetFields()
 		if fields["changed"].GetBoolValue() {
 			changed = true
+		}
+		if !units.failureCounts(idx) {
+			continue
 		}
 		if fields["failed"].GetBoolValue() {
 			failed = true

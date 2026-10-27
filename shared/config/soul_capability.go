@@ -89,6 +89,16 @@ const (
 	// NIM-983 — nothing reads the bit yet.
 	CapabilityResultRelay = "result_relay"
 
+	// CapabilityOnfailHandled — inside one message, a rescue unit that succeeds
+	// handles its source's failure: Soul resumes the ordinary tasks after the
+	// unit, skips the later units of that source, and reports RunResult FAILED
+	// only for a failure still unhandled at the message's end (ADR-0091 amendment
+	// NIM-993, rule 6). An older binary keeps fail-stop to the end of the message
+	// and reports FAILED, so a streamed host that does not announce it is refused
+	// a message carrying a source together with a unit naming it
+	// (soul_capability_unsupported).
+	CapabilityOnfailHandled = "onfail_handled"
+
 	// CapabilityModulePrefix — namespace of the per-module capability
 	// `module:<name>`, where name is the module address WITHOUT a state suffix
 	// (`module:core.pkg`, not `module:core.pkg.installed`): the registry key is the
@@ -114,10 +124,10 @@ func ModuleCapability(module string) string { return CapabilityModulePrefix + mo
 // reconnects (Registry.Names() iterates a map). A nil/empty coreModules is
 // legitimate — a build with no modules announces only the feature set.
 func SoulCapabilities(coreModules []string) []string {
-	out := make([]string, 0, len(coreModules)+8)
+	out := make([]string, 0, len(coreModules)+9)
 	out = append(out, CapabilityPassage, CapabilityConsole, CapabilityConsoleStream,
 		CapabilityFlowControl, CapabilityRetry, CapabilityRenderedPredicate, CapabilityDryRun,
-		CapabilityResultRelay)
+		CapabilityResultRelay, CapabilityOnfailHandled)
 	seen := make(map[string]struct{}, len(coreModules))
 	for _, m := range coreModules {
 		if m == "" {

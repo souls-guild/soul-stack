@@ -153,6 +153,7 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest, modules c
 	}
 
 	out = withFile(config.GroupChildKeysUnread(m.Settings, tasks), scenarioPath, out)
+	out = withFile(config.GroupMultipleRescueUnits(m.Settings, tasks), scenarioPath, out)
 
 	// Wide match is a WARN, and unlike everything below it does NOT return: the
 	// wide form is legitimate ("clear every user"), it is just far more often a

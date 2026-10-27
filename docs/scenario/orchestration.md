@@ -67,7 +67,7 @@ Everything else in the scenario task is exactly the same as in the destiny task,
 
 An Applier task can carry `register: <name>` ([destiny/tasks.md §8](../destiny/tasks.md#8-requisites---inter-task-dependencies)) inherited from the DSL core. `register.<name>` has two parts with different implementation status:
 
-- **DSL core `.changed` / `.failed` / `.timed_out` - implemented.** This is **unit `OR`** for all child destiny tasks of the applier: `changed = OR(child.changed)`, similar to `failed` / `timed_out` (`skipped` is always `false`). External `onchanges: [<name>]` / `onfail: [<name>]` / `when: register.<name>.changed` resolves for this unit (previously it crashed with the "unknown register" error) — also when an `onchanges:` consumer is a later step than the applier: the Keeper then resolves the link from the children's own statuses (NIM-931). A later step's `when: register.<name>.*` is settled on the Keeper ([predicate-rendering.md](predicate-rendering.md)), and `onfail:` fires: the host the child failed on still receives the rescue at its step ([settings.md §4](settings.md), NIM-951). Under the deprecated staged model a `when:` across a Passage is refused (`cross_passage_when_unsupported`) and `onfail:` cannot fire. If all child destiny tasks are filtered (`where:` / `include`-`when:`), the aggregate is reduced to `changed/failed/timed_out = false` (no-op applier).
+- **DSL core `.changed` / `.failed` / `.timed_out` - implemented.** This is **unit `OR`** for all child destiny tasks of the applier: `changed = OR(child.changed)`, similar to `failed` / `timed_out` (`skipped` is always `false`). External `onchanges: [<name>]` / `onfail: [<name>]` / `when: register.<name>.changed` resolves for this unit (previously it crashed with the "unknown register" error) — also when an `onchanges:` consumer is a later step than the applier: the Keeper then resolves the link from the children's own statuses (NIM-931). A later step's `when: register.<name>.*` is settled on the Keeper ([predicate-rendering.md](predicate-rendering.md)), and `onfail:` fires: the host the child failed on is held for the rescue, and a rescue that succeeds returns it to the run ([rescues.md](rescues.md), NIM-951, NIM-993). The OR counts every failed child: a rescue inside the destiny does not handle a failure yet, because the Keeper sends no `rescue_unit` marks ([known-limitations.md](../known-limitations.md#rescues-what-is-not-built-yet)). A child failure that a later scenario rescue naming the applier handles still reads `failed: true`. Under the deprecated staged model a `when:` across a Passage is refused (`cross_passage_when_unsupported`) and `onfail:` cannot fire. If all child destiny tasks are filtered (`where:` / `include`-`when:`), the aggregate is reduced to `changed/failed/timed_out = false` (no-op applier).
 - **`.<output field>` according to the declared top-level `output:`-contract destiny - PLANNED.** Forwarding application fields destiny ([destiny/output.md](../destiny/output.md)) to `register.<name>.<output field>` is **not yet implemented** (a separate future slice, see note in [destiny/output.md](../destiny/output.md#how-the-caller-reads---register-on-the-applier-task)). In the current volume, `register.<name>` carries only the DSL core. The producing half is unbuilt too: a destiny task cannot fill those fields, because task-level `output:` is refused (`output_unsupported`, [destiny/tasks.md §9](../destiny/tasks.md#9-strength-and-control-of-execution)).
 
 Working example (unit `.changed` / `.failed`):
@@ -288,6 +288,12 @@ default `scenario` no later wave starts and the run ends `failed` once the hosts
 already working have finished — only `onfail:` rescues still go out; under `host`
 the host is dropped and the waves roll on, until `tolerate` is exceeded
 ([settings.md §4](settings.md)).
+- **A failure that a later rescue names does not stop the roll** (NIM-993). It is held
+instead of judged: the later waves go on, and the failed host waits for its rescue
+([rescues.md](rescues.md)).
+A canary with a rescue downstream therefore does not stop at its first failure. If no
+rescue handles the failure, it is judged at the barrier of its last rescue, by the
+failed task's `on_failure`.
 - **Interaction with barrier (§7) is an invariant, not an option.** The waves of a
 step close inside the step, and only then does the next step start. A
 `core.state.<verb>` capture placed after a `serial:` step therefore runs once,
@@ -885,6 +891,7 @@ element - **stable** host facts:
 | `os` | map | stable host OS facts (`os.family`, ...). |
 | `covens` | array of string | stable host Coven labels — **real stable tags only** (cluster / project / environment / datacenter). The incarnation name is **no longer** projected here ([ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)); membership lives in `incarnation_membership`, not in `covens`. |
 | `dropped` | bool | the run dropped the host under `on_failure: host` ([settings.md §4](settings.md), NIM-948): it stays listed, at its SID position, so `[0]` names the same host before and after a drop, and receives no later ordinary task — only its rescues (NIM-951). All hosts of the run are `soulprint.hosts`; the ones still in it are `soulprint.hosts.filter(h, !h.dropped)`. `false` on every host of a run that dropped none, and of every staged run. |
+| `held` | bool | the host failed at a task that a later rescue names, and it waits for that rescue (NIM-993, [rescues.md](rescues.md)). It receives only its rescues. If one succeeds, the host returns to the run and reads `held: false` on the steps after it. `dropped` stays `false` while the host is held, so `!h.dropped` keeps meaning "part of the run's outcome"; the hosts receiving tasks now are `soulprint.hosts.filter(h, !h.dropped && !h.held)`. A host dropped while held reads `dropped: true`, `held: false`. Each step reads the value as it stood when that step was dispatched. `false` on every host of a run that holds none, and of every staged run. ⚠ A Keeper older than NIM-993 does not know the key: during a rolling upgrade, an older instance that claims a step reading `h.held` from the work-queue fails that host's row. |
 
 `soulprint.hosts.where("<predicate>")` filters the list by any stable
 element attribute(`role`, `sid`, `covens`, `network.*`, `os.*`); result -
@@ -1086,10 +1093,10 @@ Error handling in scenario - **only mechanisms inherited from the DSL core**: `r
 
 > **Footgun: silent-destructive-on-partial - closed by a barrier, NOT an idiom.** Danger: a probe to which some of the hosts did not respond returns an incomplete `register:`, and the next step with `where:` therefore `register:` would apply a destructive operation (restart, failover) only to the "responding" part. **Closing - the step barrier ([ADR-0091](../adr/0091-scenario-linear-barrier.md), decision 8), without manual completeness check:**
 >
-> - **The candidate host failed the probe** → the probe step's barrier waits for every host and, under the default `on_failure: scenario`, ends the run: **the next step (where `where:` is located) does not start** → `error_locked` (§7). The destructive step simply doesn't reach dispatch. Under `on_failure: host` the failed probe host is dropped and the next step runs on the rest — the author's explicit opt-in to exactly that partial target, bounded by `tolerate` when it is set and otherwise only by the last live host ([settings.md §4](settings.md#4-how-a-barrier-judges-failures)).
+> - **The candidate host failed the probe** → the probe step's barrier waits for every host and, under the default `on_failure: scenario`, ends the run: **the next step (where `where:` is located) does not start** → `error_locked` (§7). The destructive step simply doesn't reach dispatch. Under `on_failure: host` the failed probe host is dropped and the next step runs on the rest — the author's explicit opt-in to exactly that partial target, bounded by `tolerate` when it is set and otherwise only by the last live host ([settings.md §4](settings.md#4-how-a-barrier-judges-failures)). A probe whose register a later rescue names is a second opt-in, under any radius: its failure is held for the rescue (NIM-993), and the next step runs on the other hosts while the failed one waits ([rescues.md](rescues.md)). Either way the failed host is not a target of the next step.
 > - **The host is terminal, but `register:` is incomplete** (probe returned without the required key for a specific host) → when rendering `where:` of the next step, accessing `register.<probe>.*` of this host gives an eval error `no such key` and the run fails at that step's render, not silently "the wrong target."
 >
-> Manual completeness idiom (`failed_when: size(...) < incarnation.host_count`) **needless and unenforceable** (see above and §4.2): safety provides a barrier. review/architect When reviewing scenario specs and the pilot, they check that there is no path left that bypasses the fail-stop barrier for destructive-on-failed/partial-probe; a linear run's `on_failure: host`, chosen as [settings.md §4](settings.md#4-how-a-barrier-judges-failures) describes, is the one allowed bypass for a host the probe was sent to, and the review confirms it is intended.
+> Manual completeness idiom (`failed_when: size(...) < incarnation.host_count`) **needless and unenforceable** (see above and §4.2): safety provides a barrier. review/architect When reviewing scenario specs and the pilot, they check that there is no path left that bypasses the fail-stop barrier for destructive-on-failed/partial-probe; a linear run's `on_failure: host`, chosen as [settings.md §4](settings.md#4-how-a-barrier-judges-failures) describes, and a rescue that names the probe's register ([rescues.md](rescues.md)) are the two allowed bypasses for a host the probe was sent to, and the review confirms each is intended.
 
 ## 6. Two-level resource resolution
 
@@ -1252,7 +1259,12 @@ The **cross-host barrier is unchanged** and still unconditional:
    run and moves the incarnation to `status: error_locked`
    ([architecture.md → "Incarnation"](../architecture.md)); under `host` the host is dropped and a
    run that reaches its end ends `partial_failed`, the incarnation `error_locked` all the same
-   ([settings.md §4](settings.md)).
+   ([settings.md §4](settings.md)). A failure that a later rescue names is held instead, and judged
+   at the barrier of its last rescue only if no rescue handles it; a run whose every failure was
+   handled ends `success`, the incarnation `ready`
+   ([rescues.md](rescues.md),
+   NIM-993). A capture written between the failed step and its rescue still runs and commits, even
+   if the run later ends `failed` at the rescue's barrier.
 
 **What moved is the commit, not the barrier.** A run that dies half-way now leaves state describing
 exactly what was captured **before** it died, rather than nothing at all. That is the point of the

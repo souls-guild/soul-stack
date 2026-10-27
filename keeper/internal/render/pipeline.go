@@ -206,6 +206,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	tasks := make([]*RenderedTask, 0, len(in.Scenario.Tasks))
 	plans := make([]DispatchPlan, 0, len(in.Scenario.Tasks))
 	idx := 0
+	in.units = scenarioUnits(in.Scenario.Tasks)
+	if in.Steps != nil {
+		in.crossUnits = config.CrossStepUnits(in.Scenario.Tasks, in.Steps)
+	}
 
 	// includeGroupKeep caches the conditional-include (group-drop) decision for
 	// this pass — see [Pipeline.keepIncludeGroup]. Threaded into
@@ -225,6 +229,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 
 		passage := taskPassageAt(in.TaskPassage, i)
 		passageStart := len(tasks)
+		// The pass as this task's step saw it (a default block's first, its children
+		// each their own), at this task's plan position.
+		in := in.ForStep(passage)
+		in.path = config.StepPath("", i)
 
 		// Conditional-include group-drop (ADR-009 amendment) — before
 		// emitStaticWhenSkip. A false include-when is a real drop: continue
@@ -272,12 +280,28 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// task is physically never executed, so the guard is never reached.
 		// isStaticWhen/staticWhenSkips are register-/soulprint-independent and
 		// build flow_context from input/vars/incarnation/self, not DSL
-		// fields, so calling them before the guard is safe.
-		if skipped, serr := p.emitStaticWhenSkip(ctx, in, task, &tasks, &plans, &idx); serr != nil {
+		// fields, so calling them before the guard is safe. A cross-step unit
+		// is routed first: on a live host nothing of it is evaluated, and one
+		// routed to no host past the end of the run is a placeholder before the
+		// guard, its `when:` not read (ADR-0091 amendment NIM-993, rule 1).
+		var targeted, notReached, skip []*topology.HostFacts
+		unit := in.crossStepUnit(task)
+		var skipped bool
+		var serr error
+		if unit {
+			if targeted, skip, notReached, serr = p.routeUnit(in, task, passage, runHosts(in), in.Dropped); serr == nil {
+				skipped, serr = p.unitStaticWhen(ctx, in, task, passage, targeted, skip, notReached, guardPilotDSL(task, i), &tasks, &plans, &idx)
+			}
+		} else {
+			skipped, serr = p.emitStaticWhenSkip(ctx, in, task, in.Hosts, &tasks, &plans, &idx)
+		}
+		if serr != nil {
 			return nil, nil, serr
-		} else if skipped {
+		}
+		if skipped {
 			stampPassage(tasks, passageStart, passage)
 			stampOnFailure(in, tasks, passageStart, task)
+			stampRescueUnit(in, tasks, passageStart, in.path)
 			continue
 		}
 
@@ -301,6 +325,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			plans = append(plans, DispatchPlan{TaskIndex: idx})
 			idx++
 			stampOnFailure(in, tasks, passageStart, task)
+			stampRescueUnit(in, tasks, passageStart, in.path)
 			continue
 		}
 
@@ -338,12 +363,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// Linear dispatch: a default block's hosts are chosen at its first step
 		// and held for its later ones (fork 3).
 		roll := topLevelRoll(in.Steps, i, task)
-		var targeted, notReached []*topology.HostFacts
 		var err error
-		routed := task.Block == nil && in.rescueRouting() && isRescue(task)
 		switch {
-		case routed:
-			targeted, notReached, err = p.routeRescue(in, task, passage, runHosts(in), droppedSIDs(in))
+		case unit:
+			// Routed above, before its static `when:`.
 		case task.Block != nil && in.pastEnd(passage):
 			targeted, err = p.onCover(in, task, in.Hosts)
 		case roll.overlay:
@@ -354,15 +377,16 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		if err != nil {
 			return nil, nil, err
 		}
-		if task.Block == nil && in.pastEnd(passage) && len(targeted) == 0 {
-			tasks = append(tasks, futurePlaceholder(task, idx, passage))
-			plans = append(plans, DispatchPlan{TaskIndex: idx})
-			idx++
-			stampOnFailure(in, tasks, passageStart, task)
-			continue
+		if unit && task.Block != nil {
+			// A block unit holds its cover; each child routes itself.
+			targeted, skip = mergeHosts(targeted, skip), nil
 		}
-		if !routed {
-			if notReached, err = coveredDropped(p.cel, in, task, in.Dropped); err != nil {
+		var dropCover, heldCover []*topology.HostFacts
+		switch {
+		case unit && task.Block == nil:
+			in.unitSkip, in.layoutOnly = skip, len(targeted) == 0
+		default:
+			if dropCover, heldCover, notReached, err = coveredAway(p.cel, in, task, in.Dropped, in.HeldHosts); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -377,7 +401,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// applied to targeted; serial: on the apply task propagates to its
 		// destiny tasks.
 		if task.Apply != nil {
-			width := serialWidth(task.Serial, len(targeted))
+			width := serialWidth(task.Serial, len(targeted)+len(skip))
 			dt, dp, derr := p.renderApplyDestiny(ctx, in, task, idx, targeted, width)
 			if derr != nil {
 				return nil, nil, derr
@@ -387,6 +411,8 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			idx += len(dt)
 			stampPassage(tasks, passageStart, passage)
 			stampOnFailure(in, tasks, passageStart, task)
+			// No stampRescueUnit: the destiny pass keyed its tasks and left its terminal
+			// none.
 			stampNotReached(plans[planStart:], notReached)
 			if terr := stampTransport(plans[planStart:], task); terr != nil {
 				return nil, nil, terr
@@ -410,6 +436,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			idx += len(lt)
 			stampPassage(tasks, passageStart, passage)
 			stampOnFailure(in, tasks, passageStart, task)
+			stampRescueUnit(in, tasks, passageStart, in.path)
 			stampNotReached(plans[planStart:], notReached)
 			if terr := stampTransport(plans[planStart:], task); terr != nil {
 				return nil, nil, terr
@@ -438,7 +465,12 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			if cerr != nil {
 				return nil, nil, cerr
 			}
-			bin.droppedCover = notReached
+			bin.droppedCover, bin.heldCover = dropCover, heldCover
+			if in.Standing != nil {
+				if bin.coverRoster, cerr = coveredDropped(p.cel, in, task, runHosts(in)); cerr != nil {
+					return nil, nil, cerr
+				}
+			}
 			bt, bp, berr := p.renderBlockTask(ctx, bin, task, idx, targeted, includeGroupKeep, roll)
 			if berr != nil {
 				return nil, nil, berr
@@ -451,14 +483,18 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 				stampPassage(tasks, passageStart, passage)
 			}
 			stampOnFailure(in, tasks, passageStart, task)
+			// No stampRescueUnit: each child keyed its own, and a stamp over the whole
+			// range would key an applier child's terminal.
 			if terr := stampTransport(plans[planStart:], task); terr != nil {
 				return nil, nil, terr
 			}
 			continue
 		}
 
-		rt, err := p.renderTask(ctx, in, task, idx, targeted)
-		if err != nil {
+		var rt *RenderedTask
+		if in.layoutOnly {
+			rt = unitSkipPlaceholder(task, idx, passage, in.Modules)
+		} else if rt, err = p.renderTask(ctx, in, task, idx, targeted); err != nil {
 			return nil, nil, err
 		}
 
@@ -466,11 +502,13 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		plans = append(plans, DispatchPlan{
 			TaskIndex:   idx,
 			TargetSIDs:  sidsOf(targeted),
-			SerialWidth: serialWidth(task.Serial, len(targeted)),
+			SerialWidth: serialWidth(task.Serial, len(targeted)+len(skip)),
 		})
+		withSkipTargets(tasks[len(tasks)-1:], plans[planStart:], skip)
 		idx++
 		stampPassage(tasks, passageStart, passage)
 		stampOnFailure(in, tasks, passageStart, task)
+		stampRescueUnit(in, tasks, passageStart, in.path)
 		stampNotReached(plans[planStart:], notReached)
 		if terr := stampTransport(plans[planStart:], task); terr != nil {
 			return nil, nil, terr
@@ -497,7 +535,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	}
 	// After the walk: a task's step is stamped only at the end of its top-level
 	// iteration, and only the step being dispatched is settled.
-	if err := p.settleFlow(in, tasks, plans); err != nil {
+	if err := p.settleFlow(in.ForStep(in.ActivePassage), tasks, plans); err != nil {
 		return nil, nil, err
 	}
 	p.fillSoulNeeds(ctx, in)
@@ -890,15 +928,38 @@ func (p *Pipeline) staticWhenSkips(
 	if !isStaticWhen(task.When) {
 		return nil, nil
 	}
+	firstFC, err := p.staticWhenContext(in, task, renderHosts, targetCount, loopVars)
+	if err != nil {
+		return nil, err
+	}
 
-	// The decision below is taken ONCE, on firstFC — the roster's first host by SID.
-	// That is sound for a predicate over run-level values and is exactly the NIM-908
+	pass, err := evalStaticWhen(task.When, firstFC)
+	if err != nil {
+		return nil, &staticWhenEvalError{task: task.Name, when: task.When, err: err}
+	}
+	if pass {
+		return nil, nil // when:true — task is active, render params normally.
+	}
+	return firstFC, nil
+}
+
+// staticWhenContext is the flow_context task's static `when:` is decided in: the first
+// of renderHosts', every host's built all the same ([Pipeline.staticWhenSkips]).
+func (p *Pipeline) staticWhenContext(
+	in RenderInput,
+	task config.Task,
+	renderHosts []*topology.HostFacts,
+	targetCount int,
+	loopVars map[string]any,
+) (*structpb.Struct, error) {
+	// The decision is taken ONCE, on the returned context — the roster's first host by
+	// SID. That is sound for a predicate over run-level values and is exactly the NIM-908
 	// defect for one over a destiny input that renders per host: eight hosts would
 	// be gated on the ninth's value with nothing to show it. The same for a name of
 	// the task's view that resolves per host, its own `vars:` included. Inert unless
 	// this pass actually has such a name.
-	if err := p.cel.GuardHostFreePredicate(task.When, cel.HostFreeStaticWhen, in.hostVariantInputs, p.hostVariantTaskVars(in, task)); err != nil {
-		return nil, fmt.Errorf("render: task %q: static-when: %w", task.Name, err)
+	if err := p.guardStaticWhenHost(in, task); err != nil {
+		return nil, err
 	}
 
 	// The skip placeholder still ships flow_context (Soul re-evaluates the same
@@ -930,7 +991,7 @@ func (p *Pipeline) staticWhenSkips(
 		if err != nil {
 			return nil, fail(h, err)
 		}
-		fc, err := buildFlowContext(in, h, vars, targetCount, fcReads)
+		fc, err := buildFlowContext(in, h, vars, targetCount, withoutVarReads(fcReads, vars.View, in.leftOut))
 		if err != nil {
 			return nil, fail(h, err)
 		}
@@ -938,15 +999,18 @@ func (p *Pipeline) staticWhenSkips(
 			firstFC = fc
 		}
 	}
-
-	pass, err := evalStaticWhen(task.When, firstFC)
-	if err != nil {
-		return nil, &staticWhenEvalError{task: task.Name, when: task.When, err: err}
-	}
-	if pass {
-		return nil, nil // when:true — task is active, render params normally.
-	}
 	return firstFC, nil
+}
+
+// guardStaticWhenHost refuses task's static `when:` by name when it reads a per-host
+// `apply: input:` name or a name of the task's view that resolves per host (NIM-908;
+// [ADR-0082] amendment 2026-10-15, point 7). A destiny pass alone has either: on a
+// scenario pass it is inert (NIM-1020).
+func (p *Pipeline) guardStaticWhenHost(in RenderInput, task config.Task) error {
+	if err := p.cel.GuardHostFreePredicate(task.When, cel.HostFreeStaticWhen, in.hostVariantInputs, p.hostVariantTaskVars(in, task)); err != nil {
+		return fmt.Errorf("render: task %q: static-when: %w", task.Name, err)
+	}
+	return nil
 }
 
 // evalIncludeWhen evaluates the include-when of a conditional include
@@ -1057,11 +1121,12 @@ func (p *Pipeline) keepIncludeGroup(in RenderInput, task config.Task, cache incl
 //   - (false, err) — error building flow_context / evaluating the static
 //     predicate.
 //
-// flow_context is built from in.Hosts (a synthetic empty host when the
-// roster is empty): static-when is host-invariant (doesn't depend on
-// soulprint.self), the outcome is the same on every host; Soul reads `self`
-// in the placeholder flow_context only as data for its own evalWhen, which
-// evaluates the same predicate to false too → SKIPPED.
+// flow_context is built from hosts — in.Hosts, or the hosts a cross-step unit
+// is routed to — and a synthetic empty host when there are none: static-when
+// is host-invariant (doesn't depend on soulprint.self), the outcome is the
+// same on every host; Soul reads `self` in the placeholder flow_context only
+// as data for its own evalWhen, which evaluates the same predicate to false
+// too → SKIPPED. `loop.items` still resolves over the run, through in.
 //
 // loop task (task.Loop != nil): N/1 skip placeholders via loopStaticSkip —
 // keeps Index parity with the active branch (resolvable items → N,
@@ -1072,6 +1137,7 @@ func (p *Pipeline) emitStaticWhenSkip(
 	ctx context.Context,
 	in RenderInput,
 	task config.Task,
+	hosts []*topology.HostFacts,
 	tasks *[]*RenderedTask,
 	plans *[]DispatchPlan,
 	idx *int,
@@ -1096,11 +1162,11 @@ func (p *Pipeline) emitStaticWhenSkip(
 		return false, nil
 	}
 
-	renderHosts := in.Hosts
+	renderHosts := hosts
 	if len(renderHosts) == 0 {
 		renderHosts = []*topology.HostFacts{{}}
 	}
-	skip, err := p.staticWhenSkips(in, task, renderHosts, len(in.Hosts), nil)
+	skip, err := p.staticWhenSkips(in, task, renderHosts, len(hosts), nil)
 	if err != nil {
 		if settlesStaticWhenError(in, task, err) {
 			return false, nil // fails per host where the task renders (renderTaskIter).
@@ -1110,7 +1176,15 @@ func (p *Pipeline) emitStaticWhenSkip(
 	if skip == nil {
 		return false, nil // static-true → active, normal path.
 	}
+	if err := p.emitStaticSkip(in, task, skip, tasks, plans, idx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
+// emitStaticSkip appends the skip placeholders of task, its static `when:` false in the
+// flow_context skip: N/1 for a `loop:` ([Pipeline.loopStaticSkip]), one otherwise.
+func (p *Pipeline) emitStaticSkip(in RenderInput, task config.Task, skip *structpb.Struct, tasks *[]*RenderedTask, plans *[]DispatchPlan, idx *int) error {
 	if task.Loop != nil {
 		asName := task.Loop.As
 		if asName == "" {
@@ -1118,18 +1192,18 @@ func (p *Pipeline) emitStaticWhenSkip(
 		}
 		lt, lp, lerr := p.loopStaticSkip(in, task, *idx, in.Hosts, asName, skip)
 		if lerr != nil {
-			return false, lerr
+			return lerr
 		}
 		*tasks = append(*tasks, lt...)
 		*plans = append(*plans, lp...)
 		*idx += len(lt)
-		return true, nil
+		return nil
 	}
 
 	*tasks = append(*tasks, p.staticSkipPlaceholder(task, *idx, skip, in.Modules))
 	*plans = append(*plans, DispatchPlan{TaskIndex: *idx})
 	*idx++
-	return true, nil
+	return nil
 }
 
 // staticSkipPlaceholder builds one skip placeholder for a task with a

@@ -53,12 +53,16 @@ var ErrValidateRuleEval = errors.New("config: validate rule evaluation failed")
 //
 // vault-refs are NOT resolved here — see [ResolveInputValuesVault] for the
 // keeper-side scoped phase.
-func ResolveInputContract(schema InputSchemaMap, rules []ValidateRule, provided map[string]any, inc ValidateContext) (map[string]any, error) {
-	merged, err := ResolveInputValues(schema, provided)
+func ResolveInputContract(schema InputSchemaMap, rules []ValidateRule, provided map[string]any, inc ValidateContext, opts ...InputContractOption) (map[string]any, error) {
+	var scope inputContractScope
+	for _, opt := range opts {
+		opt(&scope)
+	}
+	merged, err := ResolveInputValues(scope.narrow(schema), provided)
 	if err != nil {
 		return nil, err
 	}
-	fail, evErr := EvalValidateRules(rules, merged, inc)
+	fail, evErr := evalValidateRules(rules, merged, inc, scope.reads)
 	if evErr != nil {
 		return nil, fmt.Errorf("%w: %w", ErrValidateRuleEval, evErr)
 	}
@@ -66,4 +70,69 @@ func ResolveInputContract(schema InputSchemaMap, rules []ValidateRule, provided 
 		return nil, fail
 	}
 	return merged, nil
+}
+
+// InputContractOption adjusts one [ResolveInputContract] call.
+type InputContractOption func(*inputContractScope)
+
+type inputContractScope struct {
+	absent map[string]bool
+}
+
+// WithoutInputs runs the contract for a caller that holds values for only part of
+// the input: render's layout-only destiny pass, which leaves the per-host names
+// unrendered (ADR-0091 amendment NIM-993, rule 1). The named inputs get no default,
+// no `required:` and no value check, and a `required_when:` or `validate:` rule
+// that reads one is skipped — so is a rule reading the namespace whole or by a
+// computed key, since it might. A skipped `validate:` rule keeps its index for the
+// rules after it.
+func WithoutInputs(names []string) InputContractOption {
+	return func(s *inputContractScope) {
+		for _, name := range names {
+			if s.absent == nil {
+				s.absent = make(map[string]bool, len(names))
+			}
+			s.absent[name] = true
+		}
+	}
+}
+
+// narrow is schema without the absent inputs, and without any `required_when:`
+// that reads one.
+func (s inputContractScope) narrow(schema InputSchemaMap) InputSchemaMap {
+	if len(s.absent) == 0 {
+		return schema
+	}
+	out := make(InputSchemaMap, len(schema))
+	for name, field := range schema {
+		if s.absent[name] {
+			continue
+		}
+		if field != nil && field.RequiredWhen != "" && s.reads(field.RequiredWhen) {
+			cp := *field
+			cp.RequiredWhen = ""
+			field = &cp
+		}
+		out[name] = field
+	}
+	return out
+}
+
+// reads reports whether predicate expr may read an absent input: it names one, or
+// reads the namespace whole or by a computed key. One that does not compile is left
+// to the evaluator, which refuses it as it does with every input rendered.
+func (s inputContractScope) reads(expr string) bool {
+	if len(s.absent) == 0 {
+		return false
+	}
+	refs, readable := ValidateRuleInputRefs(expr)
+	if !readable {
+		return false
+	}
+	for _, ref := range refs {
+		if len(ref) == 0 || ref[0].Element || s.absent[ref[0].Key] {
+			return true
+		}
+	}
+	return false
 }

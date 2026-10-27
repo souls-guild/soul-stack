@@ -66,6 +66,11 @@ type crossPassageGate struct {
 	// accumulated over Passages < current (auditpg). planIndex = global Index.
 	changed map[auditpg.ChangedTaskKey]struct{}
 	failed  map[auditpg.ChangedTaskKey]struct{}
+
+	// unitFailed — a linear run's: whether the rescue unit keyed by its second
+	// argument failed on the host at an earlier step ([failureView.unitFailed]), the
+	// failures render's rescue routing reads too. nil — a staged run.
+	unitFailed func(sid, unit string) bool
 }
 
 // newCrossPassageGate assembles the gate for dispatching Passage p. tasks and

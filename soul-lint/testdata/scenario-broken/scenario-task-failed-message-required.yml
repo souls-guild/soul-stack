@@ -1,0 +1,6 @@
+name: task-failed-message-required
+tasks:
+  # Outside a rescue unit there is no original error to fall back to.
+  - name: Refuse an unsupported release
+    module: core.task.failed
+    params: {}

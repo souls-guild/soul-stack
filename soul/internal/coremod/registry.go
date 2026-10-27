@@ -4,7 +4,7 @@
 // Registry maps a canonical top-level name (`core.pkg` / `core.file` / …) to
 // an sdk/module.SoulModule implementation.
 //
-// MVP — 21 Soul-side modules: pkg / file / directory / service / user / group
+// 22 Soul-side modules: pkg / file / directory / service / user / group
 // (Core.a.1), exec / cmd / cron / mount (Core.a.2), git / archive / sysctl (Core.a.3),
 // url (Core.a.4), line (Core.a.5 — pilot in-place line editing, ADR-015),
 // repo / firewall (Core.a.6 — package repository + firewall rule, ADR-015),
@@ -13,7 +13,8 @@
 // augur (ADR-025 — read-probe live access to an external system via the
 // Augur broker, verb fetch, changed=false),
 // module (ADR-065 — SoulModule plugin delivery: allow-check → FetchModule →
-// Sigil-verify → atomic install; host dependencies via Deps).
+// Sigil-verify → atomic install; host dependencies via Deps),
+// task (ADR-0091 amendment NIM-993 — verb failed, always fails its task).
 package coremod
 
 import (
@@ -37,6 +38,7 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/repo"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/service"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/sysctl"
+	"github.com/souls-guild/soul-stack/soul/internal/coremod/task"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/url"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/user"
 )
@@ -50,7 +52,7 @@ type Registry struct {
 	mods map[string]module.SoulModule
 }
 
-// Default returns a Registry with all 21 Soul-side core modules of the MVP.
+// Default returns a Registry with all 22 Soul-side core modules.
 // Used for wire-up in cmd/soul; in tests it's more convenient to build your
 // own Registry via NewRegistry with fixed dependencies.
 //
@@ -79,6 +81,7 @@ func Default(install installmod.Deps) *Registry {
 		repo.Name:       repo.New(),
 		firewall.Name:   firewall.New(),
 		httpmod.Name:    httpmod.New(),
+		task.Name:       task.New(),
 		installmod.Name: installmod.New(install),
 	})
 }

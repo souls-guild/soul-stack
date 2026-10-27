@@ -226,7 +226,7 @@ func TestAggregateRegisterData_OR(t *testing.T) {
 
 	// All three plus a missing sentinel index (-1): changed||failed||timed → all
 	// true except timed_out (no source is timed_out).
-	got := aggregateRegisterData([]int32{0, 1, 2, -1}, registerByIdx).GetFields()
+	got := aggregateRegisterData([]int32{0, 1, 2, -1}, registerByIdx, nil).GetFields()
 	if !got["changed"].GetBoolValue() {
 		t.Errorf(".changed = false, want true (idx 0 changed)")
 	}
@@ -241,7 +241,7 @@ func TestAggregateRegisterData_OR(t *testing.T) {
 	}
 
 	// Empty aggregate / all no-op → all false.
-	none := aggregateRegisterData([]int32{2}, registerByIdx).GetFields()
+	none := aggregateRegisterData([]int32{2}, registerByIdx, nil).GetFields()
 	if none["changed"].GetBoolValue() || none["failed"].GetBoolValue() || none["timed_out"].GetBoolValue() {
 		t.Errorf("no-op aggregate = %v, want all false", none)
 	}
@@ -250,7 +250,7 @@ func TestAggregateRegisterData_OR(t *testing.T) {
 	// isn't failed in the registerByIdx source — buildRegisterData also sets
 	// failed=true on TIMED_OUT, but here we check the pure timed_out bit).
 	registerByIdx.record(3, "", rd(false, false, true))
-	timed := aggregateRegisterData([]int32{3}, registerByIdx).GetFields()
+	timed := aggregateRegisterData([]int32{3}, registerByIdx, nil).GetFields()
 	if !timed["timed_out"].GetBoolValue() {
 		t.Errorf(".timed_out = false, want true (idx 3 timed_out)")
 	}

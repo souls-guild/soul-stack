@@ -1,0 +1,25 @@
+name: group-multiple-rescue-units
+settings:
+  serial_scope: block
+tasks:
+  - name: Deploy the release
+    module: core.exec.run
+    register: deploy
+    params: { cmd: /opt/app/deploy.sh }
+  - name: Migrate the schema
+    module: core.exec.run
+    register: migrate
+    params: { cmd: /opt/app/migrate.sh }
+  # One group, one message: two units for sources outside it cannot each get
+  # their chance (ADR-0091 amendment NIM-993).
+  - name: Rescues
+    serial: 1
+    block:
+      - name: Roll back the release
+        module: core.exec.run
+        onfail: [deploy]
+        params: { cmd: /opt/app/rollback.sh }
+      - name: Roll back the schema
+        module: core.exec.run
+        onfail: [migrate]
+        params: { cmd: /opt/app/migrate-down.sh }

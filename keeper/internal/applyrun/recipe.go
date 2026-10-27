@@ -80,7 +80,7 @@ type RecipeStep struct {
 	// renders, and the run did not decide what the claim would send.
 	Tasks []int `json:"tasks"`
 	// Rescue — the run's failures as its rescue routing read them for this step
-	// (docs/scenario/settings.md §4), so the claim sends an `onfail:` task where the
+	// (docs/scenario/rescues.md), so the claim sends an `onfail:` task where the
 	// run did: to a dropped host its source failed on, and after a failure ended the
 	// run, nothing else. nil — no host dropped and the run goes on.
 	Rescue *RecipeRescue `json:"rescue,omitempty"`

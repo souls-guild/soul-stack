@@ -74,6 +74,7 @@ var coreModules = []schema.Module{
 	modHTTP,
 	modNoop,
 	modModule,
+	modTask,
 
 	// Keeper-side core (ADR-017/ADR-044, on: keeper). State names aligned with the
 	// actual dispatch of keeper-side coremods: core.soul.registered,

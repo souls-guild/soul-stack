@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -545,6 +546,69 @@ func TestIntegration_Reader_ChangedTaskKeys(t *testing.T) {
 	// Run B must not be present.
 	if _, ok := keys[ChangedTaskKey{SID: "z.local", PlanIndex: 0}]; ok {
 		t.Error("cross-apply leak: applyB key in applyA result")
+	}
+}
+
+// ★ GUARD (ADR-0091 amendment NIM-993, rule 1). A task executed on a host when its
+// `task.executed` event carries any status but SKIPPED: OK, CHANGED, FAILED,
+// TIMED_OUT and CANCELLED count, a skip — a rescue unit whose `when:` was false —
+// does not, and neither does another run's event or another event type.
+//
+// Mutation: answer with the reported-keys query (SelectReportedTaskKeys' SQL, no
+// status filter) → the SKIPPED key (a, 5) is counted.
+func TestIntegration_Reader_ExecutedTaskKeys_SkippedIsNotExecuted(t *testing.T) {
+	resetAuditLog(t)
+	ctx := context.Background()
+	w := NewWriter(integrationPool)
+	reader := NewReader(integrationPool)
+	applyA, applyB := audit.NewULID(), audit.NewULID()
+
+	seed := []struct {
+		apply, sid, status string
+		idx                int
+	}{
+		{applyA, "a.local", "TASK_STATUS_OK", 0},
+		{applyA, "a.local", "TASK_STATUS_CHANGED", 1},
+		{applyA, "a.local", "TASK_STATUS_FAILED", 2},
+		{applyA, "a.local", "TASK_STATUS_TIMED_OUT", 3},
+		{applyA, "a.local", "TASK_STATUS_CANCELLED", 4},
+		{applyA, "a.local", "TASK_STATUS_SKIPPED", 5},
+		{applyA, "b.local", "TASK_STATUS_OK", 5},
+		{applyB, "a.local", "TASK_STATUS_OK", 6},
+	}
+	for _, s := range seed {
+		if err := w.Write(ctx, &audit.Event{
+			EventType:     audit.EventTaskExecuted,
+			Source:        audit.SourceSoulGRPC,
+			CorrelationID: s.apply,
+			Payload:       map[string]any{"sid": s.sid, "apply_id": s.apply, "plan_index": s.idx, "task_idx": s.idx, "status": s.status},
+		}); err != nil {
+			t.Fatalf("seed write: %v", err)
+		}
+	}
+	if err := w.Write(ctx, &audit.Event{
+		EventType:     audit.EventRunCompleted,
+		Source:        audit.SourceSoulGRPC,
+		CorrelationID: applyA,
+		Payload:       map[string]any{"sid": "a.local", "plan_index": 7, "status": "RUN_STATUS_SUCCESS"},
+	}); err != nil {
+		t.Fatalf("seed noise: %v", err)
+	}
+
+	keys, err := reader.SelectExecutedTaskKeys(ctx, applyA)
+	if err != nil {
+		t.Fatalf("SelectExecutedTaskKeys: %v", err)
+	}
+	want := map[ChangedTaskKey]struct{}{
+		{SID: "a.local", PlanIndex: 0}: {},
+		{SID: "a.local", PlanIndex: 1}: {},
+		{SID: "a.local", PlanIndex: 2}: {},
+		{SID: "a.local", PlanIndex: 3}: {},
+		{SID: "a.local", PlanIndex: 4}: {},
+		{SID: "b.local", PlanIndex: 5}: {},
+	}
+	if !reflect.DeepEqual(keys, want) {
+		t.Errorf("executed keys = %v, want %v", keys, want)
 	}
 }
 

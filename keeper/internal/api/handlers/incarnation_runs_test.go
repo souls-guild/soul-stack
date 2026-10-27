@@ -220,6 +220,54 @@ func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 	}
 }
 
+// TestRunDetailTyped_Handled pins the row's `handled` (NIM-993, ADR-0091 amendment
+// rule 5): true on a row marked apply_runs.handled and on a success row that carries
+// a failure the Soul handled inside its message; false on every other row. Only the
+// mark counts in the run's fold, so the unhandled failed row keeps the run failed.
+func TestRunDetailTyped_Handled(t *testing.T) {
+	planIdx := 3
+	errSummary := "task 1 core.exec.run: boom"
+	now := time.Now().UTC()
+	row := func(sid, status string, handled bool, failedPlan *int) applyRunHostRow {
+		r := applyRunHostRow{
+			sid: sid, status: status, failedPlan: failedPlan, handled: handled,
+			scenario: "scale", startedAt: now, finishedAt: &now, startedBy: strp("archon-alice"),
+		}
+		if failedPlan != nil {
+			r.errorSummary = &errSummary
+		}
+		return r
+	}
+	db := &fakeIncDB{
+		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
+		applyRunsRows: func() (pgx.Rows, error) {
+			return &applyRunsHostRows{rows: []applyRunHostRow{
+				row("host-a", "failed", true, &planIdx),
+				row("host-b", "success", false, &planIdx),
+				row("host-c", "failed", false, &planIdx),
+				row("host-d", "success", false, nil),
+			}}, nil
+		},
+	}
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+	d, err := h.RunDetailTyped(context.Background(), "redis-prod", validApplyID, allowScope)
+	if err != nil {
+		t.Fatalf("RunDetailTyped: %v", err)
+	}
+	if d.Status != "failed" {
+		t.Errorf("Status = %q, want failed (host-c's failure is not handled)", d.Status)
+	}
+	want := map[string]bool{"host-a": true, "host-b": true, "host-c": false, "host-d": false}
+	for _, hs := range d.Hosts {
+		if hs.Handled != want[hs.SID] {
+			t.Errorf("%s (%s): Handled = %v, want %v", hs.SID, hs.Status, hs.Handled, want[hs.SID])
+		}
+	}
+	if hb := d.Hosts[1]; hb.FailedPlanIndex == nil || hb.ErrorSummary == nil {
+		t.Errorf("handled success row lost its failure fields: %+v", hb)
+	}
+}
+
 // requireProblemStatus checks that err is a domain *problemError with the expected
 // HTTP status (problem-type → code mapping). t.Helper for a readable stack.
 func requireProblemStatus(t *testing.T, err error, want int) {
@@ -239,7 +287,7 @@ func requireProblemStatus(t *testing.T, err error, want int) {
 // applyRunHostRow — one apply_runs host row for the detail-rows-stub (column order and
 // types of selectRunHostsSQL: sid/status/passage/task_idx/failed_plan_index/
 // error_summary/attempt/cancel_requested/scenario/started_at/finished_at/started_by/
-// input/notices/lock_held).
+// input/notices/lock_held/dropped/handled).
 type applyRunHostRow struct {
 	sid             string
 	status          string
@@ -260,6 +308,7 @@ type applyRunHostRow struct {
 	notices  []byte
 	lockHeld bool
 	dropped  bool
+	handled  bool
 }
 
 // applyRunsHostRows — a pgx.Rows stub over a set of apply_runs host rows. Scan
@@ -283,7 +332,7 @@ func (r *applyRunsHostRows) Scan(dest ...any) error {
 	vals := []any{
 		row.sid, row.status, row.passage, row.taskIdx, row.failedPlan, row.errorSummary,
 		row.attempt, row.cancelRequested, row.scenario, row.startedAt, row.finishedAt, row.startedBy,
-		row.input, row.notices, row.lockHeld, row.dropped,
+		row.input, row.notices, row.lockHeld, row.dropped, row.handled,
 	}
 	for i, d := range dest {
 		if err := scanApplyRunCol(d, vals[i]); err != nil {

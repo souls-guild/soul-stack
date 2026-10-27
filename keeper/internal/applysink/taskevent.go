@@ -39,17 +39,20 @@ func (s *Sink) TaskEvent(ctx context.Context, sid string, ev *keeperv1.TaskEvent
 // JudgedTaskEvent records a task outcome the Keeper writes for a host whose failure
 // the barrier has already judged — the audit event, the register and the SSE frame —
 // and leaves the row's failure reason alone: the row keeps the failure it was judged
-// by, and a FAILED event here must not become its first failed task.
-func (s *Sink) JudgedTaskEvent(ctx context.Context, sid string, ev *keeperv1.TaskEvent) {
+// by, and a FAILED event here must not become its first failed task. It reports
+// whether the audit event was written.
+func (s *Sink) JudgedTaskEvent(ctx context.Context, sid string, ev *keeperv1.TaskEvent) bool {
 	if ev == nil {
-		return
+		return false
 	}
-	s.writeTaskExecutedAudit(ctx, sid, ev)
+	written := s.writeTaskExecutedAudit(ctx, sid, ev)
 	s.accumulateRegister(ctx, sid, ev)
 	s.publishTaskExecuted(sid, ev)
+	return written
 }
 
-// writeTaskExecutedAudit writes the `task.executed` audit event.
+// writeTaskExecutedAudit writes the `task.executed` audit event and reports whether it
+// was written.
 //
 // Declared-secret output ([ADR-0083] §8): the fields TaskEvent.secret_output names
 // (echoing RenderedTask.secret_output, apply.proto) are replaced with
@@ -68,9 +71,9 @@ func (s *Sink) JudgedTaskEvent(ctx context.Context, sid string, ev *keeperv1.Tas
 // The TaskStatus enum (including `TASK_STATUS_CANCELLED`) is serialized via
 // `Status().String()` as a single `status` field — extending the enum is handled
 // without separate branches.
-func (s *Sink) writeTaskExecutedAudit(ctx context.Context, sid string, ev *keeperv1.TaskEvent) {
+func (s *Sink) writeTaskExecutedAudit(ctx context.Context, sid string, ev *keeperv1.TaskEvent) bool {
 	if s.deps.Audit == nil {
-		return
+		return false
 	}
 	in := audit.TaskExecutedInput{
 		SID:     sid,
@@ -124,7 +127,9 @@ func (s *Sink) writeTaskExecutedAudit(ctx context.Context, sid string, ev *keepe
 			slog.String("sid", sid),
 			slog.String("apply_id", ev.GetApplyId()),
 			slog.Any("error", err))
+		return false
 	}
+	return true
 }
 
 // recordRunNotices appends a task's advisory findings to the host's `apply_runs`

@@ -1,0 +1,19 @@
+name: onfail-names-rescue
+tasks:
+  - name: Deploy the release
+    module: core.exec.run
+    register: deploy
+    params: { cmd: /opt/app/deploy.sh }
+  - name: Roll back
+    onfail: [deploy]
+    block:
+      - name: Restore the previous release
+        module: core.exec.run
+        register: restore
+        params: { cmd: /opt/app/rollback.sh }
+  # A rescue of a task inside a rescue unit: the unit's failure means "deploy is
+  # not handled", it is not a failure of its own (ADR-0091 amendment NIM-993).
+  - name: Page the on-call when the rollback fails
+    module: core.exec.run
+    onfail: [restore]
+    params: { cmd: /opt/app/page.sh }

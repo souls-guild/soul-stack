@@ -85,6 +85,7 @@ Statically built into the `soul` binary. Apply the same in pull (daemon) and pus
 | [`core.augur`](core/augur/README.md) | `fetch` (verb) | Read-probe of live access to an external system (Vault/Prometheus/ELK) via the Augur broker ([ADR-025](../adr/0025-augur.md), `changed=false`). |
 | [`core.noop`](core/noop/README.md) | `run` (verb) | No-op barrier anchor ([ADR-015](../adr/0015-core-modules-mvp.md), `changed=false`) — a task to hang `require:` / `onchanges:` on. |
 | `core.module` (author-address `core.module.installed`) | `installed` | SoulModule plugin delivery to the host: allow-check → `FetchModule` → Sigil-verify → atomic install ([ADR-065](../adr/0065-core-module-installed.md), host side in [soul/modules.md](../soul/modules.md)). |
+| `core.task` (author-address `core.task.failed`) | `failed` (verb) | Always fails its task; inside a rescue unit the explicit 'error not handled', elsewhere Ansible's `fail`; NIM-993 ([ADR-0091 amendment](../adr/0091-scenario-linear-barrier.md#amendment-2026-10-14-nim-993-a-rescue-that-succeeds-handles-the-failure)). |
 
 ## Keeper-side core modules
 
@@ -150,15 +151,16 @@ The catalog is complete. The source of truth is the two registries in the code �
 `soul/internal/coremod.Default` and `keeper/internal/coremod.Default` — and the count
 is stated here once, against them:
 
-**21 Soul-side + 7 Keeper-side = 28 apply modules.** The two tables above list exactly
+**22 Soul-side + 7 Keeper-side = 29 apply modules.** The two tables above list exactly
 those; `core.beacon` is in neither count (Vigil body, read-only observer — not an apply
 module, see the "core-beacon" section).
 
-- **21 Soul-side.** 18 by [ADR-015](../adr/0015-core-modules-mvp.md) (12 original MVPs +
+- **22 Soul-side.** 18 by [ADR-015](../adr/0015-core-modules-mvp.md) (12 original MVPs +
 post-MVP `url` / `line` / `repo` / `firewall` / `http`, accepted on real requests, +
 `directory` split out of `core.file` by [Amendment 2026-07-17](../adr/0015-core-modules-mvp.md)),
-plus `augur` by [ADR-025](../adr/0025-augur.md), `noop` (barrier anchor, ADR-015) and
-`module` by [ADR-065](../adr/0065-core-module-installed.md).
+plus `augur` by [ADR-025](../adr/0025-augur.md), `noop` (barrier anchor, ADR-015),
+`module` by [ADR-065](../adr/0065-core-module-installed.md) and `task` by the
+[ADR-0091 amendment NIM-993](../adr/0091-scenario-linear-barrier.md#amendment-2026-10-14-nim-993-a-rescue-that-succeeds-handles-the-failure).
 - **7 Keeper-side.** `core.soul` and `core.vault` by [ADR-017](../adr/0017-keeper-side-core.md),
 `core.choir` by [ADR-044](../adr/0044-choir.md), `core.bootstrap` by [ADR-063](../adr/0063-bootstrap-token-delivery.md),
 `core.cert` (NIM-99), `core.ssh` (NIM-849) and `core.state` by [ADR-0084](../adr/0084-explicit-state-capture.md).
@@ -170,7 +172,7 @@ own address ([known-limitations.md](../known-limitations.md)).
 The Keeper-side table's seven base addresses are exactly what
 `shared/coremanifest.KeeperSideAddrs()` returns — the list the linter and the render
 pipeline route by, so a row that disagrees with it is a bug in the row. The Soul-side
-twenty-one are `shared/coremanifest.SoulSideAddrs()`. Guard tests hold each list equal
+twenty-two are `shared/coremanifest.SoulSideAddrs()`. Guard tests hold each list equal
 to its registry in both directions (`soul/internal/coremod`, `keeper/internal/coremod`),
 and every reader that decides whether a core module exists asks the pair:
 `GET /v1/modules` lists exactly their union, and the static check refuses any other
@@ -178,11 +180,12 @@ and every reader that decides whether a core module exists asks the pair:
 `core.augur` and `core.cert` do not, and their params go unchecked rather than refused.
 
 `docs/module/core/` holds **26 directories** — 25 of these modules plus `core-beacon`.
-Three modules have no per-module page yet and are documented where their spec lives:
+Four modules have no per-module page yet and are documented where their spec lives:
 `core.module` in [ADR-065](../adr/0065-core-module-installed.md) and
 [service/manifest.md → `modules[]`](../service/manifest.md) (the host-side cache layout is in
 [soul/modules.md](../soul/modules.md)); `core.state` and `core.cert` in
-[keeper/modules.md](../keeper/modules.md).
+[keeper/modules.md](../keeper/modules.md); `core.task` in the
+[ADR-0091 amendment NIM-993](../adr/0091-scenario-linear-barrier.md#amendment-2026-10-14-nim-993-a-rescue-that-succeeds-handles-the-failure).
 
 Standards (pilot) - [`core/pkg/README.md`](core/pkg/README.md) and
 [`core/file/README.md`](core/file/README.md). All links in the tables above lead to

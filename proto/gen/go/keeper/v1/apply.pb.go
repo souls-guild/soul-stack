@@ -343,7 +343,23 @@ type RenderedTask struct {
 	// exclusive with require_idx: `require:` is strictly one of the two forms
 	// (a mixed `require: [a, "all"]` is a config-validation error), so when this
 	// is true require_idx is empty. false = not an all-barrier.
-	RequireAll    bool `protobuf:"varint,20,opt,name=require_all,json=requireAll,proto3" json:"require_all,omitempty"`
+	RequireAll bool `protobuf:"varint,20,opt,name=require_all,json=requireAll,proto3" json:"require_all,omitempty"`
+	// rescue_unit: the rescue unit this task belongs to, numbered from 1 within
+	// THIS ApplyRequest; 0 = the task is in no unit. For one source register, a
+	// unit is the outermost task, `block:` or `apply:` whose own `onfail:` names it,
+	// with everything below it (ADR-0091 amendment NIM-993, rule 1). The plan Soul
+	// receives is flattened, so without the number a block of two rescue children
+	// would look the same as two separate rescues.
+	//
+	// A Soul applies the handling rule (a unit that succeeds handles its source's
+	// failure, rule 6) only to a message in which some task carries it; a message
+	// where every task carries 0 keeps fail-stop, as from an older Keeper.
+	//
+	// Half wired: the Soul reads it (NIM-993 slice S2), but nothing sets it yet, so
+	// every message carries 0 and keeps fail-stop. The Keeper sets it in a later
+	// slice of NIM-993.
+	// Forward-compat (ADR-012(c) only-add). Never reuse this field number.
+	RescueUnit    int32 `protobuf:"varint,22,opt,name=rescue_unit,json=rescueUnit,proto3" json:"rescue_unit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -516,6 +532,13 @@ func (x *RenderedTask) GetRequireAll() bool {
 		return x.RequireAll
 	}
 	return false
+}
+
+func (x *RenderedTask) GetRescueUnit() int32 {
+	if x != nil {
+		return x.RescueUnit
+	}
+	return 0
 }
 
 // ApplyRequest is Keeper -> Soul's command to run a job.
@@ -1054,7 +1077,7 @@ var File_keeper_v1_apply_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_apply_proto_rawDesc = "" +
 	"\n" +
-	"\x15keeper/v1/apply.proto\x12\x13soulstack.keeper.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16keeper/v1/common.proto\"\x9e\x05\n" +
+	"\x15keeper/v1/apply.proto\x12\x13soulstack.keeper.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16keeper/v1/common.proto\"\xbf\x05\n" +
 	"\fRenderedTask\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06module\x18\x02 \x01(\tR\x06module\x12/\n" +
@@ -1083,7 +1106,9 @@ const file_keeper_v1_apply_proto_rawDesc = "" +
 	"\vrequire_idx\x18\x13 \x03(\x05R\n" +
 	"requireIdx\x12\x1f\n" +
 	"\vrequire_all\x18\x14 \x01(\bR\n" +
-	"requireAllJ\x04\b\x04\x10\x05R\x06no_log\"\xd4\x01\n" +
+	"requireAll\x12\x1f\n" +
+	"\vrescue_unit\x18\x16 \x01(\x05R\n" +
+	"rescueUnitJ\x04\b\x04\x10\x05R\x06no_log\"\xd4\x01\n" +
 	"\fApplyRequest\x12\x19\n" +
 	"\bapply_id\x18\x01 \x01(\tR\aapplyId\x127\n" +
 	"\x05tasks\x18\x02 \x03(\v2!.soulstack.keeper.v1.RenderedTaskR\x05tasks\x12#\n" +

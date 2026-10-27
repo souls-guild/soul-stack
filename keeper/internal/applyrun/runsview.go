@@ -14,7 +14,8 @@ import (
 // DATA BOUNDARY. apply_runs stores status PER HOST-ROW (planned…orphaned),
 // NOT per-task changed/ok/skipped: TaskEvent is aggregated on the Soul side without
 // per-task progress in MVP (ADR-012). The only per-task detail in PG is a failed task
-// (task_idx / failed_plan_index / error_summary on failed rows). Therefore,
+// (task_idx / failed_plan_index / error_summary on failed rows, and on a success row
+// that handled a failure in its message). Therefore,
 // "run details" are a slice by hosts (which hosts are running/failed/succeeded +
 // the address of the failed task), not a full list of tasks with their statuses.
 
@@ -27,10 +28,13 @@ const (
 	// RunStatusApplying indicates at least one host row is not yet terminal
 	// (planned/claimed/running/dispatched). The run is in progress — "current job".
 	RunStatusApplying RunStatus = "applying"
-	// RunStatusSuccess indicates all host rows are terminal and benign (success/no_match).
+	// RunStatusSuccess indicates all host rows are terminal and benign (success/no_match),
+	// or failed/orphaned with every failure handled by a rescue (`apply_runs.handled`,
+	// [MarkHandled]).
 	RunStatusSuccess RunStatus = "success"
 	// RunStatusFailed indicates all host rows are terminal with at least one
-	// failed/orphaned (non-success). Takes priority over cancelled.
+	// failed/orphaned row that is neither a drop nor handled. Takes priority over
+	// cancelled.
 	RunStatusFailed RunStatus = "failed"
 	// RunStatusPartialFailed indicates the run finished without some of its hosts:
 	// they failed under `on_failure: host` and the rest ran to the end. The
@@ -82,7 +86,8 @@ type RunSummary struct {
 // so the failed task's address stays on the unit it failed in.
 //
 // FailedTaskIdx is the LOCAL index of the failed task in the ApplyRequest this row was
-// dispatched with (nil on success/still-running/dispatch-level failure); for a host the
+// dispatched with (nil on still-running/dispatch-level failure, and on a success row
+// that handled no failure in its message); for a host the
 // Keeper failed before sending it anything (linear dispatch, NIM-943), its position in
 // the slice the host was grouped with.
 // FailedPlanIndex is the GLOBAL end-to-end plan_index of the same task across the
@@ -102,6 +107,12 @@ type RunHostStatus struct {
 	// Dropped — this failed or orphaned row dropped its host from a run that finished without it
 	// ([MarkDropped]).
 	Dropped bool
+	// Handled — this row's failures were handled by a rescue (ADR-0091 amendment
+	// NIM-993, rule 5): a failed or orphaned row marked `apply_runs.handled`
+	// ([MarkHandled]), or a success row that carries a failure the Soul handled inside
+	// its message. Such a row keeps FailedTaskIdx/FailedPlanIndex/ErrorSummary. Never
+	// on a dropped row: a drop wins over the mark, as it does in the fold.
+	Handled bool
 	// Notices — advisory findings this host reported during the run (NIM-237),
 	// deduplicated by (code, module, param): the same deprecated param used by
 	// twenty tasks is one thing to migrate. Per-host rather than per-run because
@@ -136,17 +147,23 @@ type RunDetail struct {
 }
 
 // AggregateRunStatus collapses a run into [RunStatus]. dropped is how many of its
-// rows are a dropped host's ([MarkDropped]), each of them failed or orphaned.
+// rows are a dropped host's ([MarkDropped]), handled how many others carry the
+// `apply_runs.handled` mark ([MarkHandled]); each of them is failed or orphaned.
 // Priority order (corresponds to barrier classification, dispatch.go classify): the
 // run holds its incarnation's applying lock (lockHeld, [runLockHeldSQL]) or any row
-// is non-terminal → applying; else a failed/orphaned row that is not a drop →
-// failed; else cancelled → cancelled; else a drop → partial_failed; else (only
-// success/no_match) → success. Empty slice → applying (rows not yet dispatched —
-// run not complete).
+// is non-terminal → applying; else a failed/orphaned row that is neither a drop
+// nor handled → failed; else cancelled → cancelled; else a drop → partial_failed;
+// else (success/no_match, and handled failures) → success. Empty slice → applying
+// (rows not yet dispatched — run not complete).
 //
 // The rows alone cannot say a run is over: between one step's barrier and the
 // next step's rows every row is terminal (NIM-972).
-func AggregateRunStatus(statuses []Status, dropped int, lockHeld bool) RunStatus {
+//
+// handled counts the mark only, never [RunHostStatus.Handled]: a success row that
+// handled a failure in its message is already benign, and counting it would hide
+// a failure of another row. A row carrying both marks counts once, as a drop —
+// the SQL twin ([runsAggregateSelect]) judges row by row.
+func AggregateRunStatus(statuses []Status, dropped, handled int, lockHeld bool) RunStatus {
 	if lockHeld || len(statuses) == 0 {
 		return RunStatusApplying
 	}
@@ -166,7 +183,7 @@ func AggregateRunStatus(statuses []Status, dropped int, lockHeld bool) RunStatus
 		}
 	}
 	switch {
-	case failures > dropped:
+	case failures > dropped+handled:
 		return RunStatusFailed
 	case hasCancelled:
 		return RunStatusCancelled
@@ -191,7 +208,8 @@ SELECT ar.apply_id,
        MIN(ar.started_by_aid)                          AS started_by_aid,
        array_agg(ar.status)                            AS statuses,
        bool_or(` + runLockHeldSQL + `)                 AS lock_held,
-       COUNT(*) FILTER (WHERE ar.dropped)              AS dropped
+       COUNT(*) FILTER (WHERE ar.dropped)              AS dropped,
+       COUNT(*) FILTER (WHERE ar.handled AND NOT ar.dropped) AS handled
 FROM apply_runs ar
 LEFT JOIN incarnation i ON ar.incarnation_name = i.id
 WHERE ar.incarnation_name = $1
@@ -232,12 +250,13 @@ func ListRunsByIncarnation(ctx context.Context, db ExecQueryRower, incarnationNa
 			statusStrs []string
 			lockHeld   bool
 			dropped    int
+			handled    int
 		)
-		if err := rows.Scan(&rs.ApplyID, &rs.Scenario, &rs.StartedAt, &rs.FinishedAt, &rs.StartedByAID, &statusStrs, &lockHeld, &dropped); err != nil {
+		if err := rows.Scan(&rs.ApplyID, &rs.Scenario, &rs.StartedAt, &rs.FinishedAt, &rs.StartedByAID, &statusStrs, &lockHeld, &dropped, &handled); err != nil {
 			return nil, 0, fmt.Errorf("applyrun: scan run summary: %w", err)
 		}
 		rs.Incarnation = incarnationName
-		rs.Status = AggregateRunStatus(toStatuses(statusStrs), dropped, lockHeld)
+		rs.Status = AggregateRunStatus(toStatuses(statusStrs), dropped, handled, lockHeld)
 		out = append(out, rs)
 	}
 	if err := rows.Err(); err != nil {
@@ -252,7 +271,7 @@ func ListRunsByIncarnation(ctx context.Context, db ExecQueryRower, incarnationNa
 const selectRunHostsSQL = `
 SELECT ar.sid, ar.status, ar.passage, ar.task_idx, ar.failed_plan_index, ar.error_summary,
        ar.attempt, ar.cancel_requested, ar.scenario, ar.started_at, ar.finished_at, ar.started_by_aid,
-       ar.input, ar.notices, ` + runLockHeldSQL + `, ar.dropped
+       ar.input, ar.notices, ` + runLockHeldSQL + `, ar.dropped, ar.handled
 FROM apply_runs ar
 LEFT JOIN incarnation i ON ar.incarnation_name = i.id
 WHERE ar.apply_id = $1 AND ar.incarnation_name = $2
@@ -277,6 +296,7 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 		detail   RunDetail
 		statuses []Status
 		dropped  int
+		handled  int
 		// Run finality: expose FinishedAt only when every row has finished (max of
 		// non-nil; nil if at least one row is still running).
 		allFinished = true
@@ -293,18 +313,23 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 			rowStartedBy *string
 			rowInput     []byte
 			rowNotices   []byte
+			marked       bool
 		)
 		if err := rows.Scan(
 			&hs.SID, &statusStr, &hs.Passage, &hs.FailedTaskIdx, &hs.FailedPlanIndex,
 			&hs.ErrorSummary, &hs.Attempt, &hs.CancelRequested,
 			&rowScenario, &rowStarted, &rowFinished, &rowStartedBy,
-			&rowInput, &rowNotices, &lockHeld, &hs.Dropped,
+			&rowInput, &rowNotices, &lockHeld, &hs.Dropped, &marked,
 		); err != nil {
 			return nil, fmt.Errorf("applyrun: scan run host: %w", err)
 		}
 		hs.Status = Status(statusStr)
-		if hs.Dropped {
+		hs.Handled = !hs.Dropped && (marked || (hs.Status == StatusSuccess && hs.FailedPlanIndex != nil))
+		switch {
+		case hs.Dropped:
 			dropped++
+		case marked:
+			handled++
 		}
 		// notices is an append-only log (one entry per reporting task), collapsed
 		// here into the set an operator acts on. Unparseable jsonb is dropped
@@ -347,7 +372,7 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 	if detail.ApplyID == "" {
 		return nil, ErrApplyRunNotFound
 	}
-	detail.Status = AggregateRunStatus(statuses, dropped, lockHeld)
+	detail.Status = AggregateRunStatus(statuses, dropped, handled, lockHeld)
 	if allFinished && !lockHeld {
 		detail.FinishedAt = &maxFinished
 	}
@@ -361,7 +386,7 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 }
 
 const selectRunStatusSQL = `
-SELECT ar.status, ` + runLockHeldSQL + `, ar.dropped
+SELECT ar.status, ` + runLockHeldSQL + `, ar.dropped, ar.handled
 FROM apply_runs ar
 LEFT JOIN incarnation i ON ar.incarnation_name = i.id
 WHERE ar.apply_id = $1
@@ -379,25 +404,29 @@ func SelectRunStatus(ctx context.Context, db ExecQueryRower, applyID string) (Ru
 		statuses []Status
 		lockHeld bool
 		dropped  int
+		handled  int
 	)
 	for rows.Next() {
 		var (
-			s          string
-			held, drop bool
+			s                string
+			held, drop, mark bool
 		)
-		if err := rows.Scan(&s, &held, &drop); err != nil {
+		if err := rows.Scan(&s, &held, &drop, &mark); err != nil {
 			return "", fmt.Errorf("applyrun: scan run status: %w", err)
 		}
 		statuses = append(statuses, Status(s))
 		lockHeld = lockHeld || held
-		if drop {
+		switch {
+		case drop:
 			dropped++
+		case mark:
+			handled++
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf("applyrun: iterate run status: %w", err)
 	}
-	return AggregateRunStatus(statuses, dropped, lockHeld), nil
+	return AggregateRunStatus(statuses, dropped, handled, lockHeld), nil
 }
 
 // toStatuses converts a slice of status strings from array_agg into []Status.

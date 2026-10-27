@@ -1282,8 +1282,8 @@ type RunSummaryView struct {
 }
 
 // RunHostStatusView — FLAT domain row of one host in the run details.
-// FailedTaskIdx/FailedPlanIndex/ErrorSummary are filled only on the failed host
-// (nil on success/still-running).
+// FailedTaskIdx/FailedPlanIndex/ErrorSummary are filled only on a failed or handled
+// row (nil on a success row that handled nothing, and on a still-running one).
 type RunHostStatusView struct {
 	SID             string
 	Status          string
@@ -1296,6 +1296,8 @@ type RunHostStatusView struct {
 	// Dropped — this failed or orphaned row dropped its host from a run that finished without it
 	// (applyrun.MarkDropped).
 	Dropped bool
+	// Handled — this row's failures were handled by a rescue (applyrun.RunHostStatus.Handled).
+	Handled bool
 	// Notices — advisory findings this host reported (NIM-237), deduplicated by
 	// (code, module, param). Independent of Status: a notice rides along with
 	// work that SUCCEEDED, which is the whole point — it is how a deprecation
@@ -1426,6 +1428,7 @@ func (h *IncarnationHandler) RunDetailTyped(ctx context.Context, name, applyID s
 			Attempt:         hs.Attempt,
 			CancelRequested: hs.CancelRequested,
 			Dropped:         hs.Dropped,
+			Handled:         hs.Handled,
 			Notices:         notices,
 		})
 	}

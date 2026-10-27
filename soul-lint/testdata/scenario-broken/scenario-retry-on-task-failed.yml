@@ -1,0 +1,6 @@
+name: retry-on-task-failed
+tasks:
+  - name: Refuse an unsupported release
+    module: core.task.failed
+    retry: { count: 3 }
+    params: { message: the legacy release is not supported }

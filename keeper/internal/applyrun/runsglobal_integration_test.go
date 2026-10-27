@@ -9,6 +9,7 @@ package applyrun
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -809,5 +810,242 @@ func TestIntegration_RunStatus_DroppedRowsFoldToPartialFailed(t *testing.T) {
 	}
 	if len(partial) != 1 || partial[0].ApplyID != "01HDP01" {
 		t.Errorf("status=partial_failed filter = %+v, want only 01HDP01", partial)
+	}
+}
+
+// ★ GUARD (NIM-993, ADR-0091 amendment rule 5). A run whose every failure a rescue
+// handled reads `success` on every read path — the global list, its status filter,
+// the stats, the per-incarnation list, the run detail and SelectRunStatus. A
+// handled row next to a drop reads `partial_failed`, next to an unhandled failure
+// `failed`, and a Cancel still wins. The wire's `handled` is true on a marked row
+// and on a `success` row that carries a failure; only the mark counts in the fold.
+//
+// Mutations: drop `AND NOT ar.handled` from the SQL CASE → 01HHD01 reads failed on
+// /v1/runs; MarkHandled without its status filter → a success row is marked;
+// without `NOT dropped` → a dropped row is marked; the view reading only the mark
+// → host-a of 01HHD03 is not handled; the fold counting the view's `handled` →
+// 01HHD03 reads success.
+func TestIntegration_RunStatus_HandledRowsFoldToSuccess(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "redis-prod", "archon-alice")
+	ctx := context.Background()
+
+	seedRun(t, ctx, "01HHD01", "redis-prod", "create", StatusSuccess, StatusFailed, StatusOrphaned)
+	seedRun(t, ctx, "01HHD02", "redis-prod", "create", StatusSuccess, StatusFailed, StatusFailed)
+	seedRun(t, ctx, "01HHD03", "redis-prod", "create", StatusRunning, StatusFailed, StatusFailed)
+	seedRun(t, ctx, "01HHD04", "redis-prod", "create", StatusCancelled, StatusFailed)
+	// host-a of 01HHD03 handled a failure inside its own message: the Soul finished
+	// it success, and it keeps the failure's address.
+	if err := RecordTaskFailure(ctx, integrationPool, "01HHD03", "host-a-01HHD03", 0, 1, 3, "task 1 core.exec.run: boom"); err != nil {
+		t.Fatalf("RecordTaskFailure: %v", err)
+	}
+	if err := UpdateStatus(ctx, integrationPool, "01HHD03", "host-a-01HHD03", 0, StatusSuccess, nil); err != nil {
+		t.Fatalf("UpdateStatus(success): %v", err)
+	}
+	if err := MarkDropped(ctx, integrationPool, "01HHD02", "host-c-01HHD02", 0); err != nil {
+		t.Fatalf("MarkDropped: %v", err)
+	}
+	for _, d := range []struct{ applyID, host string }{
+		{"01HHD01", "host-b"}, {"01HHD01", "host-c"},
+		{"01HHD02", "host-b"},
+		{"01HHD03", "host-b"},
+		{"01HHD04", "host-b"},
+	} {
+		if err := MarkHandled(ctx, integrationPool, d.applyID, d.host+"-"+d.applyID, 0); err != nil {
+			t.Fatalf("MarkHandled(%s, %s): %v", d.applyID, d.host, err)
+		}
+	}
+	if err := MarkHandled(ctx, integrationPool, "01HHD01", "host-a-01HHD01", 0); !errors.Is(err, ErrApplyRunNotFound) {
+		t.Errorf("MarkHandled on a success row = %v, want ErrApplyRunNotFound", err)
+	}
+	if err := MarkHandled(ctx, integrationPool, "01HHD02", "host-c-01HHD02", 0); !errors.Is(err, ErrApplyRunNotFound) {
+		t.Errorf("MarkHandled on a dropped row = %v, want ErrApplyRunNotFound", err)
+	}
+
+	want := map[string]RunStatus{
+		"01HHD01": RunStatusSuccess,
+		"01HHD02": RunStatusPartialFailed,
+		"01HHD03": RunStatusFailed,
+		"01HHD04": RunStatusCancelled,
+	}
+	global, _, err := ListRuns(ctx, integrationPool, RunsFilter{}, unrestrictedScope, 0, 50)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	perInc, _, err := ListRunsByIncarnation(ctx, integrationPool, "redis-prod", 0, 50)
+	if err != nil {
+		t.Fatalf("ListRunsByIncarnation: %v", err)
+	}
+	for name, runs := range map[string][]RunSummary{"global": global, "incarnation": perInc} {
+		if len(runs) != len(want) {
+			t.Fatalf("%s list: %d runs, want %d", name, len(runs), len(want))
+		}
+		for _, r := range runs {
+			if r.Status != want[r.ApplyID] {
+				t.Errorf("%s list %s: status %q, want %q", name, r.ApplyID, r.Status, want[r.ApplyID])
+			}
+		}
+	}
+	for applyID, w := range want {
+		detail, err := SelectRunDetail(ctx, integrationPool, applyID, "redis-prod")
+		if err != nil {
+			t.Fatalf("SelectRunDetail(%s): %v", applyID, err)
+		}
+		if detail.Status != w {
+			t.Errorf("detail %s: status %q, want %q", applyID, detail.Status, w)
+		}
+		got, err := SelectRunStatus(ctx, integrationPool, applyID)
+		if err != nil {
+			t.Fatalf("SelectRunStatus(%s): %v", applyID, err)
+		}
+		if got != w {
+			t.Errorf("SelectRunStatus(%s) = %q, want %q", applyID, got, w)
+		}
+	}
+	for status, applyID := range map[RunStatus]string{RunStatusSuccess: "01HHD01", RunStatusFailed: "01HHD03"} {
+		runs, _, err := ListRuns(ctx, integrationPool, RunsFilter{Status: status}, unrestrictedScope, 0, 50)
+		if err != nil {
+			t.Fatalf("ListRuns(status=%s): %v", status, err)
+		}
+		if len(runs) != 1 || runs[0].ApplyID != applyID {
+			t.Errorf("status=%s filter = %+v, want only %s", status, runs, applyID)
+		}
+	}
+	stats, err := SelectRunsStats(ctx, integrationPool, unrestrictedScope)
+	if err != nil {
+		t.Fatalf("SelectRunsStats: %v", err)
+	}
+	wantCounts := RunsStatusCounts{Total: 4, Success: 1, Failed: 1, PartialFailed: 1, Cancelled: 1}
+	if stats.All != wantCounts {
+		t.Errorf("stats.All = %+v, want %+v", stats.All, wantCounts)
+	}
+
+	handledRows := map[string]bool{}
+	for _, applyID := range []string{"01HHD01", "01HHD02", "01HHD03"} {
+		detail, err := SelectRunDetail(ctx, integrationPool, applyID, "redis-prod")
+		if err != nil {
+			t.Fatalf("SelectRunDetail(%s): %v", applyID, err)
+		}
+		for _, h := range detail.Hosts {
+			handledRows[h.SID] = h.Handled
+		}
+	}
+	for sid, w := range map[string]bool{
+		"host-a-01HHD01": false, "host-b-01HHD01": true, "host-c-01HHD01": true,
+		"host-b-01HHD02": true, "host-c-01HHD02": false,
+		"host-a-01HHD03": true, "host-b-01HHD03": true, "host-c-01HHD03": false,
+	} {
+		if handledRows[sid] != w {
+			t.Errorf("detail host %s: handled %v, want %v", sid, handledRows[sid], w)
+		}
+	}
+	barrier, err := SelectStatusesByApplyID(ctx, integrationPool, "01HHD01")
+	if err != nil {
+		t.Fatalf("SelectStatusesByApplyID: %v", err)
+	}
+	for _, hs := range barrier {
+		if w := hs.SID != "host-a-01HHD01"; hs.HandledMark != w {
+			t.Errorf("barrier row %s: HandledMark %v, want %v", hs.SID, hs.HandledMark, w)
+		}
+	}
+}
+
+// ★ GUARD (NIM-993). The drop and handled marks are exclusive, and a drop wins:
+// MarkDropped clears the handled mark, and a row carrying both — written by any
+// other path — folds as a drop on every read path and is never `handled` in the
+// run detail. Beside an unmarked failure the run reads `failed`; alone,
+// `partial_failed`.
+//
+// Mutations: drop `AND NOT ar.dropped` from the per-incarnation handled count →
+// 01HDW01 reads partial_failed there; count the mark before the drop in
+// SelectRunDetail or SelectRunStatus → 01HDW02 reads success there; drop
+// `!hs.Dropped` from the view's handled → host-b reads handled; MarkDropped
+// without `handled = FALSE` → host-b of 01HDW03 keeps the mark.
+func TestIntegration_RunStatus_DropWinsOverHandled(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "redis-prod", "archon-alice")
+	ctx := context.Background()
+
+	seedRun(t, ctx, "01HDW01", "redis-prod", "create", StatusSuccess, StatusFailed, StatusFailed)
+	seedRun(t, ctx, "01HDW02", "redis-prod", "create", StatusSuccess, StatusFailed)
+	seedRun(t, ctx, "01HDW03", "redis-prod", "create", StatusSuccess, StatusFailed)
+	if _, err := integrationPool.Exec(ctx, `
+		UPDATE apply_runs SET dropped = TRUE, handled = TRUE
+		WHERE sid IN ('host-b-01HDW01', 'host-b-01HDW02')`); err != nil {
+		t.Fatalf("mark both: %v", err)
+	}
+	if err := MarkHandled(ctx, integrationPool, "01HDW03", "host-b-01HDW03", 0); err != nil {
+		t.Fatalf("MarkHandled: %v", err)
+	}
+	if err := MarkDropped(ctx, integrationPool, "01HDW03", "host-b-01HDW03", 0); err != nil {
+		t.Fatalf("MarkDropped: %v", err)
+	}
+	barrier, err := SelectStatusesByApplyID(ctx, integrationPool, "01HDW03")
+	if err != nil {
+		t.Fatalf("SelectStatusesByApplyID: %v", err)
+	}
+	for _, hs := range barrier {
+		if hs.SID == "host-b-01HDW03" && (!hs.Dropped || hs.HandledMark) {
+			t.Errorf("%s after MarkHandled, MarkDropped: dropped %v, handled mark %v; want a drop only", hs.SID, hs.Dropped, hs.HandledMark)
+		}
+	}
+
+	assertRunStatuses(t, ctx, "redis-prod", map[string]RunStatus{
+		"01HDW01": RunStatusFailed,
+		"01HDW02": RunStatusPartialFailed,
+		"01HDW03": RunStatusPartialFailed,
+	})
+	for _, applyID := range []string{"01HDW01", "01HDW02", "01HDW03"} {
+		detail, err := SelectRunDetail(ctx, integrationPool, applyID, "redis-prod")
+		if err != nil {
+			t.Fatalf("SelectRunDetail(%s): %v", applyID, err)
+		}
+		for _, h := range detail.Hosts {
+			if h.Handled {
+				t.Errorf("detail host %s (dropped %v): handled, want not", h.SID, h.Dropped)
+			}
+		}
+	}
+}
+
+// assertRunStatuses checks that every run of inc reads want on every read path:
+// the global list, the per-incarnation list, the run detail and SelectRunStatus.
+func assertRunStatuses(t *testing.T, ctx context.Context, inc string, want map[string]RunStatus) {
+	t.Helper()
+	global, _, err := ListRuns(ctx, integrationPool, RunsFilter{}, unrestrictedScope, 0, 50)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	perInc, _, err := ListRunsByIncarnation(ctx, integrationPool, inc, 0, 50)
+	if err != nil {
+		t.Fatalf("ListRunsByIncarnation: %v", err)
+	}
+	for name, runs := range map[string][]RunSummary{"global": global, "incarnation": perInc} {
+		if len(runs) != len(want) {
+			t.Fatalf("%s list: %d runs, want %d", name, len(runs), len(want))
+		}
+		for _, r := range runs {
+			if r.Status != want[r.ApplyID] {
+				t.Errorf("%s list %s: status %q, want %q", name, r.ApplyID, r.Status, want[r.ApplyID])
+			}
+		}
+	}
+	for applyID, w := range want {
+		detail, err := SelectRunDetail(ctx, integrationPool, applyID, inc)
+		if err != nil {
+			t.Fatalf("SelectRunDetail(%s): %v", applyID, err)
+		}
+		if detail.Status != w {
+			t.Errorf("detail %s: status %q, want %q", applyID, detail.Status, w)
+		}
+		got, err := SelectRunStatus(ctx, integrationPool, applyID)
+		if err != nil {
+			t.Fatalf("SelectRunStatus(%s): %v", applyID, err)
+		}
+		if got != w {
+			t.Errorf("SelectRunStatus(%s) = %q, want %q", applyID, got, w)
+		}
 	}
 }

@@ -721,7 +721,7 @@ func TestDispatchPassage_RefusesBeforeDispatchingAnyHost(t *testing.T) {
 	}
 	spec := RunSpec{ApplyID: "ap-7", IncarnationName: "redis-prod", ScenarioName: "live"}
 
-	err := r.dispatchPassage(context.Background(), spec, discardLog(), 0, tasks, plans, nil, hosts, nil, nil)
+	err := r.dispatchPassage(context.Background(), spec, discardLog(), 0, tasks, plans, nil, hosts, nil, nil, false)
 	if err == nil {
 		t.Fatal("dispatchPassage accepted a run with an unroutable push host")
 	}

@@ -82,6 +82,7 @@ var soulSideCore = map[string]struct{}{
 	Namespace + ".repo":      {},
 	Namespace + ".service":   {},
 	Namespace + ".sysctl":    {},
+	Namespace + ".task":      {}, // ADR-0091 amendment NIM-993 — always fails its task
 	Namespace + ".url":       {},
 	Namespace + ".user":      {},
 }

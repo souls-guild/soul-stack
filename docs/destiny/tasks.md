@@ -276,7 +276,7 @@ A declared per-module concurrency class is a deferred extension ([ADR-0075](../a
 - **No grouping.** `async: true` on two adjacent tasks **does not** mean "execute together". Each simply runs in its own flow independently. Neighbours can be anything - other async tasks, ordinary tasks, include, block. A construct that *does* group is the reserved `parallel:` (not implemented).
 - **Not on a construct that expands into a group.** `async:` is rejected fail-closed on a `block:` (`async_on_block_invalid`, §6.5) and on an `apply:` task (`async_on_apply_invalid`) - the two constructs that fan out into several tasks. Running a whole group in one flow is the design intent and a deferred slice ([ADR-0075](../adr/0075-intra-host-async-tasks.md)); until it lands, render carries the flag onto none of the expanded tasks, so accepting the key would hand back the ordinary sequential duration with nothing said about it. Put `async:` on the individual tasks of the destiny the applier invokes instead - not inside a block, where it is refused too (see below).
 - **Not on a keeper-side task.** `async: true` on a keeper-side task is rejected (`async_on_keeper_invalid`). The side is read off the module ADDRESS since NIM-749, not off a written `on: keeper` — the flag is equally a no-op on a `core.state.set` carrying no `on:` at all: `async:` is Soul-side task concurrency and a keeper task is executed by the keeper's own runner, never reaching a Soul - honouring the flag would be a no-op. A keeper-side task lives only in a scenario, where `require:` is refused too (§8).
-- **Failure is observed where it is awaited.** A failed async task writes `register.<name>.failed = true` and **does not** interrupt the main flow at the moment it fails. The flow learns about it exactly where it reaches for it - an explicit `require:`, an implicit reference, or the final barrier - and there the ordinary fail-stop of §8 engages: the run is irreversibly failed, subsequent ordinary tasks are skipped, only the `onfail:` rescue tail runs.
+- **Failure is observed where it is awaited.** A failed async task writes `register.<name>.failed = true` and **does not** interrupt the main flow at the moment it fails. The flow learns about it exactly where it reaches for it - an explicit `require:`, an implicit reference, or the final barrier - and there the ordinary fail-stop of §8 engages: subsequent ordinary tasks are skipped, only the `onfail:` rescue tail runs, and the message ends `FAILED` ([§8 `onfail:`](#onfail)).
 - **Siblings are never cancelled.** Async tasks already in flight run to completion and are collected by the final barrier. This is deliberate: cancelling would make the set of tasks that actually ran depend on scheduling timing and leave the host in a state no one declared. The cost is accepted - a doomed run may keep working as long as its slowest in-flight task. An opt-in cancel is a deferred extension ([ADR-0075](../adr/0075-intra-host-async-tasks.md)).
 - **Gating stays sequential.** The async task's own `when:` / `onchanges:` / `onfail:` are evaluated **in the main flow at its position in the plan**, before it is launched. So *whether* a task runs never depends on timing - only *when* it finishes does.
 - **`when: false`** - the task is skipped, the flow does not start, `register.<name>` is missing, subsequent calls to it result in a validation error.
@@ -364,10 +364,10 @@ Roster is inherited by the **entire** block (block does NOT narrow down hosts - 
 
 ### What is **not yet** (open questions)
 
-- **`rescue:`** - a list of tasks executed when fail inside `block:`. Now we make do with `onfail:` tasks after the block.
+- **`rescue:`** - a list of tasks executed when fail inside `block:`. *Answered (user, 2026-10-14): no explicit syntax.* `onfail:` is the rescue: a `block:` that writes `onfail:` is one rescue unit, and a rescue names the task it rescues by register ([§8 `onfail:`](#onfail)).
 - **`always:`** - a list of tasks performed regardless of the outcome of the block (cleanup, finalize). Now we get by with ordinary tasks without `onfail:`/`onchanges:`-dependence on the block.
 
-Both mechanisms are fixed in §12 as open Q. Before their implementation, the semantics of `block:` is only grouping by condition, without error-handling.
+`always:` stays an open Q in §12. A `block:` carries no error-handling of its own: it groups by condition, and `onfail:` on it makes the whole block one rescue.
 
 ## 7. Cycles (`loop:`)
 
@@ -553,15 +553,18 @@ All three blocks refer to `register:` names of other tasks. `register:` therefor
 
 #### `onfail:` changes the fail-stop run (rescue semantics)
 
-By default, the run operates in **fail-stop** mode: the first failed task (`failed`/`timed_out`) stops the main flow. `onfail:` introduces an exception to this invariant - **rescue-tail**:
+By default, the run operates in **fail-stop** mode: the first failed task (`failed`/`timed_out`) stops the main flow. `onfail:` introduces an exception to this invariant - the **rescue**:
 
-- The first `failed`/`timed_out` task **irreversibly** marks the result of the run as a failure (`RunStatus = FAILED`).
-- But the task cycle **is not interrupted**: all subsequent **regular** (without `onfail:`) tasks are skipped (`skipped`, the module is not called), and are processed **only** by `onfail:` tasks whose source has failed. This is rescue/cleanup.
-- `onfail:`-task failure **not cancelled**: even if all rescue handlers were successful, the final `RunStatus` remains `FAILED`. `onfail:` is compensation, not "forgiveness," for failure.
+- **A rescue unit.** For one source, the rescue unit is the outermost task, `block:` or `apply:` whose own `onfail:` names it, with everything inside it. A `block:` with `onfail: [migration]` is one unit: its children are tried together, not one by one. A unit **succeeds** on a host when at least one of its tasks ran there and none failed.
+- **Inside one message, a rescue is still compensation.** A message is a destiny, or a scenario group rolled as one. The first `failed`/`timed_out` task marks the message's result as a failure (`RunStatus = FAILED`). The task cycle **is not interrupted**: every later **ordinary** task (one without `onfail:`) is skipped (`skipped`, the module is not called), and only the `onfail:` tasks whose source failed run. Even when every rescue succeeds, the message stays `FAILED`. The Soul already has the handling rule (capability `onfail_handled`): a unit that succeeds handles the failure, and the ordinary tasks after it resume. It applies the rule only to a message the Keeper marks with `rescue_unit`, and no Keeper marks one yet ([known-limitations.md](../known-limitations.md#rescues-what-is-not-built-yet)).
+- **Across the steps of a scenario, a rescue that succeeds handles the failure** (NIM-993). The failed host waits for its rescue and receives only its rescues meanwhile. When one succeeds the host returns to the run, and the run can end `success`. A failure that no rescue handles is judged by the failed task's `on_failure` at the barrier of its last rescue. The rules, with an example: [scenario/rescues.md](../scenario/rescues.md).
+- **A handled failure is not undone.** The source keeps its FAILED record, and `register.<name>.failed` stays `true`.
 - `failed_when: false` (ignore_errors, [see below](#failed_when)) does task `OK` - it **doesn't** trigger either fail-stop or `onfail:` subsequent ones (it doesn't `failed`).
 - Canceling a run by the operator (`CancelApply`) is **not** a fail-stop; when canceling, rescue **does not** work, the cycle is terminated unconditionally (`RunStatus = CANCELLED`).
+- **Two refusals**, from `soul-lint` and from the Keeper. An `onfail:` that names a register set inside a rescue unit of the same plan is refused (`onfail_names_rescue`): a rescue's failure means "not handled", not a failure that another rescue could take. A `when:` reading such a register stays legal. A group rolled as one that holds more than one rescue unit for sources outside it is refused too (`group_multiple_rescue_units`).
+- **`core.task.failed`** always fails its task. Inside a rescue unit it is the explicit "this error is not handled", gated by its `when:`; anywhere else it fails the task as Ansible's `fail` does. `message:` is required outside a unit (`missing_required_field`) and optional inside one. Its default inside a unit, the original error, is not built yet: today a `core.task.failed` with no `message:` fails with a generic text, so write one. `failed_when:`, `changed_when:`, `retry:` and `timeout:` on it are refused (`<key>_on_task_failed_invalid`).
 
-> The `rescue:`-inside-`block:` pattern is expressed through the unified requisite mechanism: `onfail:` task after the block instead of a nested `rescue:` list (see [§6.5](#65-block---inline-task-group)).
+> The `rescue:`-inside-`block:` pattern is expressed through the unified requisite mechanism: an `onfail:` block after the block, instead of a nested `rescue:` list (see [§6.5](#65-block---inline-task-group)).
 
 ### `require:`
 
@@ -613,7 +616,7 @@ Order is the in-order walk of the task list, descending into `block:` - a block 
 - **Type:** CEL expression, the entire line is treated as a CEL without the wrapper `${ … }` ([ADR-010](../adr/0010-templating.md), [`docs/templating.md §2.1`](../templating.md)). The result is converted to bool.
 - **Applies to:** all types of problems.
 - **Semantics:** the task is executed only if the expression is truthy. Falsy → the task is skipped with the mark `skipped: when`.
-- **Combination with requisites:** all conditions are summed by AND. First, requisites (`onchanges`, `onfail`, `require`) are checked, then `when:`.
+- **Combination with requisites:** all conditions are summed by AND. `when:` is read first, then the requisites (`onchanges`, `onfail`, `require`): the task runs only when its `when:` is true and every requisite holds, and the skip reason says which one stopped it (`soul_apply_task_skipped_total`, reason `when` or `requisite`). (Once the Keeper marks rescue units — not built — a unit's task checks its requisite first, so a rescue that does not fire never reads its `when:`; [ADR-0091 amendment NIM-993](../adr/0091-scenario-linear-barrier.md#amendment-2026-10-14-nim-993-a-rescue-that-succeeds-handles-the-failure).)
 - **Not on a keeper-side task, unless it is static.** A keeper-side step — one whose module address puts it there, with no `on:` written — is executed by the keeper's own runner, which evaluates no flow-control predicate. A **static** `when:` (`input.` / `vars.` / `incarnation.`) is fine - the keeper settles it at render, before the task is routed keeper-side. A `when:` reading `register.*`/`soulprint.*` is rejected (`when_on_keeper_dynamic_unsupported`): it would be accepted and dropped, and since [ADR-0084](../adr/0084-explicit-state-capture.md) the step that runs regardless of its condition is the step that writes incarnation state. Replacements and the full key-by-key answer - [keeper/modules.md](../keeper/modules.md).
 
 #### `has()`-guard for optional-input with non-static `when:`
@@ -828,7 +831,7 @@ The DSL core of the tasks above is common to destiny and scenario ([ADR-009](../
 | | destiny (single host) | scenario (one cluster) |
 |---|---|---|
 | the SERVICE's `vars/` | **NO** - destiny is isolated, sees only `input:` and its own `vars.yml`. The service inserts values into `input:` when `apply:` is called. | **yes** - the resolved `vars/` sits at the bottom of `vars.*` ([ADR-0082](../adr/0082-service-vars.md)). |
-| `incarnation.*` / `scenario.*` / `state.*` | **Partly** - `incarnation.id` / `service` / `service_version` of the calling incarnation and `host_count` (counted over the hosts targeted inside the pass) are visible (`render/destiny.go:238`; for `vars.yml`, `destinyBaseViews`, `render/varview.go:255`); `incarnation.state`, `scenario.*` and `state.*` are not — a destiny does not read the database. | **is** - attributes of the calling scenario / incarnation, current `state` from the database. |
+| `incarnation.*` / `scenario.*` / `state.*` | **Partly** - `incarnation.id` / `service` / `service_version` of the calling incarnation and `host_count` (counted over the hosts targeted inside the pass) are visible (`render/destiny.go:249-250`; for `vars.yml`, `destinyBaseViews`, `render/varview.go:255`); `incarnation.state`, `scenario.*` and `state.*` are not — a destiny does not read the database. | **is** - attributes of the calling scenario / incarnation, current `state` from the database. |
 | `soulprint.where(<predicate>)` | **NO** - cross-host requests are a scenario level. | **is** - cross-host lookup by string predicate (`"'db' in covens"`, `"coven == 'prod'"`); in detail - [templating.md §2.3](../templating.md). |
 | `vars.*` | destiny-locals from [`vars.yml`](vars.md) + task-level | the service's own [`vars/`](../service/manifest.md#service-vars) at the bottom, then the scenario's `vars:`, a `block:`'s and the task's ([ADR-0082](../adr/0082-service-vars.md)). There is no `scenario/<name>/vars.yml` rung — the file was documented but read by nothing, and it is gone rather than implemented. |
 
@@ -931,7 +934,7 @@ repeatable structure within the file. Open Q: Should I implement render-time fan
 include groups by `loop:` (symmetry with `loop:` on the module task).
 
 ### Block — error-handling
-- **`rescue:`** - a list of tasks executed when fail inside `block:`. Currently unsecured; we make do with `onfail:` tasks after the block. Does it need to be entered as an explicit syntax.
+- **`rescue:`** - a list of tasks executed when fail inside `block:`. *Answered (user, 2026-10-14): no explicit syntax.* `onfail:` stays the rescue mechanism. A rescue names its sources by register from anywhere in the scenario, and one that succeeds handles the failure — [ADR-0091 amendment NIM-993](../adr/0091-scenario-linear-barrier.md#amendment-2026-10-14-nim-993-a-rescue-that-succeeds-handles-the-failure). Built across the steps of a scenario; inside one message it waits for the Keeper's `rescue_unit` marks (§8 `onfail:`).
 - **`always:`** - a list of tasks performed regardless of the outcome of the block (cleanup, finalize). The same question is whether explicit syntax is worth it.
 - **Scope `register:` inside `block:`.** Is `register:` tasks inside the block visible **outside** the block? Now it is assumed "yes, flat scope" - but it may be useful to have a scoped option (there is a block inside, no outside).
 

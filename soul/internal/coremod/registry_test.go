@@ -35,6 +35,8 @@ func TestDefault_ContainsAllCoreMVP(t *testing.T) {
 		"core.augur",
 		// ADR-065 — SoulModule plugin delivery
 		"core.module",
+		// ADR-0091 amendment NIM-993 — always fails its task
+		"core.task",
 	}
 	for _, name := range want {
 		if _, ok := r.Lookup(name); !ok {

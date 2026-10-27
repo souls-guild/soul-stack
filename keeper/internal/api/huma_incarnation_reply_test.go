@@ -240,3 +240,29 @@ func TestGoldenWire_RunWavesAndDropped(t *testing.T) {
 		t.Errorf("hosts wire =\n%s\nwant\n%s", got, wantHosts)
 	}
 }
+
+// TestGoldenWire_RunHostHandled pins `handled` on the run's host row (NIM-993): the
+// key is present on a handled row, which keeps its failure fields, and absent on
+// every other row, so an unaffected run's body is what it was.
+func TestGoldenWire_RunHostHandled(t *testing.T) {
+	planIdx, taskIdx := 3, 1
+	summary := "task 1 core.exec.run: boom"
+	detail := newRunDetailReply(handlers.RunDetailView{
+		ApplyID: "01M4XGKBF2WQS7SBZP6QDKV9GA", Scenario: "deploy", Status: "success",
+		Hosts: []handlers.RunHostStatusView{
+			{SID: "a", Status: "failed", FailedTaskIdx: &taskIdx, FailedPlanIndex: &planIdx, ErrorSummary: &summary, Handled: true},
+			{SID: "b", Status: "success"},
+		},
+	})
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(detail.Hosts); err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := `[{"sid":"a","status":"failed","passage":0,"failed_task_idx":1,"failed_plan_index":3,"error_summary":"task 1 core.exec.run: boom","attempt":0,"cancel_requested":false,"handled":true},` +
+		`{"sid":"b","status":"success","passage":0,"attempt":0,"cancel_requested":false}]`
+	if got := string(bytes.TrimSpace(buf.Bytes())); got != want {
+		t.Errorf("hosts wire =\n%s\nwant\n%s", got, want)
+	}
+}

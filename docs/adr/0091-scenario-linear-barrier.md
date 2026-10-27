@@ -15,6 +15,11 @@
 > ([Amendment 2026-10-14](#amendment-2026-10-14-nim-998-an-unwritten-serial_scope-is-the-standard-behaviour-and-nothing-refuses-it), NIM-998). Fork 4 — the scenario's `settings:` block — outgrew this ADR and is specified in
 > [docs/scenario/settings.md](../scenario/settings.md).
 >
+> **Amended 2026-10-14 (NIM-993, partly built — not built: the `rescue_unit` marks the Keeper sends, the
+> step recipe's failure state, and the Keeper's half of `core.task.failed`):** a rescue that succeeds handles the failure, and
+> the host carries on with the run; a failure waits for its rescues; `core.task.failed`. This supersedes
+> two of fork 1's consequences — see [the amendment](#amendment-2026-10-14-nim-993-a-rescue-that-succeeds-handles-the-failure).
+>
 > **Revision history.** Independent reviews, round after round, shaped this text; each round's
 > findings and dispositions are recorded in the NIM-907 comments. In outline: the first versions justified the change by a
 > bug class the code refutes (an absent register raises, cross-passage gating is already
@@ -435,7 +440,9 @@ after the inherited `retry:` is exhausted, stops rolling: subsequent waves will 
 ([orchestration.md §2.2.1](../scenario/orchestration.md); the per-wave barrier at
 `dispatch.go:215-223`). What changes is that the blast radius of one host's failure grows from "its
 own remaining tasks" to "the whole fleet's remaining tasks", for every scenario, not only those
-using `serial:`.
+using `serial:`. *Since the [NIM-993 amendment](#amendment-2026-10-14-nim-993-a-rescue-that-succeeds-handles-the-failure),
+a failure that a later rescue names stops neither: it is held until its rescues have run, in a
+`serial:` step too.*
 
 **Decision (user, 2026-09-30): a host's failure ends the whole run by default, and the behaviour is
 configurable from the scenario.** A scenario that declares nothing keeps the semantics described above, because
@@ -464,8 +471,8 @@ ADR adopts:
 
 | Value | What a host's failure ends |
 |---|---|
-| `scenario` | **The default.** The run ends at the barrier where the host failed; no later task is dispatched to anybody but the rescues of fork 1. |
-| `host` | Only that host. It leaves the run; the remaining tasks go to the rest. |
+| `scenario` | **The default.** The run ends at the barrier where the host failed; no later task is dispatched to anybody but the rescues of fork 1. *Since the NIM-993 amendment, a failure that a later rescue names is held until its rescues have run, and it ends the run only if none of them handles it.* |
+| `host` | Only that host. It leaves the run; the remaining tasks go to the rest. *Since the NIM-993 amendment, a failure that a later rescue names is held, and the host leaves only if none of its rescues handles it.* |
 
 A threshold sits beside it, `tolerate`: with radius `host`, the run still ends once **more than** N
 hosts — or N% of the run's hosts — have failed in total. Together the two reproduce Ansible's
@@ -537,7 +544,9 @@ This is not created by this ADR — cross-passage `onfail:` was already dead the
 NIM-951, and still is for a staged run; it is simply rare. This ADR would make it the only shape a top-level `onfail:` can take. **The user's answer
 (fork 1): rescue is extended across barriers** — a failed host still receives the `onfail:` tasks
 whose source failed on it — under `on_failure: host` after it has been dropped, under `scenario`
-before the run ends.
+before the run ends. *Since the [NIM-993 amendment](#amendment-2026-10-14-nim-993-a-rescue-that-succeeds-handles-the-failure),
+a failure that a later rescue names is held instead — not dropped, and not ending the run — until its
+rescues have run.*
 
 ### `onchanges:` — already answered, and now on the only path
 
@@ -836,6 +845,13 @@ still dispatched to it, at its own position in the order — under `on_failure: 
 host was dropped at the barrier where it failed (and counted by `tolerate` there), under `scenario`
 before the run ends. Hosts where the source succeeded receive
 nothing from it.
+
+⛔ **Amended by [NIM-993](#amendment-2026-10-14-nim-993-a-rescue-that-succeeds-handles-the-failure)
+(user, 2026-10-14).** A failure that a later rescue names is held, not judged. The host is not
+dropped and is not counted by `tolerate` at the barrier where it failed, and under `scenario` the
+run does not end there. A rescue that succeeds returns the host to the run. If none of its rescues
+succeeds, the failure is judged by its source's radius. Of the three consequences below, the second and third are
+superseded. The first holds for a failure that no rescue handles.
 
 Half of the resolution exists: the cross-passage gate narrows an `onfail:` consumer to the hosts where
 its source FAILED (`keeper/internal/scenario/crosspassage.go:149`). But it only *filters* the hosts
@@ -1180,12 +1196,13 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     with it, in the Soul's order (a failed `when:`, a false one, the requisites, a post-module
     predicate); a host failed before dispatch keeps its place among the `serial:` waves, the
     hosts sent beside it finish, and its wave's barrier judges it like any failed host — no later
-    wave starts under radius `scenario` but to send rescues (item 18), the host is dropped under `host` (NIM-948); a `when:` reading a secret that fails
+    wave starts under radius `scenario` but to send rescues (item 18; a held failure does not stop
+    them, per the NIM-993 amendment), the host is dropped under `host` (NIM-948); a `when:` reading a secret that fails
     to evaluate keeps CEL's error out of its record.
     Not built here: the capability gate reading the per-host values (since built, item 10), and a statically
     false `when:`, which still resolves no targets and so leaves no SKIPPED record (NIM-971).
 18. **Rescue routing** — fork 1's four obligations. *Built (NIM-951)*, described in
-    [settings.md §4](../scenario/settings.md). Two answers the fork left open (user, 2026-10-08):
+    [rescues.md](../scenario/rescues.md). Two answers the fork left open (user, 2026-10-08):
     a dropped host's `where:` is not evaluated for a rescue, nor its blocks' `where:` and
     `run_once:` — the rescue's and its blocks' `on:` and the source's failure on it decide; and
     a rescue step goes through the work-queue like any step, its rows carrying the run's rescue
@@ -1196,11 +1213,14 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     `serial:` waves goes on after the wave whose failure ended the run, sending the hosts a
     rescue fires on their rescues. A keeper-side `onfail:` task is no rescue — the Keeper
     evaluates no requisite of its own tasks ([docs/keeper/modules.md](../keeper/modules.md)) —
-    so it does not run after a failure ended the run. ⚠ Not covered (settings.md §4): a
+    so it does not run after a failure ended the run. ⚠ Not covered ([rescues.md](../scenario/rescues.md)): a
     keeper-side task's own failure still aborts the run at once, before any rescue of it; a
     block rolled as one group takes a percentage `serial:` of its live hosts only; and in the
     later waves of the step that ended the run, a host whose applier rescue fires but whose
     destiny has no task for it is not sent the terminal.
+    *Amended by NIM-993 (partly built — the Keeper side in part):* a failure that a later rescue names is held rather
+    than judged, a rescue that succeeds returns the host to the run, and if none of its rescues
+    succeeds the failure is judged by its source's radius — see [the amendment](#amendment-2026-10-14-nim-993-a-rescue-that-succeeds-handles-the-failure).
 
 ## Slices
 
@@ -1282,6 +1302,872 @@ numbering, `TestGolden_SerialWithoutScopeLintsClean` checks the linter, and
 `TestIntegration_SerialScope_DefaultRollsByTask` checks the order in which the Keeper sends to three
 hosts — by task, as the canary, and for a `serial:` task beside a plain step.
 
+## Amendment 2026-10-14 (NIM-993): a rescue that succeeds handles the failure
+
+> **Partly built.** Built:
+> - the static refusals of rules 1 and 8, the `core.task.failed` module and the `rescue_unit` field;
+> - the in-message rule on the Soul (rule 6), which announces `onfail_handled`;
+> - on the Keeper, rule 1 on live hosts: the tasks of every unit with no source before it in its
+>   own message are settled SKIPPED there, unevaluated, with only the layout evaluated
+>   (2026-10-21);
+> - rules 2-4: the run goroutine keeps each host's sources held, handled or judged, and holds,
+>   returns and judges a host; `held` in `soulprint.hosts`;
+> - rule 5: the `apply_runs.handled` mark (migration 132), the run goroutine that writes it at each
+>   of the run's ends, the folds that read it, and `handled` on the wire;
+> - the fail-closed rule and the net of rule 6 (2026-10-21);
+> - rule 7's interim plan-wide `rescue_hold` gate.
+>
+> Not built:
+> - **the `rescue_unit` marks.** The Keeper sends none (rule 6; render keys
+>   `RenderedTask.RescueUnit` only internally). Every Soul therefore runs unmarked, `when:` first,
+>   and inside one message a rescue is still compensation. The net of rule 6 is the normal path
+>   for a unit task that fails where its unit did not fire, not a backstop;
+> - **rule 7's recipe** — the failure state and the marks on the step recipe — and its per-step
+>   gate. No instance announces `rescue_hold`, so the interim gate sends the steps of such a plan
+>   inline;
+> - **rule 8's Keeper half.** A `core.task.failed` step of its own is not settled by the Keeper:
+>   it goes to the Soul like any Soul-side task, and its host needs `module:core.task`. The default
+>   `message:` across a barrier is not built either. Inside a message the default is the Soul's,
+>   which needs the marks, so today a `core.task.failed` written with no `message:` fails with the
+>   module's generic text.
+>
+> User decision at the demo
+> of the NIM-926 train (2026-10-14). It supersedes two of fork 1's consequences: *"a successful
+> rescue does not change the terminal status"* and *"a rescue's own failure is judged like any
+> task's, by its own effective `on_failure`"* (user, 2026-10-01). The second still holds on a host
+> where the rescue did not fire (the net of rule 6, user, 2026-10-21). The syntax of `onfail:` does
+> not change: a rescue names its sources by register from anywhere in the
+> scenario, one rescue may name several, and Ansible's `block:`/`rescue:` shape is **not** adopted
+> (user, 2026-10-14). `onfail:` on a `block:` already works ([destiny/tasks.md §6.5](../destiny/tasks.md))
+> and the rules below hold for it.
+
+Under fork 1 a rescue only compensates: the host whose failure it handled still leaves the run — it is
+dropped under `on_failure: host`, the run ends under `scenario` — and a run with a failure cannot end
+`success`. The user's reading: a rescue that succeeded means the error was handled, so the host carries
+on with the run.
+
+```yaml
+tasks:
+  - name: deploy
+    module: core.exec.run
+    register: deploy
+    params: { cmd: /opt/app/deploy.sh }
+
+  - name: reload the balancer
+    module: core.exec.run
+    params: { cmd: /opt/app/reload-lb.sh }
+
+  - name: roll back
+    onfail: [deploy]
+    block:
+      - name: restore the previous release
+        module: core.exec.run
+        params: { cmd: /opt/app/rollback.sh }
+      - name: check the service
+        module: core.exec.run
+        register: health
+        failed_when: "false"
+        params: { cmd: /opt/app/healthcheck.sh }
+      - name: not handled while the service is down
+        module: core.task.failed
+        when: register.health.exit_code != 0
+
+  - name: warm the cache
+    module: core.exec.run
+    params: { cmd: /opt/app/warm.sh }
+```
+
+`deploy` fails on h2. h2 is held: `reload the balancer` goes to h1 and h3 only, and h2 records it
+SKIPPED. The three children of `roll back` go to h2 alone. If the health check passes,
+`core.task.failed` is skipped by its `when:`, the unit has succeeded, and h2 is back: `warm the cache`
+goes to all three hosts and the run can end `success`. If the check fails, `core.task.failed` fails
+the unit. No unit is left, so `deploy`'s failure is judged by `deploy`'s radius — under the default
+`scenario`, the run ends at that barrier with `deploy`'s error.
+
+**The rules.**
+
+1. **A rescue unit is the outermost construct whose own `onfail:` names a source.** Units are reckoned
+   per source (user, 2026-10-14). For one source, each task, `block:` or `apply:` whose written
+   `onfail:` names it is a unit, with everything below it. A descendant that also names the source
+   belongs to the enclosing unit, because the requisites merge as a union (§6.5). A destiny's tasks
+   name only the destiny's registers, and a scenario's tasks only the scenario's, so all the units of
+   one source are written in one plan — a scenario, or a destiny, with its includes spliced in. An `apply:` inside a unit — a unit itself, or a child of a
+   block unit — is the exception, and §6.5 forces it rather than any choice made here: the `onfail:`
+   of the applier and of its enclosing blocks is unioned into every task of its destiny.
+   - When the unit fires, that OR-widening runs every task of the destiny, the destiny's own rescues
+     included, as part of the one unit.
+   - The Keeper strips the whole requisite once its cross-step part is satisfied (`resolveKind`,
+     `keeper/internal/scenario/crosspassage.go:171-196`). Inside a firing unit the destiny's rescues
+     are therefore ordinary tasks of that unit: they carry no `rescue_unit` mark of their own
+     (rule 6), and any failure in the destiny fails the unit.
+   - Applied anywhere else, the destiny's units work as written.
+   - **Success.** A unit **succeeds** on a host when at least one of its tasks executed there and none
+     failed. A task that fails fails the unit, and the unit's later tasks are not sent to that host.
+     On a host where the unit did not fire, a failure of its task is the net's instead (rule 6). A
+     unit in which nothing executed — its `when:` false, every task skipped — has not succeeded. A
+     unit's `async:` tasks are awaited at the unit's last position before the unit is decided. An
+     applier's terminal is not a task of its unit: it does not count as executed, it carries no
+     `rescue_unit` mark. The Soul never reports it FAILED. The Keeper's `failedHost` records it
+     FAILED only after another task of the message failed. So the terminal is left out of the unit's
+     success, and every other task of the unit is read.
+   - **Nested units of different sources.** A block with `onfail: [a]` may hold a task with
+     `onfail: [b]`, `b` written outside the block. Each source then has its own unit, and the
+     outermost one decides every source it holds. The task carries the outer unit's `rescue_unit`
+     mark, since one field holds one unit, and the Keeper reads it the same way, so the message and
+     the barrier agree. This is conservative: a failure anywhere in the outer unit leaves `b`
+     unhandled too, even where the inner task succeeded.
+   - **Several sources.** A unit that names several sources is decided per (unit, source). It is sent
+     to a host while one of its sources is held there (rule 2), or as compensation to a host judged
+     at once on one of them. It is skipped on a host where neither holds.
+   - **`run_once:`.** A `run_once:` task unit goes, as under NIM-951, to the first host by SID it
+     fires on, and it decides only that host's failure (user, 2026-10-14). A block's `run_once:` is
+     not read for a held host, just as NIM-951 does not read it for a dropped one. A `run_once:`
+     block unit therefore reaches every held host its `on:` selects, and decides each of them.
+   - **A unit that does not fire is not evaluated.**
+     - **Units with no source before them in their own message** (user, 2026-10-21). A task's own message is
+       the message it travels in: a group rolled as one (with any destiny applied inside it), or the
+       destiny of an applier that travels alone; any other task travels alone. The outermost unit
+       decides (nested units of different sources, above), so the rule reads **the unit's
+       sources**: every source that the outermost scenario unit's tasks name, nested units included
+       (`config.CrossStepUnits`, `shared/config/passage_linear.go:266-276`). Rule 6 also uses the
+       same source set, through `RescueRule.Sources` (`shared/config/rescue_rule.go:80-101`,
+       `:200-208`). For a unit holding an `apply:`, the rule also holds
+       the destiny's own sources: the destiny's tasks carry the outer unit's key
+       (`keeper/internal/render/rescue_unit.go:23-33`) and are fed with the `onfail:` that §6.5
+       unions into them (`keeper/internal/scenario/failure_state.go:423-426`). §6.5 makes those
+       ordinary tasks of the unit (above), and `CrossStepUnits` never walks into a destiny
+       (`shared/config/rescue_unit.go:116-118`). A unit task can fire on a live host only through
+       one of the unit's scenario sources in its own message: a sibling before the unit in its
+       group, in plan order, at its own step. A forward `onfail:`,
+       a source sibling placed after the unit, cannot fire it on a live host, since the Soul runs
+       the unit first; such a unit is in `config.CrossStepUnits` and is settled SKIPPED on live
+       hosts (`shared/config/passage_linear.go:247-257`, `:277-317`). A source at any other step
+       fires nothing on a live host:
+       - a source at an earlier step fires a unit only on held or judged hosts, and those are not
+         live: a host judged at once is dropped or past the run's end, and a host returns only once
+         every source it held is handled;
+       - a source at a later step cannot have failed when the unit runs. No pass reads a failure at
+         or after the unit's step (`fires`, `keeper/internal/render/rescue.go:63-78`).
+
+       So a unit task with no source before it in its own message never fires on a live host, whatever mix of
+       earlier and later steps its unit's sources stand at. A destiny's own units are left out of
+       this rule: their sources travel in the destiny, and they are decided in the destiny's message
+       (rule 6). Until 2026-10-21 the rule covered only a unit whose sources all stand at earlier
+       steps; the defect this left is described under *Today every path evaluates first*. Since
+       then `config.CrossStepUnits` takes every unit with no source before it in its own message
+       (`shared/config/passage_linear.go:242-317`). A unit with a source before it in its own
+       message is left to the Soul: only the Soul knows, once that sibling has run, whether the
+       unit fires, so the Keeper cannot settle it (below). This holds even on a host the sibling
+       does not reach, because the plan does not show that host: the unit goes to the Soul and the
+       net of rule 6. Such a host is one that the sibling's `on:` or `where:` leaves out, one other
+       than the host a `run_once:` sibling is sent to, or one where an include-`when:` drops the
+       sibling's include group.
+     - **On every linear scenario pass while the run goes on**, whether or not anything has failed
+       yet, the Keeper settles such a task SKIPPED on each live host that its `on:`, and its
+       enclosing constructs' `on:`, select. The exception is an `apply:` unit whose static `when:`
+       is false or counted false, which leaves a live host nothing (below). A scenario unit's
+       `when:` is **counted false** when it cannot be decided without a host: its value is not
+       read, and the task is laid out as a static-false one. In a destiny such a `when:` is
+       refused by name instead (below). On a live host the Keeper evaluates none of the task's
+       `where:`, `params:` or `when:`, nor a block unit's own `where:`.
+     - **The cover reads the `on:` chain only.** A unit child of a group that is no unit is
+       settled on every live host its `on:` chain selects, even one that the group's `where:` or
+       `run_once:` leaves out. That host still gets the child, as a `when: false` copy. This is
+       kept: the cover never reads a `where:`.
+     - **On a held, dropped or past-the-end host** such a task is routed as before: it goes where
+       one of its sources fires, its `where:` not evaluated (rule 2), and not where a task of its unit
+       already failed (`routeUnit`, `keeper/internal/render/rescue.go:410-464`). A later step's source
+       never fires it there either.
+     - **What fixes the plan's layout is evaluated. A module task's static `when:` is also read
+       without a host, only by the guards: to refuse one over a per-host name, and to lift a DSL
+       guard's refusal.** Nothing else is. The plan indices of later steps depend on an `apply:`
+       unit's destiny layout and on a `loop:`'s items, so a live host evaluates what the layout
+       reads, as today. For an `apply:`, that is the host-invariant names of `apply: input:` and of
+       the destiny's `vars.yml`, which its include-`when:` may read. The `apply: input:` names are
+       evaluated over one synthetic host, as the no-target path does but with the per-host names
+       left out (`keeper/internal/render/destiny.go:192-203`; `resolveApplyInput`, `:598-604`). The
+       destiny's `vars.yml` is a lazy view since NIM-1014 ([ADR-0082](0082-service-vars.md)
+       amendment 2026-10-15): a name is evaluated when a cell reads it, so laid out a per-host one
+       is never read. An include `when:` refuses it by name, and a laid-out `flow_context` leaves it
+       out (`:290-303`). Today's no-target path renders every name, so this layout-only render is
+       new. Telling which input names each `required` or `validate:`
+       rule reads is part of that work. The per-host names are left unrendered there:
+       `hostVariantInputNames` for `apply: input:` and `hostVariantDestinyVars` for `vars.yml`. The
+       input contract runs over the invariant names only, so the `required` and `validate:` checks
+       of an unrendered per-host name are skipped there. A read there of an output from the unit's
+       own tasks is a read of a skipped task's output (rule 3), and the author guards it. The lift
+       is below (`keeper/internal/render/destiny.go:343-346`,
+       `keeper/internal/render/block.go:343-346`, `keeper/internal/render/rescue.go:262`).
+     - **A static `when:` that fixes the layout is decided without a host** (user, 2026-10-20). A
+       unit that fires on no host while the run goes on is **laid out**. Its `when:` is decided
+       only where it fixes the layout: a `loop:`'s, in the scenario or in a laid-out destiny, and
+       an `apply:` unit's own (`keeper/internal/render/rescue.go:251-262`,
+       `keeper/internal/render/destiny.go:339-367`, `keeper/internal/render/block.go:338-386`). A
+       laid-out module task is a placeholder whatever its `when:`, which is read only by the guards
+       (below). The `when:` is decided over one synthetic host, with the task's
+       `vars:` entries that read a per-host name left out: `soulprint.self`, a register the host
+       keeps, an `apply: input:` name rendered per host, or another such entry (`hostFreeWhen`,
+       `keeper/internal/render/rescue.go:391-408`). A `when:` that reads an entry left out cannot
+       be decided there. A scenario unit's counts as false: its value is not read, and the task is
+       laid out as a static-false one (`layoutStaticWhen`, `keeper/internal/render/rescue.go:304-343`).
+       That is a scenario `loop:` unit and an `apply:` unit's own `when:`, at the top level or in a
+       block. A destiny's is refused by name (next bullet), so nothing in a laid-out destiny counts
+       as false. Nothing per host is read.
+     - **In a destiny, a static `when:` over a per-host name is refused, laid out as routed** (user,
+       2026-10-27). NIM-1014 refuses it by name in every destiny pass
+       ([ADR-0082](0082-service-vars.md) amendment 2026-10-15, point 7): a `when:` that reads a
+       per-host `apply: input:` name, or a name of the task's view over one, its own `vars:`
+       included (`guardStaticWhenHost`, `keeper/internal/render/pipeline.go:1005-1014`). A
+       laid-out destiny task meets the same guard, over the task's whole view and before any entry
+       is left out (`layoutGuard`, `keeper/internal/render/rescue.go:288-290`): a `loop:`, a module
+       task and a block's module child alike. So the author meets the refusal on the first run,
+       not on the first run where the unit fires, as a task the guard refuses when routed is
+       refused when laid out too (below). One exception, a gap the user did not accept on its own:
+       it follows from two of the user's decisions, option D (2026-10-20), under which a
+       scenario unit's `when:` that cannot be decided without a host counts as false (the
+       bullet above), and option A (2026-10-27), this refusal. An `apply:` unit whose own static
+       `when:` counts as false at the scenario level is one placeholder, its destiny not laid
+       out at all (next bullet), so a `when:` over a per-host name inside that destiny is
+       refused only once the unit is routed with its own `when:` true
+       (`keeper/internal/render/rescue.go:266-268`, `keeper/internal/render/pipeline.go:301-306`,
+       `keeper/internal/render/block.go:390-397`;
+       `keeper/internal/render/rescue_unit_route_test.go:749-753`, `:789-794`). A DSL refusal
+       still stands instead, as before (`keeper/internal/render/rescue.go:291-297`); routed, the
+       host-scope refusal is met first (`keeper/internal/render/destiny.go:369-371`,
+       `keeper/internal/render/pipeline.go:1169`).
+       Until 2026-10-27 a laid-out destiny counted such a `when:` false and refused it only once
+       the unit was routed, so a layout and a routed render of one destiny disagreed on whether it
+       was valid (`TestRender_ALaidOutWhenReadingAPerHostVarIsFalse`,
+       `keeper/internal/render/rescue_unit_route_test.go:712-734`).
+     - **An `apply:` unit whose static `when:` is false, or counted false, leaves a live host
+       nothing**, as a static-false applier that is no unit does. It is one placeholder that targets
+       no host, its destiny not laid out: a live host gets no SKIPPED record from it, no terminal
+       and no `register.<applier>`. Laid out or routed, no host is sent or settled anything
+       (`keeper/internal/render/rescue.go:266-268`; `keeper/internal/render/rescue_unit_route_test.go:748`,
+       `:777`, `:1125-1139`).
+     - **Any other failure of that `when:` still fails the render**, as it does routed: a compile
+       error, a context that cannot be built, or an evaluation error in a `when:` that reads no
+       entry left out, such as a misspelt var (`keeper/internal/render/rescue.go:331-338`). In a
+       destiny the host-scope refusal comes first, laid out as routed: a `when:` there that does
+       not parse and names `vars` while the task's view holds a per-host name is refused as a
+       whole-namespace read of `vars`, before it is compiled.
+     - **A known gap, accepted, at the scenario level alone.** Every evaluation error of a
+       scenario unit's `when:` that reads an entry left out is taken for that entry. So an error
+       beside it under `||` or `&&` is absorbed while laid out: `vars.at == 'eu' || vars.att == 'x'`,
+       with `att` misspelt, counts as false. It fails only on a routed render where the first
+       routed host by SID has `at` not `'eu'` (NIM-1035). Evaluating with the entry unknown would
+       not catch it either: cel-go lets an unknown absorb an error in a logical operator
+       (`keeper/internal/render/rescue.go:314-318`). In a destiny that `when:` is refused by name
+       in both passes, and the gap does not arise.
+     - **A DSL guard's refusal is lifted for a laid-out task only when its static `when:` is
+       decided false without a host**, as an inactive branch's DSL does not block the active one
+       (ADR-012(d); `layoutGuard`, `keeper/internal/render/rescue.go:272-302`). A `when:` that
+       cannot be decided keeps the refusal. So does one that reads `incarnation.host_count`,
+       directly or through the task's `vars:`, since it reads 0 laid out
+       (`whenReadsHostCount`, `keeper/internal/render/rescue.go:347-360`). A task the guard
+       refuses when routed is therefore refused when laid out too, on a pass where nothing failed.
+       A known residual, narrow: the walk reads only the task's own `vars:`. A `when:` that reads
+       `incarnation.host_count` through a destiny `vars.yml` entry or an `apply: input:` value is
+       still decided at 0 while laid out, and can lift the refusal there. It takes a refused DSL
+       key and a `when:` gated on the host count.
+     - **`incarnation.host_count` counts the hosts routed to the unit**, in its destiny and in its
+       own static `when:`, not the live hosts it is settled SKIPPED on. It is 0 while laid out
+       (`keeper/internal/render/pipeline.go:403-405`, `keeper/internal/render/destiny.go:250`,
+       `keeper/internal/render/rescue.go:331`).
+     - **A laid-out and a routed render of one unit can differ in plan indices.** A scenario
+       unit's `when:` counted false laid out may be true for a routed host, and
+       `incarnation.host_count` changes. The two
+       renders meet only between runs, or against a pass before the unit's step, which dispatches
+       none of the unit (`keeper/internal/render/rescue.go:247-250`). Within one run, the unit's
+       step is routed the same way on every pass at or after that step. The barriers before it fix
+       what is routed (`fires`, `keeper/internal/render/rescue.go:63-78`; `routeUnit`, `:431-440`).
+       `RenderInput.ForStep` keeps a host's live, held or dropped standing fixed per step
+       (`keeper/internal/render/standing.go:100-126`).
+     - **Out of scope: a routed render decides a scenario static `when:` on the first host by
+       SID** (`keeper/internal/render/pipeline.go:955-960`). The defect predates the units and
+       holds outside rescues too. It is NIM-1035. In a destiny pass NIM-1014 refuses a static
+       `when:` over a per-host name instead of deciding it on one host
+       ([ADR-0082](0082-service-vars.md) amendment 2026-10-15, point 7), so NIM-1035 is the
+       scenario-level case alone.
+     - **What it writes is what the requisite gate writes today:** the SKIPPED record with the
+       skipped register (`keeper/internal/scenario/keeper_flow.go:100-111`). A grouped child still
+       travels as `when: false`, so its siblings can read its register
+       (`Grouped`, `keeper/internal/render/render.go:743-747`). This is also the record rule 3
+       means for a returned host.
+     - **An `apply:` unit not skipped by its static `when:` gets its layout and nothing per
+       host.** No per-host `apply: input:`, and none of the destiny's per-host `vars.yml` values,
+       `where:` or `params:`, is rendered for a live host. Every destiny task gets a SKIPPED record,
+       the destiny's own rescues included: their in-message sources are skipped there, so they
+       cannot fire. An applier with `register:` has its terminal
+       (`keeper/internal/render/destiny.go:452-491`) sent alone, and the Soul folds that register to
+       all four `false`. Inside a group the terminal travels with the message, so a sibling reading
+       `register.<applier>` finds it. An applier with no `register:` has no terminal, and no
+       register.
+     - **Today every path evaluates first and settles after.** The ordinary targeting path
+       (`keeper/internal/render/pipeline.go:354-392`, `keeper/internal/render/block.go:466-473`) and
+       NIM-951's routing while the run goes on (`routeRescue`, `keeper/internal/render/rescue.go:135-142`)
+       evaluate `where:`. The gate settles the task only after render, and after `when:`
+       (`keeper/internal/scenario/keeper_flow.go:79-94`, `:126-149`). So a unit task that reads an
+       output of its own unit fails the host, or, in `params:`, ends the run. Before rule 1 was built,
+       the example above failed on h1 and h3 even in a run where nothing failed. Its `roll back`
+       has no source before it in its own message, so rule 1 now settles it SKIPPED there.
+
+       Until 2026-10-21 a unit that also named a later step's source took that path too: the Keeper
+       took a unit off it only when every source stood at an earlier step. A unit with a source
+       before it in its own message still takes it. Such a unit is a child of a group, so it takes
+       the ordinary child targeting (`keeper/internal/render/block.go:466-473`), or `routeRescue`
+       once the run holds or has dropped a host, or has ended (`keeper/internal/render/block.go:447-454`).
+       `routeRescue` serves only such units, through `walkBlockChildren`, and reads no
+       `FailedUnits` (`keeper/internal/render/rescue.go:111-173`): no top-level task reaches it.
+       Both evaluate `where:` for the live hosts. The case that the widened scope closed:
+
+       ```yaml
+       tasks:
+         - name: deploy              # step 1
+           module: core.exec.run
+           register: deploy
+           params: { cmd: ./deploy.sh }
+         - name: fix
+           onfail: [deploy, verify]
+           block:
+             - name: r1              # step 2
+               module: core.exec.run
+               register: r1
+               params: { cmd: ./fix.sh }
+             - name: r2              # step 3
+               module: core.exec.run
+               when: register.r1.stdout == 'ok'
+               params: { cmd: ./restart.sh }
+         - name: verify              # step 4
+           module: core.exec.run
+           register: verify
+           params: { cmd: ./verify.sh }
+       ```
+
+       On a live host h1 where `deploy` succeeded, `r1` was settled SKIPPED. The Keeper then settled
+       `r2`'s `when:` there, `register.r1.stdout` had no value, and h1 failed for nothing. Its row
+       carried only tasks of a unit, so the failure was the unit's and made no entry: h1 stayed
+       live, and the run could commit `ready` with a FAILED record on it. Now `fix` has no source before
+       it in its own message, so both tasks are settled SKIPPED on h1 unevaluated
+       (`TestIntegration_LinearAMixedSourceUnitIsNotEvaluatedWhereNothingFailed`,
+       `keeper/internal/scenario/rescue_hold_integration_test.go:1210`), and the net of rule 6
+       judges any failure that still reaches such a task.
+     - **A unit task with a source before it in its own message** — a grouped task naming a sibling before it — can fire
+       on a live host, so the Keeper routes and evaluates it.
+       - **Until the Keeper sends marks** (rules 6 and 7, not built), every message is unmarked and
+         both sides keep the old order, `when:` first. The Keeper settles a grouped `when:` that
+         reads no group register (`settleHostFlow`, `keeper/internal/render/flow.go:158-176`), and
+         the Soul reads `when:` before the requisite (`soul/internal/runtime/applyrunner.go:491`,
+         `:588-595`). A `when:` that errors on a host where the unit did not fire fails the task,
+         and the net of rule 6 judges it.
+       - **Once marks are sent**, the Keeper passes such a task's `when:` to the Soul together with
+         the requisite, and the Soul checks the requisite first (`skipUnitTask`,
+         `soul/internal/runtime/applyrunner.go:535-545`, built in S2), before `evalWhen` (`:595`).
+         The order is reversed for the tasks of a unit only, and the net becomes a backstop.
+   - **`onfail:` naming a register set inside a unit of the same plan is refused**
+     (`onfail_names_rescue`, user, 2026-10-14). A unit's failure is not a failure of its own: it
+     means "not handled" for its source (rule 4). A `when:` reading such a register stays legal.
+     The check reads one plan — a scenario, or a destiny, with its includes spliced in. A destiny's
+     own `onfail:` naming the destiny's registers is judged in
+     the destiny, so applying that destiny from a unit does not get it refused.
+   - **A group rolled as one holds at most one unit for sources outside it**
+     (`group_multiple_rescue_units`, user, 2026-10-14). The Keeper strips a satisfied cross-step
+     `onfail:` from the wire, so inside the group's message such a unit is a run of ordinary tasks.
+     With one such unit, the message's fail-stop is the unit's own. With two, the Soul could neither
+     skip the second after the first succeeded, nor give it its chance after the first failed.
+     Units that cover the whole group count as one — the group's own and any enclosing construct's,
+     since inside the group's message their plans are the same. A unit strictly inside the group
+     counts on its own: an enclosing unit plus one inside is two, and is refused.
+2. **A failure waits for its rescues.** At the barrier of the step where a host failed, a failure is
+   **held** rather than judged when a unit of its source — the failed task's register, or its
+   applier's — has its last step later, and the `on:` of that unit and of its enclosing constructs
+   selects the host. This holds in a step rolled in `serial:` waves too: the later waves go on (user,
+   2026-10-14). A canary with a rescue downstream therefore no longer stops at its first failure, which
+   supersedes, for a held failure, [orchestration.md §2.2.1](../scenario/orchestration.md)'s "no later
+   wave starts". A held host:
+   - gets no ordinary task, only the units of its held sources, exactly as a dropped host does:
+     NIM-951's routing reaches it, and `where:` is not evaluated for it;
+   - is listed in `soulprint.hosts` with **`held: true`**, while `dropped` stays `false` (user,
+     2026-10-14). `!h.dropped` keeps meaning a host that is part of the run's outcome, since a held
+     host may return. The hosts receiving tasks now are `!h.dropped && !h.held`;
+   - is not counted by `tolerate`, does not end the run under `scenario`, and is not audited
+     `apply.host_dropped`;
+   - counts as still in the run for "no host is left" (settings.md §4). A run whose every host is held
+     therefore walks on, keeper-side steps between the source and its units included. A
+     `core.state.<verb>` capture among them commits, although the run may still end `failed` at a
+     unit's barrier under `scenario`.
+
+   A host's failures at one step are held only if **all** of them are. Otherwise the host is judged at
+   once, by every failure it reported there. Its units still reach it as compensation, but they cannot
+   return it to the run.
+
+   **A host the Keeper fails before sending a group** — a group rolled as one, whose child failed on
+   the Keeper — is **not held** when the group carries a source. That source is the cause, or a
+   sibling the Keeper records FAILED. The host is judged at once by the first source among them,
+   whatever the cause: the judge takes the first record that belongs to a source, so it skips a
+   cause whose failure is its unit's (`judgedTasks`, `keeper/internal/scenario/failure_policy.go:540-546`).
+   A cause that is a source under the net of rule 6 is one more candidate, and it comes first.
+   - The Keeper writes FAILED records for the unsent siblings
+     (`failedHost`, `keeper/internal/scenario/keeper_flow.go:153-173`), for tasks that never ran, so a
+     host that returned would carry them as failures.
+   - Units of the cause and of the siblings still reach the host, as compensation.
+   - A group that carries only unit tasks — a unit sent to a held host — fails its unit instead
+     (rule 1).
+   - A one-task step the Keeper fails has no siblings and is held like any other failure.
+   - A `loop:` step is held too. Its iterations share one register and are one source, so the FAILED
+     records of the other iterations are failures of that same source.
+   - A unit task the Keeper fails — a `when:` that fails on the Keeper, or a `core.task.failed` step it
+     settles (rule 8) — fails its unit like any other unit failure (rule 1). It is no cause of this
+     kind, except where its unit did not fire: there it is a source like any other (the net, rule 6).
+
+   A failure tied to no task is held the same way when the task its records mark FAILED (settings.md
+   §4) is a source with a unit ahead.
+
+   Held failures are not entries. A failure still held when the failure list closes is appended at
+   that point, so the run's error names it. The list closes when the run ends:
+   - for a run that a failure ended, after the last unit's barrier. Such a run still walks to the
+     units (rule 9), and a failure one of them handles is never appended;
+   - at the run's end, otherwise;
+   - at once, when a Cancel or an abort stops the run.
+3. **Units are tried in plan order, and the first that succeeds handles the failure.** The host is
+   back in the run from the step after that unit:
+   - it gets every later ordinary task, with one exception: a default block whose hosts were chosen at
+     its first step while the host was held. The host rejoins at the first step after that block (user,
+     2026-10-14), since fork 3 holds a block's targets;
+   - the later units of that source are skipped on it. Each leaves a SKIPPED record, except an
+     `apply:` unit whose static `when:` is false or counted false (rule 1);
+   - the ordinary steps between the source and the handling unit are not replayed. For each task the
+     held host did not receive, the Keeper writes the audit SKIPPED it writes for a dropped host today
+     (`writeNotReached`, `keeper/internal/scenario/failure_policy.go:923-969`).
+   - When it renders a later step for the returned host, the Keeper gives it the register a skipped
+     task carries — `{changed: false, failed: false, timed_out: false, skipped: true}`, with no output
+     fields. For a missed applier it is what a Soul's fail-stop emits for an applier over skipped
+     children: all four `false`, since an applier's `skipped` is always `false`
+     ([orchestration.md §2.1.1](../scenario/orchestration.md)). The register is synthesized from the
+     run's held record, with no `apply_runs` row behind it and nothing written. It appears in
+     `register.hosts.<name>` like any per-host register.
+   - Reading an output field of a missed task then fails as it does for any skipped task, with
+     `no such key` (user, 2026-10-14). In a `when:` that fails the host; in a `where:` or `params:` it
+     ends the run. The author guards with `!register.<name>.skipped`.
+
+   A unit that fails, or that does not succeed, does not handle the failure, and the next unit gets
+   its chance. A host is back only when every failure it holds is handled.
+4. **If no unit succeeds, the failure is judged by its source's radius.** The judgement happens at the
+   barrier of the last unit that could have reached the host. The verdict is made from the held entry,
+   because the host may have no failed row at that step: the unit was skipped by `when:`, or a
+   `run_once:` unit went elsewhere.
+   - Under `scenario`, the run ends at that barrier.
+   - Under `host`, the host is dropped there, audited `apply.host_dropped` with the source task, and
+     counted by `tolerate` there. `apply_runs.dropped` goes on the source's row and on the rows of the
+     units that failed — not on a row of the judging step at which no unit failed.
+
+   The entry names the source task and carries the errors of the units that failed. A unit's own
+   `on_failure` is **not read**: like `tolerate` beside `scenario`, it is unused, not an error. Only
+   the net of rule 6 reads the failing task's effective `on_failure`, for a unit task that fails
+   where its unit did not fire. Each held source is judged at the barrier of its own last unit, by
+   its own radius. Under `host` the
+   host is dropped at the first such verdict, and its other held sources stay held (see *What the run
+   goroutine keeps*, rule 6). Under `scenario` the run ends there. This retires fork 1's ⚠: a rescue left at the default `scenario` no longer ends the run
+   for every host when its source failed under `host`. For a failure tied to no task, the source's
+   radius is the barrier owner's at the step where it failed (settings.md §4).
+5. **A handled failure is not undone, and it is not an entry.**
+   - The source keeps its FAILED record, and `register.<source>.failed` stays `true`.
+   - A row keeps `failed_plan_index` and `error_summary` as its first failure, handled or not. A row
+     that the Soul finished `success` after handling a failure in its message keeps them as the record
+     of what it handled. The judge and the held entry read the
+     unhandled failures from the facts, not from the row's first failure.
+   - A run whose every failure was handled ends `success`, with the incarnation `ready`. One that also
+     dropped hosts ends `partial_failed`.
+   - A `failed` or `orphaned` row is marked **`apply_runs.handled`** when every failure it holds was
+     handled. That covers the source's row, and the rows of units that failed before one succeeded.
+     A row that also holds a failure still unhandled when the run ends is not marked: it stays a
+     failure of the run.
+   - **The mark.** Migration 132 adds it beside `dropped` (migration 122)
+     (`keeper/migrations/132_add_apply_runs_handled.up.sql`), and `applyrun.MarkHandled` sets it
+     (`keeper/internal/applyrun/crud.go:795-816`). Like `dropped`, it goes on `failed` and
+     `orphaned` rows only, and never on a dropped one: `MarkDropped` clears it (`:772-793`).
+   - **The rows it goes on.** `runFailures.handledRows` lists a row only when all three hold
+     (`keeper/internal/scenario/failure_policy.go:329-368`):
+     - a barrier judged the row failed or orphaned (`failedRows`, set in `runFailures.judgeRow`,
+       `keeper/internal/scenario/failure_state.go:333-336`);
+     - the row holds at least one source, as the source's own row or as the row of a unit of it
+       that failed;
+     - every source the row holds is handled.
+
+     A row that also holds a failure no source stands for is not listed.
+   - **Where the run writes it.** At each of the run's ends:
+     - a run that commits `ready` writes the marks inside `commitSuccess`'s transaction, after
+       `UpdateStateFromRun` (`keeper/internal/scenario/run.go:1914-1940`). The incarnation's
+       `ready` and the marks commit together. This is fail-closed: a mark that fails rolls the
+       commit back, and the run ends `state_commit_failed` (`:1231-1253`);
+     - `finishPartial` writes them after the failure list closes, before `MarkDropped` and
+       `lockIncarnation` (`keeper/internal/scenario/failure_policy.go:976-994`, `markHandled`
+       `:996-1019`);
+     - an abort writes them after `ensureTerminalApplyRun` returns (the `abort` closure of
+       `Runner.run`, `keeper/internal/scenario/run.go:152-224`; `ensureTerminalApplyRun`,
+       `:1705-1780`). That call either writes the sentinel or closes the non-terminal rows.
+       When an update of a row misses, because the host's own result landed first or the
+       update failed, it reads the rows again and writes the sentinel if no settled row
+       carries the abort. Each of these decisions counts the rows to be marked as marked
+       already. The marks are left off only when it returns false: the rows could not be
+       read, at either read, or the sentinel could not be written; a second read that fails still
+       writes the sentinel. The run then reads
+       `failed`. An abort writes the handled marks only, never `MarkDropped`;
+     - a teardown writes them before it deletes the incarnation (`run.go:1191-1193`). The delete
+       takes the rows with it (`ON DELETE CASCADE`, `keeper/migrations/018_create_apply_runs.up.sql:45`),
+       so the mark matters only when the delete fails.
+
+     The last three are best-effort, as the drop marks are: a row left unmarked reads as a failure
+     of the run.
+   - The fold subtracts the marked rows from the failures and does **not** count them toward
+     `partial_failed`. This holds in `AggregateRunStatus`
+     (`keeper/internal/applyrun/runsview.go:149-195`) and in its SQL twin, the status `CASE` of
+     `runsAggregateSelect` (`keeper/internal/applyrun/runsglobal.go:129-136`). Every reader of a
+     run's outcome goes through one of the two, so a run whose every failure was handled reads
+     `success` on all of them: the run status (`SelectRunStatus`, `runsview.go:388-430`), the
+     incarnation's run history (`ListRunsByIncarnation`, `:202-269`) and run detail
+     (`SelectRunDetail`, `:288-386`), the global runs list (`runsAggregateSelect`), and the Voyage
+     outcome, which polls `SelectRunStatus` (`voyagePgIncarnationAwaiter.pollOutcome`,
+     `keeper/cmd/keeper/daemon.go:6125-6137`).
+   - **`handled` is on the wire** (user, 2026-10-14), as an only-add field of the run's host row
+     (`RunHostStatusEntry`, `shared/api/wire/incarnation.go:243`), built with the folds above. It
+     is `true` on two kinds of row:
+     - a row marked `apply_runs.handled`;
+     - a `success` row that carries a failure, one the Soul finished after handling a failure in its
+       message. Such a row needs no mark, because a `success` row is no failure of the fold.
+
+     The wire fills `failed_plan_index` "on a failed or handled row", no longer "ONLY on a failed
+     row" (`shared/api/wire/incarnation.go:227-231`). Showing it in the web UI is a soul-stack-web ticket.
+6. **The same rule holds inside one message.** The Soul applies it within one `ApplyRequest` — a
+   destiny, or a group rolled as one:
+   - after a failure, the ordinary tasks skip;
+   - a unit in the message whose source failed runs, and the first that succeeds handles the failure.
+     The Soul resumes the ordinary tasks after it and skips the later units of that source;
+   - an `async:` source's failure is observed where it is awaited (ADR-0075(c)) and held from there.
+     Ordinary tasks that ran in between are not undone;
+   - `RunResult` is `FAILED` only when a failure is still unhandled at the message's end, the final
+     barrier's included. This supersedes *"onfail tasks never undo the failure"*
+     (`soul/internal/runtime/applyrunner.go:368-373`).
+
+   A failure unhandled at a message's end, with a unit at a later step, is held by the Keeper like any
+   other.
+
+   The Soul learns the units from an only-add `RenderedTask` field, **`rescue_unit`**: numbered from
+   1 within the message, and zero on a task in no unit. The Keeper sets it on every task of every unit
+   in a message that carries a source together with a unit of it. The Keeper decides the
+   marks where it builds the message:
+   - for a scenario step, in the run goroutine. The step recipe carries them (rule 7), and a claim
+     sends the recipe's marks and never derives its own;
+   - for a push run ([ADR-0032](0032-push-orchestrator.md)), in the push orchestrator, and for
+     `core.ssh.apply` ([draft](draft-ssh-apply-unregistered-hosts.md)), in that module. Both mark a
+     destiny's in-message pairs the same way, so the destiny behaves as it does when applied from a
+     scenario. Their outcome is the Soul's `RunResult`, which `core.ssh.apply` counts a success only
+     as `SUCCESS` (`keeper/internal/coremod/ssh/apply.go:321`). An older binary keeps fail-stop and
+     reports `failed`;
+   - nowhere else. A staged run's messages carry no marks on any path, inline or claimed, and an
+     Oracle reaction's carry none either: both keep fail-stop. A `core.ssh.apply` step marks its own
+     messages in a staged run too, because the module does not read the run's execution model.
+
+   The marks are decided after the requisite gate, so a task whose `onfail:` the gate stripped
+   carries none (rule 1's firing unit). An `apply:` inside a unit whose source is in the
+   same message — both inside a group rolled as one — gets the same treatment by another route. The
+   gate strips nothing there, so the Keeper drops the destiny's own sources from the `onfail_idx` of
+   the unit's tasks. Those tasks then carry the unit's sources alone, together with the unit's mark.
+   They are ordinary tasks of that unit, with no mark of their own. A Soul applies rule 6 only to a
+   message in which some task carries it. A message from a Keeper that sets none — an older Keeper
+   during the "Souls first" rollout ([ADR-0076](0076-engine-compat-window.md)) — runs with fail-stop to
+   the end and reports `FAILED`, as before. A Soul that does not announce **`onfail_handled`** is
+   refused a message that carries such a pair (`soul_capability_unsupported`, item 10).
+
+   **Fail-closed.** Take a row the Soul reported `failed` whose message carried a source. If its facts
+   hold no source that is not handled, the row's first failed **source** is set **not handled**.
+   A failed row that holds no failed source at all is a failure tied to no task. From there,
+   rule 2 decides whether that failure is held — a unit of it ahead reaches the host — or judged at
+   once. A row whose message carried only units is a unit row instead. Its failure is its unit's
+   (rule 1) where that unit fired, and the net's (below) where it did not. A unit row that reports
+   no failed task fails each of its units that fired. Where none fired, its failure is tied to no
+   task and is judged at once by the barrier owner's radius
+   (`keeper/internal/scenario/failure_state.go:343-353`, `:379`, `:670-675`). This covers an older
+   binary on a push host: the capability gate exempts push hosts (`exemptPushHosts`,
+   `keeper/internal/scenario/soulcompat.go:356-375`), and such a binary runs fail-stop. The host can
+   lose a handled outcome, but it never carries on past tasks it skipped.
+
+   **What the run goroutine keeps.** A **source** here is a failed task that is not a task of a unit,
+   or one whose unit did not fire on that host (the net, below).
+   For each host, the run goroutine keeps every failed source in one of three states:
+   - **held** — waiting for a unit ahead (rule 2);
+   - **handled** — a unit succeeded (rule 3);
+   - **judged** — at once, or at the barrier of its last unit (rule 4).
+
+   *Judged* is final. A unit that succeeds afterwards, as compensation, handles nothing and returns
+   nothing.
+
+   A host dropped while some of its sources are still held keeps them held. A unit that succeeds then
+   handles such a source, which leaves no entry, but cannot return the host. A source that no unit
+   handles is judged at its last unit, by its own radius. Such a host is `dropped: true`,
+   `held: false` in `soulprint.hosts`, and it is out of the "no host is left" count.
+
+   A unit task's failure is not a source, except under the net below. It fails its unit (rule 1) and
+   is never judged by itself: on a held host the next unit gets its chance, and on a judged host it
+   changes nothing.
+
+   **The net: a failure of a unit that did not fire** (user, 2026-10-21). A failed task of a unit,
+   on a host where that unit did not fire, is an ordinary failure, as before NIM-993.
+   - **"Did not fire"** means that, when the failure is fed to the host's rule, none of the unit's
+     sources (rule 1) stands unhandled there, held or judged, and none failed while the unit was
+     registered and undecided, that is, in its own message (`sourceFailed`,
+     `shared/config/rescue_rule.go:45-49`, `:144`, `:155-159`). A source handled before the unit was
+     registered does not count.
+   - **It is a source, not a failure of its unit.** A later scenario unit naming the failed task's
+     applier can hold it: `RescueRule` expands the applier's register to the applier's children
+     (`shared/config/rescue_rule.go:80-90`), and rule 2 holds a failure by its applier's register
+     too (`keeper/internal/scenario/failure_state.go:588`, `:711`). That covers a task of a
+     destiny's own unit. Otherwise no unit can hold it, since no `onfail:` may name a register
+     set inside a unit (`onfail_names_rescue`, rule 1), and rule 2 judges it at once, by the
+     task's own radius: its effective `on_failure`, which rule 4 otherwise leaves unread.
+   - **Its unit handles nothing.** `RescueRule.Fail` marks the unit lost, and `Decide` reads that
+     (`shared/config/rescue_rule.go:50-53`, `:137-160`, `:168-176`). The unit is not recorded as a
+     failed unit either: it makes no `FailedUnits` entry, and puts no unit error on its sources
+     (`keeper/internal/scenario/failure_state.go:374-375`, `:473-477`).
+   - **Inside a group the Keeper failed before sending** (rule 2), only the cause failed, on the
+     Keeper; nothing was sent. The replay feeds the cause first, then only the ordinary siblings,
+     terminals aside (`replay`, `keeper/internal/scenario/failure_state.go:410-415`, `:451-456`,
+     `:465`).
+     - A sibling **unit** task, on either side of the cause, is not fed. It neither fires nor
+       fails a unit, and it is no net source.
+     - An **ordinary** sibling's FAILED record stays a judged source, so its units still reach the
+       host as compensation (rule 2). Every source of that step takes the radius of the first
+       source among the records (`newSources`, `keeper/internal/scenario/failure_state.go:553-562`,
+       `:579-584`), and the judge names that one (`judgedTasks`,
+       `keeper/internal/scenario/failure_policy.go:540-546`). A cause that is a net source comes
+       first.
+   - **It is never swallowed.** No failure that no unit handled may end in a run that commits
+     `ready` with a FAILED record and no entry.
+   - **Until marks are sent, it is every Soul's path.** The Keeper sends no `rescue_unit` marks
+     yet (rules 6 and 7), so every Soul runs unmarked and reads `when:` first
+     (`soul/internal/runtime/applyrunner.go:491`, `:588-595`), and the Keeper settles a grouped
+     `when:` that reads no group register (`keeper/internal/render/flow.go:158-176`). A `when:`
+     that errors where its unit did not fire, in a unit with a source before it in its own message or in a
+     destiny's own unit, reaches the net from every current Soul. Once marks are sent, a marked
+     unit task whose unit does not fire is skipped by `skipUnitTask` before its `when:` is read
+     (`soul/internal/runtime/applyrunner.go:535-545`, `soul/internal/runtime/rescueunit.go:141-152`).
+     The net then meets the case only where the Keeper fails such a task itself, and in a row from
+     a Soul that ignores the marks, an older binary on a push host (fail-closed, above).
+   - **It is a net.** Rule 1 settles every task of a unit with no source before it in its own
+     message SKIPPED, unevaluated, on a live host (a grouped task still travels as `when: false`;
+     an applier's terminal goes alone), so such a task does not fail there. A unit with a source
+     before it in its own message, and a destiny's own unit, are evaluated: for them the net is the normal path
+     until marks are sent (above), and a backstop after. Without it, a unit row's failure was its
+     unit's on every host and nobody judged it: the example under rule 1's *Today every path
+     evaluates first*, where the host stayed live.
+   - **Built** (2026-10-21). `RescueRule.Fail` makes a failed task of a unit that does not fire a
+     held source, and leaves a unit already decided as it is
+     (`shared/config/rescue_rule.go:127-160`). The replay records such a source
+     (`keeper/internal/scenario/failure_state.go:445-450`), and the judge takes it like any source
+     (rule 2). A fail-closed unit row where no unit fired is a failure tied to no task (`:343-353`,
+     `:670-675`). `RescueRule.Counts` is the Soul's alone (`shared/config/rescue_rule.go:241-262`).
+     The Keeper's applier fold is its requisite gate's, over the sources no unit handled
+     (`crossPassageGate`, `keeper/internal/scenario/crosspassage.go:215-240`;
+     `failureView.unhandledKeys`, `keeper/internal/scenario/failure_state.go:1046-1059`), so a
+     net source counts there until a unit handles it.
+
+   The run goroutine decides the states at each barrier:
+   - first from the recorded facts, by the same rule as the Soul: one type in `shared/config`
+     (`RescueRule`), which the Soul drives in message order and the Keeper at its barriers. The
+     applier fold is not shared: the Soul's, in `aggregateRegisterData`, reads `RescueRule.Counts`,
+     and the Keeper's is its requisite gate's, over the sources no unit handled (below);
+   - then by the fail-closed verdict above, which overrides the facts.
+
+   A host's sources are fixed at the barrier that judged its row. A `TaskEvent` that the Soul
+   relays after that barrier (`result_relay`) still lands in the audit log and in
+   `apply_task_register`, so a later step's `register.<source>.failed` can read `true`. No reader of
+   the states sees it, so an `onfail:` naming that source does not fire for it.
+
+   Every reader takes these states and never recomputes them from the facts. A step reads them as
+   they stood when that step was dispatched, both a host's standing (live, held or returned) and each
+   source's state, for targeting as for routing:
+   - a returned host stays out of the ordinary steps it missed, on every re-render. The live roster
+     is set once per pass for every step (`keeper/internal/scenario/run.go:975-980`), and a return
+     would otherwise grow it backwards;
+   - a source handled at or after a step still fires there on a later pass.
+
+   A step therefore renders the same on every pass. That is NIM-951's invariant: no failure after a
+   rescue's step is read (`fires`, `keeper/internal/render/rescue.go:63-78`). Rule 5 keeps the
+   source's FAILED fact, so the readers that read the FAILED facts today read the sources that are
+   **not handled** instead, held or judged. That is what lets a host judged at once still receive its
+   units as compensation (rule 2):
+   - the requisite gate: `anyKey`/`factIndices`, `keeper/internal/scenario/crosspassage.go:215-240`,
+     over `failureView.unhandledKeys` (`keeper/internal/scenario/run.go:1080-1087`);
+   - rescue routing: `failureView.rescue`, `keeper/internal/scenario/failure_state.go:998-1044`;
+   - the verdict: `stepJudge.verdict` and `judgedTasks`, over the sources no unit handled
+     (`keeper/internal/scenario/failure_policy.go:501-559`);
+   - the claim's requisite gate (`ClaimRunner.stepGate`, `keeper/internal/scenario/claim.go:326`).
+     It is to take the states from the recipe (rule 7, not built); today it reads the FAILED facts
+     (`:346`).
+
+   **Built today, "the same on every pass" holds only under `needsRescueHold`** (rule 7): in a
+   plan holding a cross-step unit, at every step, and in a plan holding a rescue step, from the
+   run's first failure on. Only there does the run goroutine render each earlier step with each
+   host's standing as that step saw it (`render.Standing`,
+   `keeper/internal/scenario/run.go:975-980`). There a host dropped at a later step is still live
+   at the earlier one. Any other plan re-renders every earlier step over the one roster of the
+   pass, as before the amendment. A claim re-renders such a plan over the recipe's one roster, and
+   the two renders must agree on plan indices until rule 7 puts the standing in the recipe. In
+   such a plan an earlier step that reads the hosts still in the run renders differently after a
+   drop: a `loop:` over `soulprint.hosts.filter(h, !h.dropped)` loses an iteration on later
+   passes, and an index into that list can fail the render (`render_failed`). Both sides are
+   pinned (`TestIntegration_LinearReRenderKeepsAHostDroppedLater`,
+   `TestIntegration_LinearQueuedReRenderOfAPlanWithoutAUnitKeepsOneRoster`,
+   `keeper/internal/scenario/failure_policy_integration_test.go:425`, `:472`). One difference
+   reaches every linear plan: rescue routing reads which register failed on which host, and at
+   which step, from the sources a barrier recorded, not from the latest pass's tasks. After a
+   shift of plan indices, the old reading could name another task.
+
+   Rule 1's "at least one task executed" reads the executed tasks — every status but SKIPPED —
+   from the audit reader's `SelectExecutedTaskKeys`, beside the run's FAILED, CHANGED and reported
+   keys (`ChangedTaskReader`, `keeper/internal/scenario/scenario.go:470-475`).
+
+   **An applier fails only by an unhandled failure of its children.** When a destiny handles its own
+   failure, `register.<applier>.failed` is `false`, and an outer `onfail: [<applier>]` does not fire.
+   The fold is taken at the terminal's own position. A child that a later unit naming the applier
+   handles therefore leaves `failed: true` there, as rule 5 keeps it for any handled source, and
+   the Keeper's fold, its requisite gate, reads it the same way.
+7. **The work-queue path carries the same state.** A claim re-renders its step and refuses a host to
+   which it would send anything else ([ADR-027 amend (q)](0027-apply-work-queue.md)). Today the recipe
+   carries only `Dropped` and the rescue routing (`applyrun.RecipeStep`,
+   `keeper/internal/applyrun/recipe.go:60-94`). It gains:
+   - each host's sources with their states — held, handled or judged — as the run goroutine decided
+     them, with the step at which each became handled or judged, so a claim re-renders every earlier
+     step as it stood;
+   - the units that failed on each host;
+   - the missed tasks whose skipped registers rule 3 synthesizes;
+   - the `rescue_unit` marks of each host's message (rule 6).
+
+   This **failure state** is carried on every step from the run's first failure on, handled ones
+   included, in a plan that holds a rescue unit; a plan without one needs nothing beyond amend (s). While it is present, a claim reads it alone and never the FAILED facts. A recipe without
+   it — no failure yet, or one written by an older run goroutine — leaves the claim reading the FAILED
+   facts as before, which is right in both cases.
+
+   A step whose recipe carries the failure state or marks goes through the queue only when every live
+   Conclave record lists **`rescue_hold`**, as `step_queue` gates a linear step (amend (p)).
+   Otherwise the step is sent inline. A step holding a task of a unit with no source before it in
+   its own message (rule 1) needs `rescue_hold` too, failure or not. On such a step a live host gets a
+   queued row only through an `apply:` unit's terminal. An older claim evaluates that unit's
+   `where:` and `apply: input:` for the host, which the run goroutine does not (rule 1), so its task
+   list can differ.
+   - **Marks alone count**, with nothing failed. A destiny step that carries its own pair is exactly
+     the case the queue takes, since groups and push steps are never queued (`Runner.queuesStep`,
+     `keeper/internal/scenario/dispatch.go:401-409`).
+   - **A claim from before the amendment** compares only plan indices with the recipe
+     (`ClaimRunner.settleStep`, `keeper/internal/scenario/claim.go:308-309`). It would send the step
+     without the marks, and it would render without the failure state.
+   - **A claim takes the marks and the state from the recipe**, so whichever Keeper version claims a
+     row sends what the run goroutine decided, and an older goroutine decides none. This is [ADR-027 amend (v)](0027-apply-work-queue.md).
+   - **Built today: a plan-wide gate.** No instance announces `rescue_hold` yet
+     (`keeper/internal/redis/conclave.go:281-288`). `needsRescueHold` sends inline every step of a
+     plan holding a cross-step unit, and every step of a plan holding a rescue step from the run's
+     first failure on (`keeper/internal/scenario/rescue.go:123-125`). A plan whose every unit has
+     a source before it in its own message queues as before, until its first failure when it holds
+     a rescue step. A plan with no unit queues as before.
+   - **Built today: the widened scope** (2026-10-21). A cross-step unit is one with no source
+     before it in its own message (rule 1). Render and `hasCrossStepUnit` take it from one function,
+     `config.CrossStepUnits`, which reads the union of the unit's sources as rule 1 defines it
+     (`shared/config/passage_linear.go:242-317`). Render keeps them as `crossUnits`
+     (`keeper/internal/render/pipeline.go:209-212`, `keeper/internal/render/render.go:358-361`), and
+     `crossStepUnit` keys a task by the outermost unit holding its position
+     (`keeper/internal/render/rescue.go:218-226`). `hasCrossStepUnit` is
+     `len(config.CrossStepUnits(...)) > 0` (`keeper/internal/scenario/rescue.go:127-139`). Neither
+     waits for a rescue step any more: a plan whose only unit names sources at later steps holds
+     none.
+     `config.RescueSteps` keeps its meaning, the steps holding a rescue of an earlier step's source
+     (`shared/config/passage_linear.go:160-189`): it also chooses the steps a run that a failure
+     ended walks to (`keeper/internal/scenario/run.go:796-851`).
+8. **`core.task.failed`** is a new core module (user, 2026-10-14: its name and where it runs).
+   - **What it does.** It always fails its task. Inside a unit it is the explicit "this error is not
+     handled"; elsewhere it fails the task as Ansible's `fail` does.
+   - **`message:`** (string). Inside a unit it is optional, and defaults to the original error: what
+     the host's held sources of that unit recorded, joined in plan order with `"; "`. Outside a unit it is required
+     (`missing_required_field`).
+   - **"Inside a unit" is judged in the plan where the task is written** — a scenario, or a destiny,
+     with its includes spliced in: by its own `onfail:` or an enclosing one. A destiny linted alone can therefore decide it, and a destiny task that is a
+     rescue only through its applier's `onfail:` still needs `message:`.
+   - **`failed_when:`, `changed_when:`, `retry:` and `timeout:` on it are refused** — and so is
+     `settings.task_timeout` written on the task itself, the long form of `timeout:`. One inherited
+     from an enclosing `settings:` stays legal.
+     (`<key>_on_task_failed_invalid`). The task fails on purpose. A step of its own is settled by
+     the Keeper, where such a key would mean something different or nothing at all, while on the
+     Soul `failed_when:`, `changed_when:` and `retry:` would apply to its result: one scenario, two
+     behaviours, so the key is refused rather than ignored. `when:` stays, because it is how a unit
+     decides whether the error is handled, and how the task fails only sometimes.
+   - **Its failure is the unit's** (rule 1) where its unit fired; elsewhere the net's (rule 6).
+   - **A step of its own** — a scenario task outside a group rolled as one — **is settled by the
+     Keeper** at render:
+     - every host the step targets is failed before anything is sent, with the records a host failed by
+       the Keeper already gets (`failedHost`, `keeper/internal/scenario/keeper_flow.go:153`);
+     - no message reaches a Soul, and a push host opens no session;
+     - so both capability gates — the one ahead of the first step and the per-step one — exempt such a
+       step: no host is required to announce `module:core.task` for it.
+   - **Inside a destiny or a group rolled as one**, it travels in the message and the Soul runs it: its
+     `when:` may read a register of that message, which the Keeper does not have.
+   - **Its address is Soul-side** ([ADR-0087](0087-task-side-derived-from-module-address.md)), so it is
+     legal in a destiny. Settling a step of its own is the Keeper deciding a task it can decide without
+     the host, as it decides `when:` (decision 4). It is not a keeper-side module: such a module runs
+     once per run with no host, and could not fail one.
+   - **Where the original error comes from.** Across a barrier it comes from the held entry; inside a
+     message, from the source's `TaskEvent`.
+   - **Built today:** the module (`soul/internal/coremod/task/task.go`), the static refusals
+     (`shared/config/task_failed.go`, `shared/config/rescue_unit.go:160-166`), and the Soul's
+     default inside a marked message (`withDefaultMessage`,
+     `soul/internal/runtime/rescueunit.go:173-198`). **Not built:** the Keeper settling a step of
+     its own, and the default across a barrier. Until then such a step is sent to the Soul, which
+     runs it, so both capability gates require `module:core.task` for it. A `core.task.failed`
+     with no `message:` fails with `GenericMessage` everywhere, since no message is marked yet.
+9. **What does not change.**
+   - A Cancel ends the run at once, and no rescue runs.
+   - A keeper-side source's own failure still aborts the run at once (`keeper_dispatch_failed`), so it
+     has no rescue to wait for.
+   - A keeper-side `onfail:` task is still no rescue.
+   - After a failure has ended the run, a held host's units still reach it, and a unit that succeeds
+     handles its failure, which then leaves no entry. But no run is left to return to.
+   - A staged run, the one-release rollback, gets nothing of the amendment. Its barrier stays
+     ADR-056's, and its messages carry no marks, so inside a message it keeps fail-stop (rule 6).
+     The one exception is a `core.ssh.apply` step, which marks its own messages on every run. The
+     static refusals of rules 1 and 8 apply to every execution model too, since `soul-lint` cannot
+     tell one from another. On the Keeper, a staged run skips `group_multiple_rescue_units` only:
+     under staged `serial_scope` is not read, so no group exists.
+
+**Rejected** (user, 2026-10-14):
+- **Ending the run at the source and returning every host after the rescue.** The healthy hosts would
+  silently lose the steps between the source and the rescue.
+- **Leaving `scenario` fatal.** The return to the run would then work only under `host`, so the default
+  radius would get nothing.
+- **Continuing a host past its failure until its rescue.** Ordinary tasks would run on top of a failed
+  source, which is the thing fail-stop exists to prevent.
+- **"Any unit" for a block.** The first child of a rescue block alone would handle the failure, and
+  the host would come back half-restored.
+- **Settling `core.task.failed` on the Keeper only.** It would have to be refused inside a destiny,
+  where one scenario would then behave differently than across barriers.
+- **Judging a failure at once in a `serial:` step.** It kept the canary's stop, but a rescue would never
+  return a host that failed in a `serial:` step.
+- **Failing only the returned host when it reads an output it missed.** That would be a rule for
+  returned hosts alone; the same read of a task skipped by `when:` would still end the run.
+- **A `run_once:` unit handling every host it fired on.** A host would come back although nothing ran
+  on it.
+- **A unit's failure as a failure of its own, with rescues of its own.** One host would carry two
+  interleaved verdicts.
+- **The outermost unit swallowing the destiny's, as the rule.** A destiny's rescues would then behave
+  differently depending on who applies it. The one place it holds — a destiny applied from a firing
+  unit — is forced by §6.5's widening (rule 1).
+- **A returning host joining the rest of a default block.** It would run the block's tail without its
+  head.
+- **A wire field naming the held sources a task answers for, so that a group can hold several
+  units.** It would cost one more field and more logic on the Soul, for a canary carrying more than
+  one rescue.
+- **`handled` in the database only.** An operator would see a successful run with failed rows that
+  nothing explains.
+- **`dropped: true` while held.** A capture or a choice of master written as `!h.dropped`, placed
+  between a source and its unit, would leave out a host that later returns.
+
 ## Relation to other ADRs and documents
 
 | Document | Effect |
@@ -1302,4 +2188,11 @@ hosts — by task, as the canary, and for a `serial:` task beside a plain step.
 | [ADR-draft per-host params dispatch](draft-per-host-params-dispatch.md) | **builds on it** — NIM-908's `ParamsBySID` is the model for the per-host overlay the rendered predicates need; NIM-908 left flow control refused when it differs per host (open Q #25), which decision 4 answers |
 | [predicate-rendering.md](../scenario/predicate-rendering.md) | **new** — how the Keeper renders a post-module predicate (decision 4): the equivalence it owes, the traps the differential test covers; implemented (NIM-928, NIM-929, NIM-943, NIM-946) |
 | [known-limitations.md](../known-limitations.md) | item 12 found no destiny equivalent and NIM-939 added one; the reads it does not refuse are listed there |
+| NIM-993 amendment — [ADR-012](0012-keeper-soul-grpc.md) | **amends (c)'s field list** — only-add `RenderedTask.rescue_unit`, plus the Soul capability `onfail_handled` ([naming-rules.md](../naming-rules.md)) |
+| NIM-993 amendment — [ADR-0032](0032-push-orchestrator.md) and the [`core.ssh.apply` draft](draft-ssh-apply-unregistered-hosts.md) | **amended** — a push run and `core.ssh.apply` mark a destiny's in-message source/unit pairs with `rescue_unit` as a scenario step does (rule 6), so a destiny handles its own failures the same way on every path |
+| NIM-993 amendment — [ADR-0087](0087-task-side-derived-from-module-address.md) | **unaffected** — `core.task.failed` is Soul-side by its address; the Keeper is to settle a step of its own the way it decides `when:`, not as a keeper-side module (not built: today the Soul runs it) |
+| NIM-993 amendment — [ADR-027](0027-apply-work-queue.md) | **amend (v)**, built in part (a plan-wide `rescue_hold` gate), the rest design: the step recipe carries the run's failure state (failed sources held, handled or judged; failed units; missed tasks) and the `rescue_unit` marks, and the Conclave capability `rescue_hold` gates queueing such a step |
+| NIM-993 amendment — [ADR-0076](0076-engine-compat-window.md) | **unaffected** — its "Souls first" rollout is why a Soul applies the in-message rule only to a message that carries `rescue_unit` |
+| NIM-993 amendment — [ADR-0075(c)](0075-intra-host-async-tasks.md) and its [architecture.md](../architecture.md) stub | **amended** — "run irreversibly `FAILED` … only the `onfail:` rescue tail runs" no longer holds inside a message: a unit that succeeds handles the failure (rule 6) |
+| NIM-993 amendment — [settings.md](../scenario/settings.md) §2.1, §3.1 and §4, with §4's rescue part now [rescues.md](../scenario/rescues.md); [destiny/tasks.md `onfail:`](../destiny/tasks.md) (its §12 open question on `rescue:` is answered now: no explicit syntax); [predicate-rendering.md §1](../scenario/predicate-rendering.md) (a group that fails before dispatch "judged by the child's radius"); [destiny/tasks.md §9 `when:`](../destiny/tasks.md) ("first, requisites … then `when:`", while the code reads `when:` first and only a unit task's requisite comes first); [orchestration.md](../scenario/orchestration.md) §2.2.1, §4.1 (`soulprint.hosts`), §5 (the probe idiom) and §7 item 3 (a finally-failed task judged at its step's barrier); [naming-rules.md](../naming-rules.md) rows `soulprint.hosts`, `apply.host_dropped` and `partial_failed`; [known-limitations.md](../known-limitations.md#rescues-what-is-not-built-yet) "A successful rescue does not handle the failure", now "Rescues: what is not built yet"; [destiny/tasks.md §6](../destiny/tasks.md) (an async failure leaves the run "irreversibly failed"); [orchestration.md §2.1.1](../scenario/orchestration.md) and [destiny/output.md](../destiny/output.md) (an applier's `failed` = OR over its children); [operator-api/incarnations.md](../keeper/operator-api/incarnations.md) (a `success` run holds only `success`/`no_match` rows, the failure fields appear only on a failed row, no `handled`); the `RunHostStatusEntry` doc (`shared/api/wire/incarnation.go`), the run-status doc comments of `keeper/internal/applyrun/runsview.go` and `runsglobal.go`, and `hostFactsToMap`'s idiom (`keeper/internal/render/cel_render.go`) | **rewritten with the code**. Each states the opposite of a rule of the amendment until then. They gain the held failure, rescue units and a handled failure's outcome. The in-message rule *"onfail is compensation, not forgiveness"* stops being true. "A host fails at most once" (§2.1) no longer holds: a host can return and fail again. A held failure does not stop the later `serial:` waves (§2.2.1, and §3.1's "a failed check stops the roll"). Under the default radius, a held failure is a second bypass of the probe idiom's stop (§5), beside `on_failure: host`. `soulprint.hosts` gains `held`. A `success` run can carry `failed` rows marked `handled`, and a handled row keeps its failure fields. The known limitation narrows to what is not built: inside one message a rescue stays compensation until the Keeper sends marks. The user-facing documents describe what is built and mark what is not |
 | `shared/audit/task_executed.go:56-61` | **corrected** (NIM-952) — the comment asserted keeper tasks carry `passage=0`, which ADR-056 Slice 2 already falsified and this ADR made uniformly false |

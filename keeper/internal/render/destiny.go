@@ -189,7 +189,18 @@ func (p *Pipeline) renderApplyDestiny(
 	// PER HOST since NIM-908: inputByHost is what a host-bound context reads,
 	// destinyInput carries only the names that are the same for everyone.
 	variantInputs := p.hostVariantInputNames(parentIn, applier)
-	inputByHost, destinyInput, extraVariant, err := p.resolveApplyInput(parentIn, applier, resolved, targeted, variantInputs)
+	// A unit nothing was routed to lays out its destiny over the host-invariant
+	// inputs alone: the per-host ones are left unrendered, and every contract rule
+	// that reads one is skipped (ADR-0091 amendment NIM-993, rule 1).
+	layout := parentIn.layoutOnly
+	inputApplier := applier
+	var contract []config.InputContractOption
+	if layout {
+		variantVars := hostVariantVarNames(p.cel, p.taskVarLayers(parentIn, applier), keeperRegisterNames(parentIn.Scenario), nil)
+		inputApplier = hostInvariantApplier(applier, variantVars, variantInputs)
+		contract = append(contract, config.WithoutInputs(variantInputs))
+	}
+	inputByHost, destinyInput, extraVariant, err := p.resolveApplyInput(parentIn, inputApplier, resolved, targeted, variantInputs, contract...)
 	if err != nil {
 		// A destiny `validate:` rule reads the destiny's inputs, so the destiny's
 		// schema says which of them are secret; the apply.input expressions above
@@ -269,8 +280,10 @@ func (p *Pipeline) renderApplyDestiny(
 		// NIM-812 so does `${ input.<secret> }`, off the destiny's own schema
 		// carried on Scenario above. The accumulator is shared with the parent
 		// deliberately: its paths are matched against each task's own params root.
-		Sealed:   parentIn.Sealed,
-		sealMemo: parentIn.sealMemo,
+		Sealed:     parentIn.Sealed,
+		sealMemo:   parentIn.sealMemo,
+		units:      destinyUnits(parentIn, resolved.Tasks),
+		layoutOnly: layout,
 	}
 	pass = &destinyIn
 
@@ -279,7 +292,9 @@ func (p *Pipeline) renderApplyDestiny(
 	// incarnation) and isolated from scenario scope — `register.*` and
 	// `soulprint.hosts` in a vars.yml value are isolation errors. A definition is
 	// evaluated when a cell reads it, and a destiny task's own `vars:` stack on it
-	// (ADR-0082 amendment 2026-10-15, point 5).
+	// (ADR-0082 amendment 2026-10-15, point 5). Laid out, the per-host ones stay in the
+	// view and are never read: an include `when:` refuses them by name, and a laid-out
+	// flow_context leaves them out ([RenderInput.leftOut]).
 	destinyIn.destinyVars = p.destinyBaseViews(destinyIn, resolved.Vars, targeted)
 	// Which of those locals actually resolve per host — the mirror of
 	// hostVariantInputs one layer down, read from the raw vars.yml text, so the
@@ -302,6 +317,7 @@ func (p *Pipeline) renderApplyDestiny(
 	for i := range resolved.Tasks {
 		task := mergeApplierInheritance(applier, resolved.Tasks[i])
 		failing, failingIdx, inTask = task, idx, true
+		taskStart, path := len(tasks), config.StepPath("", i)
 
 		// Conditional-include group-drop (ADR-009 amendment) — mirrors the
 		// scenario loop (pipeline.go), runs BEFORE emitStaticWhenSkip and
@@ -320,6 +336,21 @@ func (p *Pipeline) renderApplyDestiny(
 			continue
 		}
 
+		// Laid out, a module task stands where it stands whatever its `when:`; only a
+		// `loop:`'s static `when:` decides how many places it takes. The guard still
+		// holds, save for a task whose static `when:` gates it off, and a static
+		// `when:` over a per-host name is refused by name, as routed.
+		if layout && task.Block == nil && task.Loop == nil {
+			if gerr := p.layoutGuard(destinyIn, task, guardDestinyTask(task, i, resolved.Name)); gerr != nil {
+				return nil, nil, gerr
+			}
+			tasks = append(tasks, unitSkipPlaceholder(task, idx, 0, destinyIn.Modules))
+			plans = append(plans, DispatchPlan{TaskIndex: idx, SerialWidth: serialWidth})
+			idx++
+			stampRescueUnit(destinyIn, tasks, taskStart, path)
+			continue
+		}
+
 		// Static-when PRECEDES guardDestinyTask (ADR-012(d), same invariant as
 		// the scenario loop in pipeline.go): a statically-false `when:` gates
 		// the task off before the DSL guard, so unsupported DSL (`run_once:`,
@@ -328,10 +359,19 @@ func (p *Pipeline) renderApplyDestiny(
 		// branch gated by `when: input.action=='diagnose'` is inactive at
 		// action=update_acls — previously guardDestinyTask rejected its DSL with
 		// ErrUnsupportedDSL before static-when ran, failing the whole destiny
-		// pass.
-		if skipped, serr := p.emitStaticWhenSkip(ctx, destinyIn, task, &tasks, &plans, &idx); serr != nil {
+		// pass. Laid out, a `loop:`'s is decided host-free, the guard's refusal standing
+		// unless that gates it off.
+		var skipped bool
+		var serr error
+		if layout {
+			skipped, serr = p.layoutStaticWhen(ctx, destinyIn, task, destinyIn.Hosts, guardDestinyTask(task, i, resolved.Name), &tasks, &plans, &idx)
+		} else {
+			skipped, serr = p.emitStaticWhenSkip(ctx, destinyIn, task, destinyIn.Hosts, &tasks, &plans, &idx)
+		}
+		if serr != nil {
 			return nil, nil, serr
 		} else if skipped {
+			stampRescueUnit(destinyIn, tasks, taskStart, path)
 			continue
 		}
 
@@ -354,7 +394,9 @@ func (p *Pipeline) renderApplyDestiny(
 		// skip — children's register is visible outside via
 		// resolveOnChanges).
 		if task.Block != nil {
-			bt, bp, berr := p.renderDestinyBlock(ctx, destinyIn, task, idx, targeted, serialWidth, includeGroupKeep)
+			bin := destinyIn
+			bin.path = path
+			bt, bp, berr := p.renderDestinyBlock(ctx, bin, task, idx, targeted, serialWidth, includeGroupKeep)
 			if berr != nil {
 				return nil, nil, berr
 			}
@@ -364,9 +406,12 @@ func (p *Pipeline) renderApplyDestiny(
 			continue
 		}
 
-		destinyTargeted, terr := p.resolveTargets(destinyIn, task)
-		if terr != nil {
-			return nil, nil, terr
+		var destinyTargeted []*topology.HostFacts
+		if !layout {
+			var terr error
+			if destinyTargeted, terr = p.resolveTargets(destinyIn, task); terr != nil {
+				return nil, nil, terr
+			}
 		}
 
 		// loop: on a destiny task (slice E lifted) — render-time fan-out, like
@@ -383,6 +428,7 @@ func (p *Pipeline) renderApplyDestiny(
 			tasks = append(tasks, lt...)
 			plans = append(plans, lp...)
 			idx += len(lt)
+			stampRescueUnit(destinyIn, tasks, taskStart, path)
 			continue
 		}
 
@@ -398,8 +444,10 @@ func (p *Pipeline) renderApplyDestiny(
 			SerialWidth: serialWidth,
 		})
 		idx++
+		stampRescueUnit(destinyIn, tasks, taskStart, path)
 	}
 	inTask = false
+	withSkipTargets(tasks, plans, parentIn.unitSkip)
 
 	// applier-register materialization (orchestration.md §2.1.1, Option B): if
 	// the applier task carries register:, the destiny run's summary MUST be
@@ -432,15 +480,49 @@ func (p *Pipeline) renderApplyDestiny(
 			Register:    applierRegister,
 			AggregateOf: aggregateOf,
 		})
+		// A live host the unit is skipped on is sent the terminal: the Soul folds
+		// the register from children it was not sent.
 		plans = append(plans, DispatchPlan{
 			TaskIndex:   idx,
-			TargetSIDs:  sidsOf(targeted),
+			TargetSIDs:  sidsOf(mergeHosts(targeted, parentIn.unitSkip)),
 			SerialWidth: serialWidth,
 		})
 		idx++
 	}
 
 	return tasks, plans, nil
+}
+
+// hostInvariantApplier is applier with only what a host-free render of its
+// `apply: input:` can read: the inputs outside variantInputs and the `vars:` outside
+// variantVars.
+func hostInvariantApplier(applier config.Task, variantVars map[string]bool, variantInputs []string) config.Task {
+	apply := *applier.Apply
+	apply.Input = withoutNames(apply.Input, variantInputs)
+	applier.Vars = withoutNames(applier.Vars, slices.Collect(maps.Keys(variantVars)))
+	applier.Apply = &apply
+	return applier
+}
+
+// withoutNames is m without the keys in names; m itself when none is in it.
+func withoutNames(m map[string]any, names []string) map[string]any {
+	drop := false
+	for _, name := range names {
+		if _, ok := m[name]; ok {
+			drop = true
+			break
+		}
+	}
+	if !drop {
+		return m
+	}
+	out := make(map[string]any, len(m))
+	for name, val := range m {
+		if !slices.Contains(names, name) {
+			out[name] = val
+		}
+	}
+	return out
 }
 
 // resolveApplyInput computes the destiny input from apply.input, PER HOST.
@@ -510,6 +592,7 @@ func (p *Pipeline) resolveApplyInput(
 	resolved *ResolvedDestiny,
 	targeted []*topology.HostFacts,
 	variantInputs []string,
+	contract ...config.InputContractOption,
 ) (byHost map[string]map[string]any, invariant map[string]any, extraVariant []string, err error) {
 	apply := applier.Apply
 	hosts := targeted
@@ -543,7 +626,7 @@ func (p *Pipeline) resolveApplyInput(
 		}
 
 		merged, cerr := config.ResolveInputContract(resolved.Input, resolved.Validate, rendered,
-			config.OutOfScopeIncarnation(config.IncarnationOutOfScopeDestiny))
+			config.OutOfScopeIncarnation(config.IncarnationOutOfScopeDestiny), contract...)
 		if cerr != nil {
 			return nil, nil, nil, atHost(host.SID, destinyInputError(apply.Destiny, host.SID, cerr))
 		}
@@ -976,12 +1059,12 @@ func (p *Pipeline) renderDestinyBlock(
 	// The roster is inherited by the block WHOLESALE: a destiny block carries
 	// no on/where (rejected by the guard) — children apply to the same hosts
 	// as the block.
-	childTarget := func(_ int, _ config.Task) ([]*topology.HostFacts, error) {
+	childTarget := func(_ RenderInput, _ int, _ config.Task) ([]*topology.HostFacts, error) {
 		return targeted, nil
 	}
 	// nested block → recurse into the same destiny layer (cascading inheritance).
-	childRecurse := func(_ int, child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
-		return p.renderDestinyBlock(ctx, destinyIn, child, idx, childTargeted, width, includeGroups)
+	childRecurse := func(in RenderInput, _ int, child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
+		return p.renderDestinyBlock(ctx, in, child, idx, childTargeted, width, includeGroups)
 	}
 	// No steps: a destiny is one step whole (ADR-0091, decision 6), so its
 	// blocks render in the applier's pass at the applier's width under either model.

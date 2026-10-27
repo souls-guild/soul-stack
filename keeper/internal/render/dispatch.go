@@ -88,7 +88,7 @@ const keeperOnLiteral = "keeper"
 //
 // The side follows from the MODULE, not from the task (NIM-747): the core module
 // sets are disjoint — the seven of coremanifest.KeeperSideAddrs() on this side,
-// the other twenty-one on the Soul side — so the address alone decides, and an
+// the other twenty-two on the Soul side — so the address alone decides, and an
 // author restating it in `on:` was telling the engine what it already knew. `on:`
 // is back to its one meaning, "which covens".
 //

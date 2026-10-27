@@ -314,10 +314,15 @@ func (c *ClaimRunner) settleStep(ctx context.Context, run *applyrun.ApplyRun, ta
 }
 
 // stepGate is the cross-step requisite gate the run goroutine builds for the step
-// (run.go), over the CHANGED/FAILED facts of the steps before it. Without an audit
-// reader the run goroutine refuses a scenario that needs one before its first
-// step; an instance claiming its row without one refuses the host instead of
-// guessing that a source did not fire.
+// (run.go), here over the CHANGED/FAILED facts of the steps before it. The run
+// goroutine reads the failed sources no unit handled ([failureView.unhandledKeys])
+// in place of the FAILED facts. Until a rescue can handle a failure, every failed task
+// stays failed, so the two gates are equal, except for the gap documented on
+// [Runner.recordUnreported]: a write that commits but reports an error. Only a plan
+// without a cross-step unit has its steps queued, until every live instance announces
+// `rescue_hold` ([Runner.queuesStep]). Without an audit reader the run goroutine
+// refuses a scenario that needs one before its first step; an instance claiming its
+// row without one refuses the host instead of guessing that a source did not fire.
 func (c *ClaimRunner) stepGate(ctx context.Context, run *applyrun.ApplyRun, tasks []*render.RenderedTask, plans []render.DispatchPlan, mine []*render.RenderedTask) (*crossPassageGate, error) {
 	if run.Passage == 0 {
 		return nil, nil

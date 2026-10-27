@@ -3624,6 +3624,9 @@ components:
         failed_task_idx:
           format: int64
           type: integer
+        handled:
+          description: "true on a row whose failures a rescue handled: a failed or orphaned row that is no failure of the run, and a success row the Soul finished after handling a failure inside its message. Such a row keeps failed_task_idx, failed_plan_index and error_summary as its first failure; absent on every other row"
+          type: boolean
         notices:
           items:
             $ref: "#/components/schemas/RunNoticeEntry"

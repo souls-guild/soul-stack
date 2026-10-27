@@ -85,7 +85,7 @@ func (p *Pipeline) renderLoopTask(
 		return nil, nil, p.taskFailure(in, task, -1, fmt.Errorf("render: task %q loop: %w", task.Name, err))
 	}
 
-	width := serialWidth(task.Serial, len(targeted))
+	width := serialWidth(task.Serial, len(targeted)+len(in.unitSkip))
 	tasks := make([]*RenderedTask, 0, len(iters))
 	plans := make([]DispatchPlan, 0, len(iters))
 	idx := startIndex
@@ -100,9 +100,14 @@ func (p *Pipeline) renderLoopTask(
 			continue
 		}
 
-		rt, rerr := p.renderTaskIter(ctx, in, task, idx, targeted, it)
-		if rerr != nil {
-			return nil, nil, rerr
+		var rt *RenderedTask
+		if in.layoutOnly {
+			rt = unitSkipPlaceholder(task, idx, 0, in.Modules)
+		} else {
+			var rerr error
+			if rt, rerr = p.renderTaskIter(ctx, in, task, idx, targeted, it); rerr != nil {
+				return nil, nil, rerr
+			}
 		}
 		tasks = append(tasks, rt)
 		plans = append(plans, DispatchPlan{
@@ -112,6 +117,7 @@ func (p *Pipeline) renderLoopTask(
 		})
 		idx++
 	}
+	withSkipTargets(tasks, plans, in.unitSkip)
 	return tasks, plans, nil
 }
 
@@ -178,17 +184,19 @@ func (p *Pipeline) loopSkipPlaceholder(task config.Task, idx int, skip *structpb
 	rt := &RenderedTask{
 		Index:          idx,
 		Name:           task.Name,
-		Module:         task.Module.Module,
 		Register:       task.Register,
 		ID:             task.ID,
 		Timeout:        task.Timeout,
-		SecretOutput:   config.SecretOutputFields(task.Module.Module, modules),
 		When:           task.When,
 		ChangedWhen:    task.ChangedWhen,
 		FailedWhen:     task.FailedWhen,
 		onChangesNames: task.OnChanges,
 		onFailNames:    task.OnFail,
 		FlowContext:    skip,
+	}
+	if task.Module != nil {
+		rt.Module = task.Module.Module
+		rt.SecretOutput = config.SecretOutputFields(rt.Module, modules)
 	}
 	applyConcurrency(rt, task)
 	return rt

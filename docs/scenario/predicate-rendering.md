@@ -40,7 +40,10 @@ Every task the message would have carried gets a FAILED record, as for a failure
 (the ADR's fork 1), except a child the Keeper had already decided to skip there, which gets a
 Keeper-written SKIPPED record instead; a child sent `when: false` carries no predicate to fail. The
 records feed rescue routing and applier resolution; the failure itself is judged once, by the
-child's radius ([settings.md §4](settings.md)). The Keeper never sends a predicate that may answer differently.
+child's radius ([settings.md §4](settings.md)). Such a group is judged at once, never held for a
+rescue (NIM-993). When the failing child is itself a task of a rescue unit, the group is judged by
+the radius of the first of its records that is a source (a task of no rescue, or of a rescue that
+did not fire there) ([rescues.md](rescues.md)). The Keeper never sends a predicate that may answer differently.
 
 How the rewrite is built is S1's to choose. What it must survive is fixed here: six review rounds
 found the traps in §2, each confirmed in this tree, and **every one is a case in a differential test
@@ -177,26 +180,26 @@ The Keeper's two pieces are built for a run executing linearly (NIM-943), and th
 guards, masking, async barriers and the announcement of the capability bit — by NIM-929.
 
 - **Per-host transport.** The rendered predicate depends on that host's registers, so it differs per
-  host. One `RenderedTask` serves every host it goes to (`keeper/internal/scenario/dispatch.go:956`),
-  and since NIM-908 it carries per-host params: `ParamsBySID` (`keeper/internal/render/render.go:666`),
-  picked for each host by `paramsForHost` (`keeper/internal/render/prototask.go:189`)
+  host. One `RenderedTask` serves every host it goes to (`keeper/internal/scenario/dispatch.go:993`),
+  and since NIM-908 it carries per-host params: `ParamsBySID` (`keeper/internal/render/render.go:732`),
+  picked for each host by `paramsForHost` (`keeper/internal/render/prototask.go:185`)
   ([ADR-draft per-host params dispatch](../adr/draft-per-host-params-dispatch.md)). Flow control is
   the half NIM-908 left refused: a host-variant flow context fails the render
-  (`keeper/internal/render/pipeline.go:801-805`). Every predicate that travels needs the same kind
+  (`keeper/internal/render/pipeline.go:874-878`). Every predicate that travels needs the same kind
   of overlay as params — `changed_when:`, `failed_when:` and `until:`, and a grouped child's `when:` whose
   residual is still open; without it, host 1's predicate would silently go to every host. A path
   past render already exists: the requisite gate clones a task per host
-  (`keeper/internal/scenario/crosspassage.go:158-163`), and each host's slice reaches the wire
-  through `ToProtoTasksForHost(perHost[sid], sid)` (`keeper/internal/scenario/dispatch.go:561`). A `when:`
+  (`keeper/internal/scenario/crosspassage.go:163-168`), and each host's slice reaches the wire
+  through `ToProtoTasksForHost(perHost[sid], sid)` (`keeper/internal/scenario/dispatch.go:598`). A `when:`
   the Keeper decides for a step needs none: it decides the host slice, which is per host already.
   Inside a group it does: a child skipped on one host and not another travels as `when: false` on
   the first only. *Built:* `RenderedTask.FlowBySID`, read by `ToProtoTasksForHost`.
 - **The soulprint guard is lifted for a rendered predicate.** `guardFlowControlHostInvariant`
-  (`keeper/internal/render/pipeline.go:1510-1526`, called at `:515`) refuses a `when:`,
+  (`keeper/internal/render/pipeline.go:1660-1676`, called at `:582`) refuses a `when:`,
   `changed_when:` or `failed_when:` naming `soulprint` on a multi-host target, because today the
   Soul would evaluate it against the first host's snapshot. With `soulprint.self` resolved per host
   on the Keeper, that reason is gone. So is the reason for the second layer NIM-908 kept,
-  `flowContextHostInvariant` (`keeper/internal/render/pipeline.go:801-805`): with every `vars` and
+  `flowContextHostInvariant` (`keeper/internal/render/pipeline.go:1768-1770`, called at `:874`): with every `vars` and
   `input` reference substituted, no flow context travels for a scenario task to differ per host.
   *Built:* both are skipped in a linear scenario pass; a destiny's tasks keep them.
 - **The Soul's text guards leave a substituted value alone — built (NIM-929).** They used to match

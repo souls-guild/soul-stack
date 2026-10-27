@@ -20,16 +20,17 @@ func hostOwner() config.ScenarioSettings {
 	return owner
 }
 
-// ★ GUARD (settings.md §4, fork 1). A dropped host back at a barrier for its rescue is
-// out of the count: its rescue failing under `host` neither counts against
-// `tolerate` again nor empties the roster, and only records that it left once more —
-// both failed rows are marked at the end. Once a failure has ended the run, a rescue's
-// failure under either radius is one more entry and the run walks on.
+// ★ GUARD (rescues.md; ADR-0091 amendment NIM-993, rule 4). A dropped host judged
+// again at a barrier — a source it still held when it was dropped, judged at its own
+// unit's barrier — is out of the count: under `host` it neither counts against
+// `tolerate` again nor empties the roster, and it is not dropped, nor audited, a
+// second time. Once a failure has ended the run, a later failure under either radius
+// is one more entry and the run walks on.
 //
 // Mutations: count an already dropped host as a fresh drop → tolerate: 1 ends the run
-// at the rescue; keep one drop step per host → the rescue's failed row is not marked;
-// let an ended run end again → the scenario-radius rescue failure stops the walk; join
-// a Cancel after the end beside the list → the Cancel is named twice.
+// at step 2; return every host-radius entry from drop → a is dropped twice; let an
+// ended run end again → the scenario-radius failure stops the walk; join a Cancel
+// after the end beside the list → the Cancel is named twice.
 func TestRunFailures_RescueOfADroppedHost(t *testing.T) {
 	f := newRunFailures()
 	owner := hostOwner()
@@ -39,19 +40,19 @@ func TestRunFailures_RescueOfADroppedHost(t *testing.T) {
 	if _, err := f.settle(0, []failureEntry{{step: 0, sid: "a", radius: config.OnFailureHost, reason: "deploy"}}, owner, 2, roster); err != nil {
 		t.Fatalf("first drop: %v", err)
 	}
-	dropped, err := f.settle(2, []failureEntry{{step: 2, sid: "a", task: "rollback", radius: config.OnFailureHost, reason: "rollback"}}, owner, 2, roster)
-	if err != nil || len(dropped) != 1 {
-		t.Fatalf("a dropped host's rescue failing under host = %v, %v - want it recorded, the run going on", dropped, err)
+	dropped, err := f.settle(2, []failureEntry{{step: 2, sid: "a", task: "migrate", radius: config.OnFailureHost, reason: "migrate"}}, owner, 2, roster)
+	if err != nil || len(dropped) != 0 || len(f.entries) != 2 {
+		t.Fatalf("a dropped host judged again under host = %v, %v (entries %d) - want one more entry, no second drop, the run going on", dropped, err, len(f.entries))
 	}
-	if got := f.dropped["a"].steps; !reflect.DeepEqual(got, []int{0, 2}) {
-		t.Errorf("host a's dropped steps = %v, want [0 2]", got)
+	if got := *f.hosts["a"].droppedAt; got != 1 {
+		t.Errorf("host a is out from step %d, want 1: its first drop stands", got)
 	}
 
 	if _, err := f.settle(3, []failureEntry{{step: 3, sid: "b", radius: config.OnFailureScenario, reason: "boom"}}, owner, 2, roster); !errors.Is(err, errRunEnded) {
 		t.Fatalf("scenario-radius failure = %v, want the run ended", err)
 	}
 	if _, err := f.settle(4, []failureEntry{{step: 4, sid: "b", task: "undo", radius: config.OnFailureScenario, reason: "undo failed"}}, owner, 2, roster); err != nil {
-		t.Errorf("a rescue failing after the end = %v, want one more entry", err)
+		t.Errorf("a failure judged after the end = %v, want one more entry", err)
 	}
 	_, cerr := f.settle(4, []failureEntry{{step: 4, sid: "b", radius: radiusCancelled, reason: "cancelled"}}, owner, 2, roster)
 	if cerr == nil || errors.Is(cerr, errRunEnded) {
@@ -122,35 +123,7 @@ func TestStopCode(t *testing.T) {
 	}
 }
 
-// ★ GUARD (fork 1, NIM-931). A failed child fails its applier's register as well as
-// its own; a keeper-side task's failure stays under the keeper's SID; a register
-// failing at two steps keeps the first.
-//
-// Mutation: fold a child's failure into its own register only → `certs` is missing.
-func TestFailedRegisters_AnApplierFailsWithItsChild(t *testing.T) {
-	tasks := []*render.RenderedTask{
-		{Index: 0, Register: "probe", Passage: 0},
-		{Index: 1, Register: "issue", Passage: 1},
-		{Index: 2, Register: "certs", Passage: 1, AggregateOf: []int{1}},
-		{Index: 3, Register: "vm", Passage: 2},
-		{Index: 4, Register: "probe", Passage: 3},
-	}
-	keys := map[auditpg.ChangedTaskKey]struct{}{
-		{SID: "a", PlanIndex: 1}:                    {},
-		{SID: "a", PlanIndex: 4}:                    {},
-		{SID: "a", PlanIndex: 0}:                    {},
-		{SID: render.KeeperTargetSID, PlanIndex: 3}: {},
-	}
-	want := map[string]map[string]int{
-		"a":                    {"issue": 1, "certs": 1, "probe": 0},
-		render.KeeperTargetSID: {"vm": 2},
-	}
-	if got := failedRegisters(keys, tasks); !reflect.DeepEqual(got, want) {
-		t.Errorf("failedRegisters = %v, want %v", got, want)
-	}
-}
-
-// ★ GUARD (settings.md §4, fork 1). After the wave whose failure ended the run, a wave
+// ★ GUARD (rescues.md, fork 1). After the wave whose failure ended the run, a wave
 // keeps a host only where a rescue fires — the gate reads its earlier-step source
 // failed there — and sends it its rescues alone, as a step past the end is rendered:
 // an applier rescue's child with the terminal carrying its register, a `when: false`

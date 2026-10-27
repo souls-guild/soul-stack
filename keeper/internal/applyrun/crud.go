@@ -680,7 +680,7 @@ func DedupeNotices(in []RunNotice) []RunNotice {
 }
 
 const selectStatusesByApplyIDSQL = `
-SELECT sid, status, task_idx, failed_plan_index, error_summary, cancel_requested, passage, dropped
+SELECT sid, status, task_idx, failed_plan_index, error_summary, cancel_requested, passage, dropped, handled
 FROM apply_runs
 WHERE apply_id = $1
 ORDER BY sid ASC, passage ASC
@@ -727,6 +727,11 @@ type HostStatus struct {
 	// Dropped — the row dropped its host from a run that finished without it
 	// ([MarkDropped]).
 	Dropped bool
+
+	// HandledMark — every failure the failed or orphaned row holds was handled by
+	// a rescue ([MarkHandled]). The mark only: unlike [RunHostStatus.Handled], a
+	// success row that handled a failure inside its message does not carry it.
+	HandledMark bool
 }
 
 // SelectStatusesByApplyID returns statuses for every host of one run (one
@@ -752,7 +757,7 @@ func SelectStatusesByApplyID(ctx context.Context, db ExecQueryRower, applyID str
 			hs        HostStatus
 			statusStr string
 		)
-		if err := rows.Scan(&hs.SID, &statusStr, &hs.TaskIdx, &hs.FailedPlanIndex, &hs.ErrorSummary, &hs.CancelRequested, &hs.Passage, &hs.Dropped); err != nil {
+		if err := rows.Scan(&hs.SID, &statusStr, &hs.TaskIdx, &hs.FailedPlanIndex, &hs.ErrorSummary, &hs.CancelRequested, &hs.Passage, &hs.Dropped, &hs.HandledMark); err != nil {
 			return nil, fmt.Errorf("applyrun: statuses scan: %w", err)
 		}
 		hs.Status = Status(statusStr)
@@ -766,7 +771,7 @@ func SelectStatusesByApplyID(ctx context.Context, db ExecQueryRower, applyID str
 
 const markDroppedSQL = `
 UPDATE apply_runs
-SET dropped = TRUE
+SET dropped = TRUE, handled = FALSE
 WHERE apply_id = $1 AND sid = $2 AND passage = $3 AND status IN ('failed', 'orphaned')
 `
 
@@ -774,7 +779,8 @@ WHERE apply_id = $1 AND sid = $2 AND passage = $3 AND status IN ('failed', 'orph
 // from a run that went on to its end without it (docs/scenario/settings.md §4), so the
 // run folds to `partial_failed` ([AggregateRunStatus]). Only a failed or orphaned
 // row can be one; a row that is not is a programming error, reported as
-// [ErrApplyRunNotFound].
+// [ErrApplyRunNotFound]. The drop clears the row's handled mark ([MarkHandled]
+// refuses a dropped row): the two marks are exclusive, and a drop wins.
 func MarkDropped(ctx context.Context, db ExecQueryRower, applyID, sid string, passage int) error {
 	tag, err := db.Exec(ctx, markDroppedSQL, applyID, sid, passage)
 	if err != nil {
@@ -782,6 +788,29 @@ func MarkDropped(ctx context.Context, db ExecQueryRower, applyID, sid string, pa
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("applyrun: mark dropped (%s, passage %d): no failed row: %w", sid, passage, ErrApplyRunNotFound)
+	}
+	return nil
+}
+
+const markHandledSQL = `
+UPDATE apply_runs
+SET handled = TRUE
+WHERE apply_id = $1 AND sid = $2 AND passage = $3 AND status IN ('failed', 'orphaned') AND NOT dropped
+`
+
+// MarkHandled records that every failure host sid's failed row of step passage
+// holds was handled by a rescue (ADR-0091 amendment NIM-993, rule 5), so the run
+// does not fold to `failed` for it ([AggregateRunStatus]). Only a failed or orphaned
+// row that is not a drop can be one: a `success` row that handled a failure inside
+// its message is no failure of the fold and needs no mark. A row that is not is a
+// programming error, reported as [ErrApplyRunNotFound].
+func MarkHandled(ctx context.Context, db ExecQueryRower, applyID, sid string, passage int) error {
+	tag, err := db.Exec(ctx, markHandledSQL, applyID, sid, passage)
+	if err != nil {
+		return fmt.Errorf("applyrun: mark handled (%s, passage %d): %w", sid, passage, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("applyrun: mark handled (%s, passage %d): no failed row that is not dropped: %w", sid, passage, ErrApplyRunNotFound)
 	}
 	return nil
 }

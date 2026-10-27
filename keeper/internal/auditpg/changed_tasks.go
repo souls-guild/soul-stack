@@ -48,6 +48,13 @@ const (
 	taskStatusTimedOut = "TASK_STATUS_TIMED_OUT"
 )
 
+// taskStatusOK / taskStatusCancelled — the statuses of a task that ran besides
+// CHANGED and FAILED ∪ TIMED_OUT; CANCELLED is one that a Cancel stopped mid-run.
+const (
+	taskStatusOK        = "TASK_STATUS_OK"
+	taskStatusCancelled = "TASK_STATUS_CANCELLED"
+)
+
 // selectTaskKeysByStatusSQL — selects the addresses of a run's tasks in a given
 // status set from the audit log. Filter strictly on indexed columns
 // (correlation_id, event_type) + a JSONB predicate on status; sid/plan_index
@@ -69,8 +76,8 @@ const (
 // NULLIF on sid isn't needed — the handler always sets sid. DISTINCT isn't
 // needed: the pair (sid, plan_index) is unique per task's final status in
 // task.executed, but a retry may produce multiple rows — dedup is done by the
-// caller (a set). One SQL query serves both the CHANGED and FAILED selections —
-// they differ only in the set of status names ($3).
+// caller (a set). One SQL query serves the CHANGED, FAILED and executed
+// selections — they differ only in the set of status names ($3).
 const selectTaskKeysByStatusSQL = `
 SELECT payload->>'sid' AS sid,
        COALESCE(payload->>'plan_index', payload->>'task_idx') AS plan_index
@@ -113,6 +120,16 @@ func (r *Reader) SelectChangedTaskKeys(ctx context.Context, applyID string) (map
 // Same secret hygiene: ONLY address fields (sid, plan_index) are read.
 func (r *Reader) SelectFailedTaskKeys(ctx context.Context, applyID string) (map[ChangedTaskKey]struct{}, error) {
 	return r.selectTaskKeysByStatus(ctx, applyID, []string{taskStatusFailed, taskStatusTimedOut})
+}
+
+// SelectExecutedTaskKeys returns the set of (sid, plan_index) for tasks of run
+// `applyID` that executed: a `task.executed` event of any status but SKIPPED — OK,
+// CHANGED, FAILED, TIMED_OUT or CANCELLED. A rescue unit succeeds on a host only
+// once one of its tasks executed there (ADR-0091 amendment NIM-993, rule 1), which
+// [SelectReportedTaskKeys] cannot tell: it counts a skip as reported. Same secret
+// hygiene as [SelectChangedTaskKeys].
+func (r *Reader) SelectExecutedTaskKeys(ctx context.Context, applyID string) (map[ChangedTaskKey]struct{}, error) {
+	return r.selectTaskKeysByStatus(ctx, applyID, []string{taskStatusOK, taskStatusChanged, taskStatusFailed, taskStatusTimedOut, taskStatusCancelled})
 }
 
 // selectTaskKeysByStatus — shared (sid, plan_index) selection for a run's

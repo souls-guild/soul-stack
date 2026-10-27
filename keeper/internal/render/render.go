@@ -316,10 +316,69 @@ type RenderInput struct {
 	// a block's children to narrow further ([coveredDropped]). Set per block.
 	droppedCover []*topology.HostFacts
 
-	// Rescue — a linear run's failures as rescue routing reads them (settings.md §4):
-	// a dropped host stays the target of an `onfail:` task whose source failed on it,
-	// and once a failure has ended the run only `onfail:` tasks are rendered. nil —
-	// no host dropped and the run goes on.
+	// HeldHosts — the hosts a linear run holds (ADR-0091 amendment NIM-993, rule 2):
+	// a failure of theirs waits for a rescue unit at a later step. Hosts never holds
+	// them: no ordinary task targets a held host. They stay in `soulprint.hosts`,
+	// flagged `held` ([runHosts]), and each plan names the ones its task would have
+	// reached ([DispatchPlan.NotReached]), as it does the dropped hosts.
+	HeldHosts []*topology.HostFacts
+
+	// heldCover — the held hosts the enclosing blocks' `on:` still selects, as
+	// droppedCover the dropped ones. Set per block.
+	heldCover []*topology.HostFacts
+
+	// Standing — a linear run's hosts as each step saw them ([Standing]). Set, every
+	// step renders through [RenderInput.ForStep], which replaces Hosts, HeldHosts,
+	// Dropped and RegisterByHost with that step's. nil — those four hold for every
+	// step.
+	Standing *Standing
+
+	// registerBase — RegisterByHost as it was before the first ForStep laid a
+	// returned host's synthesized registers beneath its own; registerBaseSet tells a
+	// nil base from none taken yet.
+	registerBase    map[string]map[string]any
+	registerBaseSet bool
+
+	// coverRoster — with Standing only: the run's hosts, whatever their standing, that
+	// the enclosing blocks' `on:` selects, nil under a `run_once:` block. A default
+	// block's child narrows it to its own step's dropped and held hosts for
+	// droppedCover and heldCover, which change as hosts drop, are held and return
+	// inside the block. Set per block.
+	coverRoster []*topology.HostFacts
+
+	// path — the plan position ([config.StepPath]) of what this input renders: a
+	// block's for its children, an applier's for its destiny, a destiny block's in
+	// the destiny's plan.
+	path string
+
+	// units — the rescue units of the plan this pass renders, which key its tasks'
+	// [RenderedTask.RescueUnit].
+	units unitScope
+
+	// crossUnits — the positions of a linear scenario's cross-step rescue units
+	// ([config.CrossStepUnits]), by which [RenderInput.crossStepUnit] tells a task of
+	// one; nil for every other plan, which then renders as before units were routed.
+	crossUnits map[string]bool
+
+	// unitSkip — on the input of one cross-step rescue unit's render: the live hosts
+	// it is settled SKIPPED on, unrendered ([RenderedTask.skipSIDs]). layoutOnly —
+	// nothing was routed to it, so its render lays out the plan indices and renders
+	// nothing else (ADR-0091 amendment NIM-993, rule 1); set on a whole destiny pass
+	// for an `apply:` unit.
+	unitSkip   []*topology.HostFacts
+	layoutOnly bool
+
+	// leftOut — on the input a laid-out task's static `when:` is decided with: the names
+	// of its view a host-free evaluation leaves out ([Pipeline.hostFreeWhen]). A view
+	// evaluates a name when it is read, so leaving a definition out of the task's own
+	// `vars:` is not enough: a lower rung's definition reading it would be evaluated
+	// in its place. No flow_context built on this input carries one of them.
+	leftOut map[string]bool
+
+	// Rescue — a linear run's failures as rescue routing reads them (rescues.md):
+	// a held or dropped host stays the target of an `onfail:` task whose source failed
+	// on it, and once a failure has ended the run only `onfail:` tasks are rendered.
+	// nil — no host held or dropped and the run goes on.
 	Rescue *Rescue
 
 	// groupStep — the step of the block rolled as one group being rendered, which its
@@ -332,7 +391,8 @@ type RenderInput struct {
 
 	// rescueCover — the run's hosts, live and dropped, that the enclosing blocks'
 	// `on:` selects, their `where:` and `run_once:` aside: the hosts a rescue inside
-	// may reach ([Pipeline.routeRescue]). Set per block while rescues are routed.
+	// may reach ([Pipeline.routeRescue], [Pipeline.routeUnit]). Set per block while
+	// rescues or cross-step units are routed.
 	rescueCover []*topology.HostFacts
 
 	// SoulNeeds — what every task of a linear run sends to which hosts, as far as it
@@ -691,6 +751,16 @@ type RenderedTask struct {
 	// linear dispatch only; a destiny's tasks carry their applier's.
 	OnFailure string
 
+	// RescueUnit — the key of the outermost rescue unit holding this task (ADR-0091
+	// amendment NIM-993, rule 1), "" for a task of no unit and for an applier's
+	// terminal, which is no task of its unit. A scenario unit is keyed by its plan
+	// position ([config.StepPath]); a destiny's own unit by "<applier position>@<its
+	// position in the destiny>", and only when the applier is in no scenario unit,
+	// whose key every task of the destiny carries instead. A fact of the plan,
+	// stamped under every execution model; whoever builds a message decides whether
+	// it becomes the wire's `rescue_unit`. Keeper-only.
+	RescueUnit string
+
 	// flowContextBySID — each target host's flow_context, kept for [Pipeline.settleFlow]
 	// to evaluate the predicates against: the snapshot a Soul would have been sent.
 	flowContextBySID map[string]*structpb.Struct
@@ -704,6 +774,9 @@ type RenderedTask struct {
 	// stay open in this task's predicates, because the Soul accumulates them inside
 	// the message.
 	groupRegisters []string
+	// skipSIDs — the hosts of its plan a cross-step rescue unit is settled SKIPPED on
+	// without being rendered for them ([HostFlow.Unrendered]).
+	skipSIDs map[string]bool
 }
 
 // RenderedOp — one `core.state.<verb>` capture after the Keeper-side CEL render
@@ -799,8 +872,9 @@ type DispatchPlan struct {
 	TransportName   string
 	TransportParams map[string]any
 
-	// NotReached — the hosts the run dropped that this task would have reached, by
-	// its `on:` alone ([coveredDropped]), sorted. The dispatcher records the task
-	// SKIPPED on each: what a Soul's fail-stop records for the rest of its message.
+	// NotReached — the hosts the run holds or dropped that this task would have
+	// reached, by its `on:` alone ([coveredDropped]), sorted. The dispatcher records
+	// the task SKIPPED on each: what a Soul's fail-stop records for the rest of its
+	// message.
 	NotReached []string
 }

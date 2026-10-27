@@ -723,6 +723,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		}
 		// Phase that checks params against the module's manifest schema (core modules).
 		out = append(out, validateModuleParams(kv, present["params"], pathPrefix)...)
+		out = append(out, validateTaskFailedForbiddenKeys(present, pathPrefix)...)
 	}
 	if kv, ok := present["apply"]; ok {
 		out = append(out, validateApplyField(kv, pathPrefix)...)

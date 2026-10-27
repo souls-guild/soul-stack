@@ -278,6 +278,15 @@ func ReadInstanceMeta(ctx context.Context, c *Client, kid string) (string, bool,
 // claim a step row as a whole run and send the scenario in one message.
 const CapabilityStepQueue = "step_queue"
 
+// CapabilityRescueHold — the instance's Acolytes can claim any step of a linear run
+// whose plan holds a cross-step rescue unit, or, from the run's first failure on,
+// holds a rescue of an earlier step's source: the Keeper queues a step of such a plan
+// only while every live instance lists it. That plan-wide gate is a broader stopgap,
+// ahead of the per-step gate of ADR-027 amend (v). No instance announces it yet, so
+// every step it gates goes inline until the work-queue recipe carries the failure
+// state and claimants announce `rescue_hold` (ADR-027 amend (v)).
+const CapabilityRescueHold = "rescue_hold"
+
 // AllLiveHaveCapability reports whether every live instance's Conclave record
 // lists `capability`. It answers false — never an optimistic true — when the
 // registry is empty, when a record is not the JSON [RegisterInstance]'s caller

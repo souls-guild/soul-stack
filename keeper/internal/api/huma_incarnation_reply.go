@@ -227,6 +227,7 @@ func newRunDetailReply(v handlers.RunDetailView) RunDetailReply {
 			Attempt:         hs.Attempt,
 			CancelRequested: hs.CancelRequested,
 			Dropped:         hs.Dropped,
+			Handled:         hs.Handled,
 			Notices:         notices,
 		}
 	}

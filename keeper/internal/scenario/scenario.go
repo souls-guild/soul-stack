@@ -407,11 +407,13 @@ type SoulVersionReader interface {
 
 // StepQueueChecker answers whether every live Keeper instance can take a linear
 // run's step row — its Conclave record lists the capability `step_queue`
-// (ADR-027 amend (p)(d)(ii)). False for an empty registry; an error when the
-// Conclave does not answer. Implemented over [redis.AllLiveHaveCapability] at
-// wire-up.
+// (ADR-027 amend (p)(d)(ii)) — and whether every one can claim any step of a plan
+// that holds a cross-step rescue unit — `rescue_hold` (amend (v)). False for an empty
+// registry; an error when the Conclave does not answer. Implemented over
+// [redis.AllLiveHaveCapability] at wire-up.
 type StepQueueChecker interface {
 	AllLiveTakeStepRows(ctx context.Context) (bool, error)
+	AllLiveHoldRescues(ctx context.Context) (bool, error)
 }
 
 // KeeperModuleRegistry is the narrow keeper-side core Registry surface
@@ -453,8 +455,10 @@ type KeeperPluginRegistry interface {
 // ChangedTaskReader is the narrow read-access surface to the audit log: sets
 // of (sid, plan_index) run tasks that terminated CHANGED (T3, changed_tasks
 // rollup) or FAILED/TIMED_OUT (ADR-056 R3, cross-passage onfail-rescue
-// gating), or with any event at all (a linear barrier's records for a host that
-// stopped reporting, settings.md §4). Backed by `task.executed` events
+// gating), with any event at all (a linear barrier's records for a host that
+// stopped reporting, settings.md §4), or with any status but SKIPPED (whether a
+// rescue unit's task executed on a host, ADR-0091 amendment NIM-993, rule 1).
+// Backed by `task.executed` events
 // (events_taskevent.go), not a separate table. An interface (not a direct
 // *auditpg.Reader) keeps the scenario package testable without PG.
 //
@@ -467,6 +471,7 @@ type ChangedTaskReader interface {
 	SelectChangedTaskKeys(ctx context.Context, applyID string) (map[auditpg.ChangedTaskKey]struct{}, error)
 	SelectFailedTaskKeys(ctx context.Context, applyID string) (map[auditpg.ChangedTaskKey]struct{}, error)
 	SelectReportedTaskKeys(ctx context.Context, applyID string) (map[auditpg.ChangedTaskKey]struct{}, error)
+	SelectExecutedTaskKeys(ctx context.Context, applyID string) (map[auditpg.ChangedTaskKey]struct{}, error)
 }
 
 // Deps holds [Runner]'s constructor dependencies. All required except Logger
