@@ -97,14 +97,24 @@ host has no window of its own (Not in v1).
 | A Cadence spawn with `in_maintenance_window` | Deferred to `NextStart` | Deferred past it |
 | A Cadence spawn without `in_maintenance_window` | Not asked; starts at its tick | Deferred to the first moment no freeze covers; there is no consent for a Cadence |
 | The Reaper's cert rotation (takes effect with epic NIM-1070) | Per the certificate's `rotate.action` (NIM-1081) | Never starts inside a freeze |
+| An incarnation's destroy (`DELETE /v1/incarnations/{id}`, MCP `keeper.incarnation.destroy`) | Not asked | Needs consent, checked before the destroy commits anything (NIM-1085) |
+| A Decree reaction (Oracle) | Not asked | **Not held back** — a reaction is a repair (NIM-1085) |
 
 - **An operator's run is never refused because of a window.** A window holds back only the runs
   that ask for it. The user decided a forced RUN is always allowed; the Run dialog's checkbox is how
   an operator asks for the window.
-- **An automatic run never starts during a freeze** (user, 2026-10-27). In this train the rule
-  covers a Cadence spawn and, with epic NIM-1070, the Reaper's cert rotation; a Decree reaction is
-  the open question NIM-1085. With NIM-1070, a certificate that expires inside a freeze is rotated
-  in the last window before it;
+- **An automatic run never starts during a freeze** (user, 2026-10-27): a Cadence spawn and, with
+  epic NIM-1070, the Reaper's cert rotation.
+- **A Decree reaction is the one exception** (user, 2026-10-27, NIM-1085). A reaction is usually a
+  repair — a service went down and the Decree restarts it — and holding a repair until the freeze
+  ends is worse than running it. It reaches the work queue through
+  `keeper/cmd/keeper/oracle_enqueuer.go` (`applyrun.InsertPlanned`), outside both the runner and the
+  Voyage claim, so no gate of this ADR may sit on a path it shares.
+- **A destroy is an operator's act and needs consent like a run** (user, 2026-10-27, NIM-1085):
+  `confirm_freeze: true` on `DELETE /v1/incarnations/{id}` and on `keeper.incarnation.destroy`,
+  else 409 `freeze-active`, checked before anything commits. Built with NIM-1074.
+- With epic NIM-1070, a certificate that expires inside a freeze is rotated in the last window
+  before it;
   NIM-1081 owns that pull-forward, and also the case where the freeze is added after that last
   window has passed, so the certificate would expire inside it. Under NIM-1081 the signing happens
   inside the rotation run, so deferring the run defers the signing with it; the registry never
@@ -211,9 +221,6 @@ whether CEL passes that through or gives `""` is NIM-1073's.
 - **Runs that are not about one incarnation are outside the gate by construction.** A
   `kind: command` Voyage or Cadence, an Errand and a console session address hosts, and a host has
   no window of its own. A command run on a host of a frozen incarnation is not held back.
-- A Decree reaction (Oracle) and an incarnation's destroy run are not gated by this train. Whether a
-  freeze holds them back is undecided: a reaction is often a repair, and a destroy is an explicit
-  operator act. The question goes to the user as NIM-1085.
 - No shared named windows and no window on a service or a Coven (§1).
 
 ### Rejected
@@ -229,3 +236,7 @@ whether CEL passes that through or gives `""` is NIM-1073's.
   "not yet, and here is when"; a second state would need its own claim path and its own reclaim.
 - **Refusing an operator's run outside a window.** The user decided a forced RUN is always
   allowed; a window holds back only a run that asks for it.
+- **Holding a Decree reaction during a freeze** (NIM-1085). A reaction is a repair. A service left down
+  for the length of a freeze is worse than the change a freeze guards against.
+- **Letting a destroy through a freeze silently** (NIM-1085). It is the most destructive operator
+  act on an incarnation, and it is exactly what a freeze must not let happen by accident.
