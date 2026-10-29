@@ -179,6 +179,35 @@ type RenderInput struct {
 	// `incarnation.state.x` = no-such-key, backward-compat).
 	State map[string]any
 
+	// Maintenance — the incarnation's maintenance window for this pass ([ADR-0093] §8,
+	// [MaintenanceAt]): what in_maintenance_window() and
+	// `incarnation.maintenance_window.*` read. A linear run asks before every pass, so a
+	// freeze added mid-run reaches the next step; a staged run asks once. nil — the pass has no window: the
+	// windows could not be read, or the caller has none to give. CEL then has neither
+	// the function's answer nor the field, so a cell reading them fails and a pass
+	// reading neither renders as before; "no windows" is a value, open, not nil.
+	Maintenance *MaintenanceWindow
+
+	// MaintenanceByStep — the window each step that already ran was rendered with, by
+	// step number. A pass re-renders the steps before it, and they read their own
+	// answer here, not the pass's: a window that closed since must not re-decide an
+	// include, an applier's `when:` or a loop of a step that ran, which would renumber
+	// the plan under the registers already collected by index. A step missing here
+	// reads Maintenance. nil outside a staged or linear run.
+	MaintenanceByStep map[int]*MaintenanceWindow
+
+	// passMaintenance — Maintenance as the pass was given it, before a task or a block
+	// child of an earlier step took its own ([RenderInput.maintenanceFor]).
+	passMaintenance *MaintenanceWindow
+
+	// SoulEvaluatesWhen — a host task's `when:` travels to the Soul and is evaluated
+	// there: staged dispatch (ADR-056) and the claim of a staged run. The Keeper's
+	// static `when:` is then only a shortcut for a false one, and a `when:` calling
+	// in_maintenance_window() is refused at render, as the Soul would refuse it.
+	// Unset under linear dispatch, where the Keeper decides it, and in L0, which
+	// renders as the default model does.
+	SoulEvaluatesWhen bool
+
 	// Ctx — request-scoped run context, threaded into the CEL vault() function
 	// ([ADR-017]) for ReadKV cancellation/timeout. Set by [Pipeline.Render] from
 	// its ctx argument (run.go sets it on RenderInput); inherited by the child

@@ -121,6 +121,9 @@ func (e *Engine) EvalExpression(expr string, vars Vars) (ref.Val, error) {
 		}
 		act[vaultResolverVar] = &vaultResolver{ctx: ctx, kv: e.kv}
 	}
+	if e.maintenance {
+		act[maintenanceOpenVar] = maintenanceOpenValue(vars.InMaintenanceWindow)
+	}
 	if prg.comparesVars {
 		if root, ok := act[varsRoot].(*lazyVars); ok {
 			if _, err := root.materialize(); err != nil {

@@ -274,6 +274,8 @@ func loopInvariantVars(in RenderInput, loopVars map[string]any, axis *cel.VarVie
 		View:           axis,
 		Loop:           loopVars,
 		AllowHosts:     !in.destinyIsolated,
+
+		InMaintenanceWindow: in.inMaintenanceWindow(),
 		// compute is not in the loop axis (NIM-619): declared, so a reference names
 		// the namespace and this context instead of a key that isn't the problem.
 		ComputeScope: cel.ComputeOutOfScopeLoopAxis,

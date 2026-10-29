@@ -89,6 +89,23 @@ type Fixtures struct {
 	// to ask). Set it only when the directory is not the registered name; the fence
 	// is never disabled by leaving it out.
 	Service string `yaml:"service,omitempty"`
+
+	// MaintenanceWindow is the incarnation's maintenance window the run renders with
+	// ([ADR-0093] §8): what in_maintenance_window() and
+	// `incarnation.maintenance_window.*` read. A state, not windows: a case decides
+	// open or closed and does not depend on how a window is rendered as text. Absent —
+	// no windows: open, `text` "", `next_start` the L0 instant ([trialInstant]).
+	//
+	// [ADR-0093]: docs/adr/0093-maintenance-window.md
+	MaintenanceWindow *MaintenanceWindowFixture `yaml:"maintenance_window,omitempty"`
+}
+
+// MaintenanceWindowFixture is `fixtures.maintenance_window`. Open is required; NextStart
+// is RFC3339 and defaults to the L0 instant, which an open window must start at.
+type MaintenanceWindowFixture struct {
+	Open      *bool  `yaml:"open"`
+	Text      string `yaml:"text,omitempty"`
+	NextStart string `yaml:"next_start,omitempty"`
 }
 
 // HostFixture is one entry in the multi-host roster of L0 (`fixtures.hosts[]`).

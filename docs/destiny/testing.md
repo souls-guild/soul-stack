@@ -123,7 +123,7 @@ In `case.yml`, **two forms** coexist, corresponding to different test levels ([A
 
 | Form | Level | Composition | Status |
 |---|---|---|---|
-| `fixtures:` (input/vars/soulprint/vault/state + `default_destiny_source` for apply:destiny + `service` — see below) / `mocks:` / `assert.{rendered_tasks,state_after,state_absent}` | **L0** (render-only, hermetic, single-host sugar) | fixtures for the render pipeline + expected task plan / final `incarnation.state` (fields present and fields gone) | **MVP, executing** `soul-trial run` |
+| `fixtures:` (input/vars/soulprint/vault/state/maintenance_window + `default_destiny_source` for apply:destiny + `service` — see below) / `mocks:` / `assert.{rendered_tasks,state_after,state_absent}` | **L0** (render-only, hermetic, single-host sugar) | fixtures for the render pipeline + expected task plan / final `incarnation.state` (fields present and fields gone) | **MVP, executing** `soul-trial run` |
 | `fixtures.hosts: [...]` (roster of N hosts) instead of `fixtures.soulprint` + the same `assert.*` | **L0** (render-only, hermetic, multi-host roster) | list of run hosts → `soulprint.hosts`-projection / `.where(...)` / `size()` / nodes-determinism / a `core.state.<verb>` capture on multi-host | **closed** (amendment 2026-06-22, ADR-023), in progress `soul-trial run` |
 | `stand:` / `verify:` / `expect:` (+ `input:` without `fixtures:`) | **L2** (docker single-host, real modules; opt. `stand.init: systemd` - stand with real systemd as PID 1) | ephemeral stand + checks via `core.exec.run` | **implemented test-only** (build-tag `integration`); prod-`soul-trial run` it **skips** (`Skipped`) to a separate task prod-CLI-enable |
 | `assert.dispatch` + committed cross-host `incarnation.state` + multi-host `stand:` | **L3** (multi-host dispatch/orchestration) | who is the real master, cross-host committed state, stand topology | **postponed** (Phase 3 ADR-027 + multi-host `stand:`, open Q #3) |
@@ -186,6 +186,22 @@ L0 renders the plan once and without steps, so a linear run's per-step stamps �
 L0 renders in **strict vars mode** (the same point). The Keeper evaluates a var only when something reads it; strict mode checks every var of every task view the render builds — each host task × targeted host × loop iteration, each keeper task, each `assert:` on the host it is decided on, each applier × targeted host, each destiny task × targeted host × loop iteration — so a broken var nothing reads fails the case, and the error names it. A keeper task's view holds the scenario's `vars:` evaluated in the keeper task's own context, where `incarnation.host_count` is 0, so a scenario var such as `${ 100 / incarnation.host_count }` fails the case through any keeper task, though the host tasks read it fine: a var must evaluate in every view it is visible in. A view the render never builds is not checked: the tasks of a dropped include group, a loop with zero items, a task a static `when:` skips. Nor are the host-free views — the loop axis, an include `when:`, a `template:` path — which evaluate only what they read, as in a run, nor the stand-in host a task whose `where:` targets no host, an `assert:` on an empty roster or an applier with no targets renders on: it is no host. Strict mode records **no coverage of its own**: what it evaluates reaches neither the coverage sink nor the view's memo, so a case reports the coverage it would report without it.
 
 A var's definition records coverage only when the render evaluates it on request, and only in the rungs evaluated on the trial's own engine: **a task's own `vars:`** (a `block:`'s merged in) and **a destiny's `vars.yml`**. Definitions in the service rung (`fixtures.vars`, standing for `vars/`) and in the scenario's top-level `vars:` record none, because their engines (`cel.NewServiceVars`, `cel.NewScenarioVars`) carry no coverage sink.
+
+#### L0 maintenance window — `fixtures.maintenance_window`
+
+What `in_maintenance_window()` and `incarnation.maintenance_window.*` read in the case ([templating.md §2.3](../templating.md#23-registered-cel-functions-starting-minimum), [ADR-0093](../adr/0093-maintenance-window.md) §8). A **state**, not windows: the case says whether the window is open, so it does not depend on how a window is rendered as text.
+
+```yaml
+fixtures:
+  maintenance_window:
+    open: false                                # required
+    text: "mon 02:00 for 3h (Europe/Moscow)"   # optional, default ""
+    next_start: "2000-01-02T23:00:00Z"         # RFC3339; default: the L0 instant
+```
+
+Every L0 render describes one fixed instant, **`2000-01-01T00:00:00Z`**, so a case reading `next_start` renders the same text on every run. An open window starts at that instant — `next_start` is left out, and a different one is refused; a closed one starts later, and `next_start` is required to be after it. With no `maintenance_window:` the incarnation has no windows: `in_maintenance_window()` is `true`, `text` is `""`, `next_start` is the L0 instant.
+
+L0 renders as the default linear dispatch does: a step's `when: in_maintenance_window()` is decided at render, so the gated step is in the plan (open) or absent from it (closed — `task_absent` sees it). Calling the function in `changed_when:`/`failed_when:`/`retry.until:` or in a destiny's predicate fails the render — `expect_render_error` catches it.
 
 #### L0 multi-host roster — `fixtures.hosts`
 

@@ -142,6 +142,9 @@ func (c *Case) validate() error {
 		}
 		seenSID[h.SID] = struct{}{}
 	}
+	if _, err := c.Fixtures.maintenanceWindow(); err != nil {
+		return err
+	}
 	// expect_render_error (expect render-abort) ⊕ assert.* (expect plan) —
 	// opposite outcomes, meaningless in one case (ADR-023 amendment).
 	// Presence forms (task_present/task_absent) also expect successful plan —

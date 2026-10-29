@@ -217,6 +217,7 @@ func keeperVars(in RenderInput) cel.Vars {
 	if in.State != nil {
 		inc["state"] = in.State
 	}
+	inc = in.withMaintenanceWindow(inc)
 	reg := in.Register
 	if len(in.KeeperRegister) > 0 {
 		reg = in.KeeperRegister
@@ -229,6 +230,8 @@ func keeperVars(in RenderInput) cel.Vars {
 		Incarnation:        inc,
 		Compute:            in.Compute,
 		Ctx:                in.Ctx,
+
+		InMaintenanceWindow: in.inMaintenanceWindow(),
 		// compute: is in scope here (NIM-619 variant B). It fits this context by
 		// construction: [Pipeline.resolveCompute] runs ONCE per run before the task
 		// loop, in a soulprint-free run-level context — the same one a keeper task
@@ -266,13 +269,14 @@ func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string
 	vars := cel.Vars{
 		Input:    in.Input,
 		Register: in.Register,
-		Incarnation: map[string]any{
+		Incarnation: in.withMaintenanceWindow(map[string]any{
 			"id":              in.Incarnation.ID,
 			"service":         in.Incarnation.Service,
 			"service_version": in.Incarnation.ServiceVersion,
-		},
-		Ctx:          in.Ctx,
-		ComputeScope: cel.ComputeOutOfScopeCovenList,
+		}),
+		Ctx:                 in.Ctx,
+		InMaintenanceWindow: in.inMaintenanceWindow(),
+		ComputeScope:        cel.ComputeOutOfScopeCovenList,
 		// `on:` chooses the roster, so it cannot read it (NIM-908) — neither through
 		// `soulprint.self` nor through a destiny input rendered per host.
 		HostScope:         cel.HostFreeCovenList,

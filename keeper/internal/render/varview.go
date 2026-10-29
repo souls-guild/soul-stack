@@ -217,14 +217,17 @@ func (p *Pipeline) scenarioRung(in RenderInput, reader cel.Vars) ([]cel.VarLayer
 // declares no `soulprint` and no `register`, so it needs neither.
 func scenarioRungBase(reader cel.Vars) cel.Vars {
 	return cel.Vars{
-		Input:             reader.Input,
-		Incarnation:       reader.Incarnation,
-		Compute:           reader.Compute,
-		Ctx:               reader.Ctx,
-		ComputeScope:      reader.ComputeScope,
-		HostScope:         reader.HostScope,
-		HostVariantInputs: reader.HostVariantInputs,
-		HostVariantVars:   reader.HostVariantVars,
+		Input:       reader.Input,
+		Incarnation: reader.Incarnation,
+		Compute:     reader.Compute,
+		Ctx:         reader.Ctx,
+		// A scenario rung is stacked per task view of one pass, so the reader's window
+		// is the pass's; the service rung, kept across passes, has no function at all.
+		InMaintenanceWindow: reader.InMaintenanceWindow,
+		ComputeScope:        reader.ComputeScope,
+		HostScope:           reader.HostScope,
+		HostVariantInputs:   reader.HostVariantInputs,
+		HostVariantVars:     reader.HostVariantVars,
 	}
 }
 

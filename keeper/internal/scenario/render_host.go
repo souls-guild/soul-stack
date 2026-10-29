@@ -173,7 +173,14 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 		// Without it the Acolyte would render `incarnation.state.*` as
 		// no-such-key and diverge from the original.
 		State: inc.State,
-		Ctx:   ctx,
+		// The window the run's pass rendered with, not one read now: a window that
+		// closed between the run's render and this claim would otherwise change what
+		// the claim sends.
+		Maintenance:       maintenanceFromRecipe(recipe.Maintenance),
+		MaintenanceByStep: maintenanceByStepFromRecipe(recipe.MaintenanceByStep),
+		// A row without a step is a staged run's: the Soul evaluates its `when:`.
+		SoulEvaluatesWhen: recipe.Step == nil,
+		Ctx:               ctx,
 		Templates: render.NewSnapshotTemplateReader(
 			func(rel string) ([]byte, error) { return artifact.ReadSnapshotFile(art.LocalDir, rel) },
 			scenarioTemplatePrefix(recipe.ScenarioName),

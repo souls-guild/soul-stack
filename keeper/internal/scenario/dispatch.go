@@ -278,7 +278,9 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 //
 // No render for SendApply happens here — the Acolyte that claims the assignment
 // renders the plan itself.
-func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Logger, hosts []*topology.HostFacts) error {
+//
+// mw is the window the run's render had: each claim renders with it.
+func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Logger, hosts []*topology.HostFacts, mw *render.MaintenanceWindow) error {
 	if len(hosts) == 0 {
 		// Host resolution upstream (run.go step 3) already rejects an empty
 		// roster (no_hosts). Empty shouldn't reach here; defensive check.
@@ -299,6 +301,7 @@ func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Lo
 	}
 
 	recipe := runRecipe(spec)
+	recipe.Maintenance = recipeMaintenance(mw)
 
 	dispatched := 0
 	for _, h := range hosts {
@@ -352,6 +355,15 @@ func stepRecipe(spec RunSpec, commit string, in render.RenderInput, names map[in
 		roster = append(roster, h.SID)
 	}
 	rec.Step = &applyrun.RecipeStep{Roster: roster, RegisterNames: names}
+	rec.Maintenance = recipeMaintenance(in.Maintenance)
+	for step, mw := range in.MaintenanceByStep {
+		if step < in.ActivePassage {
+			if rec.MaintenanceByStep == nil {
+				rec.MaintenanceByStep = make(map[int]*applyrun.RecipeMaintenance)
+			}
+			rec.MaintenanceByStep[step] = recipeMaintenance(mw)
+		}
+	}
 	for _, h := range in.Dropped {
 		rec.Step.Dropped = append(rec.Step.Dropped, h.SID)
 	}

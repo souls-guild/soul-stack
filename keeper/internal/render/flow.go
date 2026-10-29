@@ -78,7 +78,11 @@ func (p *Pipeline) settleFlow(in RenderInput, tasks []*RenderedTask, plans []Dis
 	if !in.keeperFlow() {
 		return nil
 	}
-	engine, err := flowControlEngine()
+	soul, err := flowControlEngine()
+	if err != nil {
+		return fmt.Errorf("render: building the flow-control engine: %w", err)
+	}
+	keeper, err := keeperWhenEngine()
 	if err != nil {
 		return fmt.Errorf("render: building the flow-control engine: %w", err)
 	}
@@ -107,7 +111,9 @@ func (p *Pipeline) settleFlow(in RenderInput, tasks []*RenderedTask, plans []Dis
 				t.FlowBySID[sid] = HostFlow{Failure: t.flowFailure}
 			case contexts != nil:
 				host := &topology.HostFacts{SID: sid}
-				t.FlowBySID[sid] = settleHostFlow(engine, t, flowControlVarsFromStruct(contexts[sid], hostRegister(in, host)))
+				full := flowControlVarsFromStruct(contexts[sid], hostRegister(in, host))
+				full.InMaintenanceWindow = in.inMaintenanceWindow()
+				t.FlowBySID[sid] = settleHostFlow(keeper, soul, t, full)
 			}
 		}
 	}
@@ -155,19 +161,23 @@ func settlesStaticWhenError(in RenderInput, task config.Task, err error) bool {
 // it is rendered with the group's registers open and the Soul decides it — and a
 // post-module predicate that cannot be rendered then fails the task although that
 // `when:` might have skipped it.
-func settleHostFlow(engine *cel.Engine, t *RenderedTask, full cel.Vars) HostFlow {
+//
+// keeper decides a `when:` here and soul renders what a Soul evaluates
+// ([keeperWhenEngine]): in_maintenance_window() is answered in the first and refused by
+// name in the second.
+func settleHostFlow(keeper, soul *cel.Engine, t *RenderedTask, full cel.Vars) HostFlow {
 	var hf HostFlow
 	if t.When != "" {
 		if readsAnyRegister(t.When, t.groupRegisters) {
-			rp, err := engine.RenderPredicate(t.When, withoutRegisters(full, t.groupRegisters), t.groupRegisters)
+			rp, err := soul.RenderPredicate(t.When, withoutRegisters(full, t.groupRegisters), t.groupRegisters)
 			if err != nil {
 				return HostFlow{Failure: predicateFailure(predicateWhen, t.When, err)}
 			}
 			hf.When, hf.Rendered = rp.Text, rp.Resolved
 		} else {
-			pass, err := engine.EvalPredicate(t.When, full)
+			pass, err := keeper.EvalPredicate(t.When, full)
 			if err != nil {
-				return HostFlow{Failure: whenFailure(engine, t.When, t.flowSeal, err)}
+				return HostFlow{Failure: whenFailure(keeper, t.When, t.flowSeal, err)}
 			}
 			if !pass {
 				return HostFlow{Skip: true}
@@ -187,7 +197,7 @@ func settleHostFlow(engine *cel.Engine, t *RenderedTask, full cel.Vars) HostFlow
 		if pr.expr == "" {
 			continue
 		}
-		rp, err := engine.RenderPredicate(pr.expr, closed, open)
+		rp, err := soul.RenderPredicate(pr.expr, closed, open)
 		if err != nil {
 			return HostFlow{Failure: predicateFailure(pr.kind, pr.expr, err)}
 		}

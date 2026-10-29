@@ -31,6 +31,8 @@ var stringType ref.Type = types.StringType
 //                          only when the Engine has a KVReader).
 //   - merge(m, m...)     — [merge.go], SHALLOW last-wins merge of maps
 //                          ([ADR-010 Amendment 2026-06-22]).
+//   - in_maintenance_window() — [maintenance.go], the window state the caller
+//                          sampled for the pass ([ADR-0093] §8).
 //
 // Extending the custom-function list goes through an ADR, not silently
 // ([templating.md §2.3]).
@@ -87,7 +89,13 @@ const generateSecretFeature = "generate_secret(...) (only the scenario/destiny r
 func (e *Engine) guardUnsupported(expr string) error {
 	called, ok := e.calledFunctions(expr)
 	if !ok {
-		return guardUnsupportedText(expr, e.kv != nil, e.genSecret)
+		if err := guardUnsupportedText(expr, e.kv != nil, e.genSecret); err != nil {
+			return err
+		}
+		if !e.maintenance && maintenanceGuard.MatchString(expr) {
+			return &ErrUnsupported{Expr: expr, Feature: e.maintenanceRefusal}
+		}
+		return nil
 	}
 	switch {
 	case called["now"]:
@@ -96,9 +104,15 @@ func (e *Engine) guardUnsupported(expr string) error {
 		return &ErrUnsupported{Expr: expr, Feature: "vault(...)"}
 	case !e.genSecret && called["generate_secret"]:
 		return &ErrUnsupported{Expr: expr, Feature: generateSecretFeature}
+	case !e.maintenance && called[MaintenanceWindowFunc]:
+		return &ErrUnsupported{Expr: expr, Feature: e.maintenanceRefusal}
 	}
 	return nil
 }
+
+// maintenanceGuard is [guardUnsupportedText]'s pattern for in_maintenance_window(),
+// applied only where the Engine lacks it.
+var maintenanceGuard = regexp.MustCompile(`\b` + MaintenanceWindowFunc + `\s*\(`)
 
 // calledFunctions returns the name of every call in expr and in its `.where`
 // predicates, a leading dot dropped and member calls included (`x.now()` counts). ok is

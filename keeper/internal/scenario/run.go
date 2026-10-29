@@ -659,8 +659,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		renderIn.HeldTargets = render.NewHeldTargets()
 		renderIn.SoulNeeds = render.NewSoulNeeds()
 	}
+	renderIn.SoulEvaluatesWhen = steps == nil
 
 	atStep = 0
+	renderIn.Maintenance = maintenanceAt(ctx, r.deps.DB, spec.IncarnationName, log)
+	renderIn.MaintenanceByStep = map[int]*render.MaintenanceWindow{0: renderIn.Maintenance}
 	tasks, plans, err = r.deps.Render.Render(ctx, renderIn)
 	if err != nil {
 		// A destiny resolved mid-render declared a window this keeper is outside
@@ -773,7 +776,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			abort("dispatch_failed", err)
 			return
 		}
-		if err := r.dispatchPlanned(ctx, spec, log, hosts); err != nil {
+		if err := r.dispatchPlanned(ctx, spec, log, hosts, renderIn.Maintenance); err != nil {
 			abort("dispatch_failed", err)
 			return
 		}
@@ -812,6 +815,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		}
 		for p := 0; p < passage.Count; p++ {
 			atStep = p
+			// A step a failure skips is never rendered as the active one, and keeps the
+			// window it last rendered with, so a later rescue pass does not re-decide it
+			// (render.RenderInput.MaintenanceByStep). A step that renders replaces it below.
+			if p > 0 {
+				renderIn.MaintenanceByStep[p] = renderIn.Maintenance
+			}
 			// A linear run's failure state as this step sees it. Its render reads the
 			// hosts' standing from it; rescue routing and the requisite gate below read
 			// it in place of the audit log's FAILED facts. SelectFailedTaskKeys is still
@@ -979,6 +988,13 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 					renderIn.Hosts, renderIn.HeldHosts, renderIn.Dropped = view.split()
 				}
 				renderIn.Rescue = rescue
+				// Staged passages do not follow the plan's order, so a later pass's answer
+				// could re-decide a group that sits before a passage that already ran: the
+				// deprecated model keeps the run's first answer.
+				if spec.executionModel == ExecutionLinear {
+					renderIn.Maintenance = maintenanceAt(ctx, r.deps.DB, spec.IncarnationName, log)
+				}
+				renderIn.MaintenanceByStep[p] = renderIn.Maintenance
 				pt, pp, rerr := r.deps.Render.Render(ctx, renderIn)
 				if rerr != nil {
 					abort("render_failed", rerr)

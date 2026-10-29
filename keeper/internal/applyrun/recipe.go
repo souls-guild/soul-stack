@@ -3,6 +3,7 @@ package applyrun
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
@@ -51,6 +52,21 @@ type Recipe struct {
 	// that step (the row's passage) rather than the whole scenario. nil — the
 	// row of a staged run or of the Oracle path, rendered in one pass as before.
 	Step *RecipeStep `json:"step,omitempty"`
+	// Maintenance — the maintenance window the run's pass rendered with (ADR-0093
+	// §8): the claim renders with this answer rather than reading the windows and
+	// the clock again, which could tell it otherwise. nil — the pass had no window.
+	Maintenance *RecipeMaintenance `json:"maintenance,omitempty"`
+	// MaintenanceByStep — the window each earlier step was rendered with, which the
+	// claim's re-render of those steps reads (render.RenderInput.MaintenanceByStep).
+	// A null entry is a step whose pass had no window.
+	MaintenanceByStep map[int]*RecipeMaintenance `json:"maintenance_by_step,omitempty"`
+}
+
+// RecipeMaintenance is a row's copy of the run's render.MaintenanceWindow.
+type RecipeMaintenance struct {
+	Open      bool      `json:"open"`
+	Text      string    `json:"text,omitempty"`
+	NextStart time.Time `json:"next_start"`
 }
 
 // RecipeStep is what the run goroutine had decided when it wrote a step's rows,

@@ -640,7 +640,7 @@ func TestDispatchPlanned_RefusesAPushHost(t *testing.T) {
 	err := r.dispatchPlanned(context.Background(), RunSpec{ApplyID: "ap-5"}, discardLog(), []*topology.HostFacts{
 		hostFacts("agent.example.com", config.TransportAgent),
 		hostFacts("push.example.com", config.TransportSSH),
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("the work-queue path accepted a transport=ssh host")
 	}

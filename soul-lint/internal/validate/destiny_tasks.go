@@ -94,8 +94,8 @@ func destinyTasksDiagnostics(manifestPath string, modules config.ModuleManifestR
 	// three live in [definition.LoadDestinyTasks] since NIM-790. They used to live
 	// here, in a second implementation beside [stageDiagnostics]'s: two tools, two
 	// copies, and a third (`soul-trial`) that had neither.
-	_, diags := definition.LoadDestinyTasks(tasksPath, data, destinyIncludeResolver(root, dir), modules)
-	return diags
+	tasks, diags := definition.LoadDestinyTasks(tasksPath, data, destinyIncludeResolver(root, dir), modules)
+	return append(diags, destinyMaintenanceDiagnostics(tasksPath, tasks)...)
 }
 
 // tasksUncheckedDiag renders the "the task file was not read" finding, at the level

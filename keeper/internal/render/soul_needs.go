@@ -198,18 +198,21 @@ func (s *needSurvey) block(blockTask config.Task, node config.StepNode, targeted
 // dropped, or its static `when:` is false or cannot be evaluated (the task then
 // fails at its step and is sent nothing). A block's `when:` reaches its children. A
 // predicate reading state an earlier capture changes is decided against that state at
-// the step, so here it drops nothing.
+// the step, and one reading the maintenance window against the step's window, so
+// here neither drops anything.
 //
 // The flow context these are evaluated in carries no compute (a read of it fails
 // every time), and an include's `when:` none of the task's `vars:`: it reads the
 // service and scenario rungs, the view of a task without `vars:`.
 func (s *needSurvey) off(task config.Task, step int) bool {
-	if task.IncludeGroupID != 0 && !s.movesWithState(task.IncludeWhen, step, nil, s.movingVars(config.Task{}, step)) {
+	if task.IncludeGroupID != 0 && !s.p.predicateReadsMaintenanceWindow(task.IncludeWhen) &&
+		!s.movesWithState(task.IncludeWhen, step, nil, s.movingVars(config.Task{}, step)) {
 		if keep, err := s.p.keepIncludeGroup(s.in, task, s.includes); err != nil || !keep {
 			return true
 		}
 	}
-	if task.Block != nil || !isStaticWhen(task.When) || s.movesWithState(task.When, step, nil, s.movingVars(task, step)) {
+	if task.Block != nil || !isStaticWhen(task.When) || s.p.predicateReadsMaintenanceWindow(task.When) ||
+		s.movesWithState(task.When, step, nil, s.movingVars(task, step)) {
 		return false
 	}
 	hosts := s.in.Hosts
@@ -232,11 +235,14 @@ func (s *needSurvey) off(task config.Task, step int) bool {
 // amendment 2026-10-15, point 6), so a name of the view reaches one only through the
 // task rung.
 func (s *needSurvey) targetingKnown(task config.Task, step int) bool {
-	if readsRegister(task.On) {
+	if readsRegister(task.On) || s.onReadsMaintenanceWindow(task.On) {
 		return false
 	}
 	if task.Where == "" {
 		return true
+	}
+	if s.p.predicateReadsMaintenanceWindow(task.Where) {
+		return false
 	}
 	reads := s.p.cel.HostPredicateReads(task.Where, targetingRoots)
 	if r := reads["register"]; r.Whole || len(r.Fields) > 0 || len(config.ExtractRegisterRefs(task.Where)) > 0 {
@@ -440,4 +446,19 @@ func (s *needSurvey) applier(task config.Task, step int, targeted []*topology.Ho
 	if task.Register != "" {
 		s.out = append(s.out, SoulNeed{Step: step, Task: task.Name, Module: applierRegisterModule, TargetSIDs: sids})
 	}
+}
+
+// onReadsMaintenanceWindow reports whether an `on:` element reads the window, which
+// the step resolves against its own.
+func (s *needSurvey) onReadsMaintenanceWindow(on any) bool {
+	elems, ok := on.([]any)
+	if !ok {
+		return false
+	}
+	for _, el := range elems {
+		if str, ok := el.(string); ok && s.p.readsMaintenanceWindow(str) {
+			return true
+		}
+	}
+	return false
 }

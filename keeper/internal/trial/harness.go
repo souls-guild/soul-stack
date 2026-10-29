@@ -281,12 +281,18 @@ func renderCase(ctx context.Context, c *Case, caseFile string, opts Options) (re
 		return rc, fmt.Errorf("trial: fixtures.vars: %w", err)
 	}
 
+	maintenanceWindow, err := c.Fixtures.maintenanceWindow()
+	if err != nil {
+		return rc, fmt.Errorf("trial: %w", err)
+	}
+
 	in := render.RenderInput{
 		Scenario:    scn,
 		ServiceVars: serviceVars,
 		Input:       effectiveInput,
 		Register:    orEmptyMap(c.Mocks.Register),
 		Incarnation: render.IncarnationMeta{ID: incID, Service: svcName}, // NIM-58
+		Maintenance: maintenanceWindow,
 		Hosts:       fixtureHosts(c.Fixtures),
 		Destiny:     destiny,
 		Templates:   templates,
@@ -298,6 +304,8 @@ func renderCase(ctx context.Context, c *Case, caseFile string, opts Options) (re
 		// Every task view the render builds is materialized whole, so a broken var
 		// nothing reads fails the case (ADR-0082 amendment 2026-10-15, point 12b).
 		StrictVars: !opts.lenientVars,
+
+		SoulEvaluatesWhen: opts.soulEvaluatesWhen,
 	}
 
 	// Mocks.Register — a single L0 payload for the probe (probe-per-host = dispatch

@@ -321,6 +321,7 @@ func (p *Pipeline) walkBlockChildren(
 			step = &steps[i]
 			child = linearOverlayChild(blockTask, blockTask.Block.Block[i], child)
 			in = atChildStep(in, step.Step)
+			in.Maintenance = in.maintenanceFor(step.Step)
 		}
 		childStart := len(tasks)
 

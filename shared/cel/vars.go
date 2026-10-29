@@ -164,6 +164,12 @@ type Vars struct {
 	// another with nothing in the file to explain it.
 	HostVariantInputs []string
 
+	// InMaintenanceWindow — what in_maintenance_window() answers here ([ADR-0093] §8):
+	// the incarnation's window at the instant the render pass describes, sampled once
+	// per pass by the caller. nil — the context carries no answer, and a call fails at
+	// evaluation instead of reading as "no windows".
+	InMaintenanceWindow *bool
+
 	// HostVariantVars — the `vars.*` names that resolve PER HOST in this run
 	// (NIM-908): a destiny's own `vars.yml` resolves per host, so a local reading
 	// `soulprint.self` or a per-host `input.<name>` is per-host itself. Same

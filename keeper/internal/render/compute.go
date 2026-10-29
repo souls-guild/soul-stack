@@ -43,12 +43,16 @@ func (p *Pipeline) resolveCompute(in RenderInput) (map[string]any, error) {
 	}
 
 	acc := make(map[string]any, len(block))
+	// No window here (ADR-0093 §8): a pass resolves the block once for every step it
+	// renders, the steps that already ran included, and those keep their own window.
+	runLevel := in
+	runLevel.Maintenance = nil
 	// Run-level context, no soulprint. Compute accumulates in acc and is
 	// re-attached each iteration → compute[i] sees compute[j<i].
 	base := cel.Vars{
 		Input:       in.Input,
 		Register:    in.Register,
-		Incarnation: incarnationVars(in, len(in.Hosts)),
+		Incarnation: incarnationVars(runLevel, len(in.Hosts)),
 		// The service view alone: the scenario `vars:` rung reads `compute.*`, so
 		// compute reading it back would be a cycle between namespaces (ADR-0082
 		// amendment 2026-10-15, point 7).
@@ -75,6 +79,9 @@ func (p *Pipeline) resolveCompute(in RenderInput) (map[string]any, error) {
 			continue
 		}
 		base.Compute = acc
+		if p.readsMaintenanceWindow(s) {
+			return nil, fmt.Errorf("render: compute.%s: %w", cv.Name, &cel.ErrUnsupported{Expr: s, Feature: computeMaintenanceFeature})
+		}
 		val, err := p.cel.EvalInterpolation(s, base)
 		if err != nil {
 			return nil, fmt.Errorf("render: compute.%s: %w", cv.Name, err)

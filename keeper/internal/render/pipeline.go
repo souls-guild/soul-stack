@@ -183,6 +183,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	in.sealedRegisters = mergeSealedRegisters(sealedReg,
 		secretOutputRegisters(in.Scenario.Tasks, in.Modules))
 
+	if err := p.refuseLateMaintenanceReads(in.Scenario.Tasks, in.SoulEvaluatesWhen); err != nil {
+		return nil, nil, err
+	}
+
 	// The `compute:` taint, derived from the RAW block before it resolves: a
 	// compute entry that reads a secret makes every cell reading IT sealed
 	// (NIM-811). Run-level, like the block, and after sealedRegisters because a
@@ -217,6 +221,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	// whole pass, at both nesting levels.
 	includeGroupKeep := includeGroupCache{}
 
+	// Each task renders with its own step's window ([RenderInput.maintenanceFor]);
+	// what runs after the walk — settleFlow, the active step's — with the pass's.
+	in.passMaintenance = in.Maintenance
+
 	// passageStart marks where the current top-level task's RenderedTask
 	// output begins, so its whole output (including apply:destiny/loop
 	// descendants) can be stamped with the originating task's passage index
@@ -233,6 +241,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// each their own), at this task's plan position.
 		in := in.ForStep(passage)
 		in.path = config.StepPath("", i)
+		in.Maintenance = in.maintenanceFor(passage)
 
 		// Conditional-include group-drop (ADR-009 amendment) — before
 		// emitStaticWhenSkip. A false include-when is a real drop: continue
@@ -516,6 +525,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	}
 
 	inTask = false
+	in.Maintenance = in.passMaintenance
 
 	// Resolve `onchanges:`/`onfail:` register names to task indices (Variant
 	// A) as a final pass once the whole plan is built: with apply:destiny/loop
@@ -933,7 +943,7 @@ func (p *Pipeline) staticWhenSkips(
 		return nil, err
 	}
 
-	pass, err := evalStaticWhen(task.When, firstFC)
+	pass, err := evalStaticWhen(in, task.When, firstFC)
 	if err != nil {
 		return nil, &staticWhenEvalError{task: task.Name, when: task.When, err: err}
 	}
@@ -1062,7 +1072,7 @@ func (p *Pipeline) evalIncludeWhen(in RenderInput, when string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("render: include-when %q: flow_context: %w", when, err)
 	}
-	keep, err := evalStaticWhen(when, fc)
+	keep, err := evalStaticWhen(in, when, fc)
 	if err != nil {
 		return false, fmt.Errorf("render: include-when %q: %w", when, err)
 	}
@@ -1361,7 +1371,7 @@ func (p *Pipeline) evalAssertTask(in RenderInput, task config.Task) error {
 		if err != nil {
 			return fmt.Errorf("render: assert %q: when flow_context: %w", task.Name, err)
 		}
-		pass, err := evalStaticWhen(task.When, fc)
+		pass, err := evalStaticWhen(in, task.When, fc)
 		if err != nil {
 			return fmt.Errorf("render: assert %q: static-when %q: %w", task.Name, task.When, err)
 		}
@@ -1534,6 +1544,25 @@ func flowControlEngine() (*cel.Engine, error) {
 	return flowControlEngineInst, flowControlEngineErr
 }
 
+// keeperWhenEngine is [flowControlEngine] plus in_maintenance_window() (ADR-0093 §8),
+// for every `when:` the Keeper evaluates. Where a Soul evaluates the same `when:` after
+// it — staged dispatch, a destiny — the call is refused by [Pipeline.refuseLateMaintenanceReads]
+// on the text that travels, which also catches the one a false static `when:` leaves on
+// its placeholder; the predicates the Keeper renders for the Soul stay in the Soul's
+// own engine.
+var (
+	keeperWhenEngineOnce sync.Once
+	keeperWhenEngineInst *cel.Engine
+	keeperWhenEngineErr  error
+)
+
+func keeperWhenEngine() (*cel.Engine, error) {
+	keeperWhenEngineOnce.Do(func() {
+		keeperWhenEngineInst, keeperWhenEngineErr = cel.NewFlowControl(cel.WithMaintenanceWindow())
+	})
+	return keeperWhenEngineInst, keeperWhenEngineErr
+}
+
 // isStaticWhen reports whether a when: predicate can be evaluated
 // Keeper-side before rendering params (placeholder-skip, ADR-012(d), Variant
 // b). Static means a non-empty when that depends on neither register.*
@@ -1574,8 +1603,8 @@ func isStaticWhen(when string) bool {
 // caller: Keeper fails with render_failed on a broken static predicate the
 // same way Soul would fail in evalWhen — no behavior divergence, the
 // author's error just surfaces earlier.
-func evalStaticWhen(when string, fc *structpb.Struct) (bool, error) {
-	engine, err := flowControlEngine()
+func evalStaticWhen(in RenderInput, when string, fc *structpb.Struct) (bool, error) {
+	engine, err := keeperWhenEngine()
 	if err != nil {
 		return false, fmt.Errorf("static-when: building the flow-control engine: %w", err)
 	}
@@ -1584,7 +1613,9 @@ func evalStaticWhen(when string, fc *structpb.Struct) (bool, error) {
 	// guaranteed no register.* in when, so register's emptiness doesn't
 	// affect the outcome (mirrors Soul, where register isn't read for a
 	// register-independent when either).
-	return engine.EvalPredicate(when, flowControlVarsFromStruct(fc, nil))
+	vars := flowControlVarsFromStruct(fc, nil)
+	vars.InMaintenanceWindow = in.inMaintenanceWindow()
+	return engine.EvalPredicate(when, vars)
 }
 
 // flowControlVarsFromStruct unpacks a flow_context snapshot into cel.Vars in
@@ -2023,6 +2054,11 @@ func (p *Pipeline) StateOpEvaluators(ctx context.Context, service string) (State
 	// context exists. Saying so at compile beats the no-such-key it used to give
 	// about a name that was spelled correctly (NIM-619).
 	match := func(predicate string, elem, value any) (bool, error) {
+		// Per element at merge, after the step's render: a `${ }` cell already carried
+		// the window in; a bare call has no moment to answer for.
+		if p.cel.CallsMaintenanceWindow(predicate) {
+			return false, fmt.Errorf("core.state.add.match: %w", &cel.ErrUnsupported{Expr: predicate, Feature: cel.MaintenanceSoulSideFeature})
+		}
 		vars := cel.Vars{
 			Ctx:          ctx,
 			Loop:         map[string]any{"elem": elem, "value": value},

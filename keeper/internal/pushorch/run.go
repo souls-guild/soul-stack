@@ -326,6 +326,9 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 		// of scenario-runner: render-pipeline itself guarantees destiny isolation).
 		Incarnation: render.IncarnationMeta{ID: syntheticScenarioName},
 	}
+	// No incarnation, so no windows: open.
+	noWindows := render.MaintenanceAt(nil, time.Now())
+	renderIn.Maintenance = &noWindows
 
 	tasks, plans, rerr := r.deps.Render.Render(ctx, renderIn)
 	if rerr != nil {

@@ -38,6 +38,11 @@ type Options struct {
 	// rendered with render.RenderInput.StrictVars, and a guard shows that a failure
 	// is strict mode's by running the same case without it.
 	lenientVars bool
+
+	// soulEvaluatesWhen renders as a run whose host `when:` the Soul evaluates
+	// (render.RenderInput.SoulEvaluatesWhen): L2 sends the plan to a stand's Soul
+	// with the predicates as text, where L0 models the Keeper deciding them.
+	soulEvaluatesWhen bool
 }
 
 // notices collects the non-error diagnostics of loading a case's definition.

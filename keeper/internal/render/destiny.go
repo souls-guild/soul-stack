@@ -247,10 +247,13 @@ func (p *Pipeline) renderApplyDestiny(
 		InputByHost:       inputByHost,
 		hostVariantInputs: variantInputs,
 		Incarnation:       parentIn.Incarnation,
-		Hosts:             targeted,
-		Templates:         resolved.Templates, // .tmpl from THIS destiny's own snapshot
-		Ctx:               ctx,                // vault() in destiny params: cancel/timeout for ReadKV
-		destinyIsolated:   true,
+		// The destiny is part of the step that applies it: the step's one answer.
+		Maintenance:     parentIn.Maintenance,
+		passMaintenance: parentIn.Maintenance,
+		Hosts:           targeted,
+		Templates:       resolved.Templates, // .tmpl from THIS destiny's own snapshot
+		Ctx:             ctx,                // vault() in destiny params: cancel/timeout for ReadKV
+		destinyIsolated: true,
 		// Modules is carried over, unlike the scenario scope below: it is not
 		// scope, it is the plugin-manifest resolver that says which of a module's
 		// `output:` fields are declared secret ([ADR-0083] §8). A destiny task
@@ -301,6 +304,12 @@ func (p *Pipeline) renderApplyDestiny(
 	// two travel together into every host-free context of this pass. A context
 	// deciding a task reads its view's set instead ([Pipeline.hostVariantTaskVars]).
 	destinyIn.hostVariantVars = hostVariantDestinyVars(p.cel, p.taskVarLayers(destinyIn, config.Task{}), variantInputs)
+
+	// A destiny's tasks travel whole and the Soul evaluates their `when:` (ADR-0091,
+	// decision 6).
+	if err := p.refuseLateMaintenanceReads(resolved.Tasks, true); err != nil {
+		return nil, nil, err
+	}
 
 	tasks := make([]*RenderedTask, 0, len(resolved.Tasks))
 	plans := make([]DispatchPlan, 0, len(resolved.Tasks))

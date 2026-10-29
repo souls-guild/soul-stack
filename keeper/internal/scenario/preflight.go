@@ -210,6 +210,9 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 		// there is no state to read (NIM-124). Same shape as the service-vars fix of
 		// NIM-271 — pre-flight takes the input run() would, not a poorer one.
 		State: incarnationState(inc),
+		// Pre-flight is on the request path, so it asks the window about the
+		// request's instant; there are no windows before the row exists.
+		Maintenance: r.preflightMaintenance(ctx, inc),
 	}
 	return r.deps.Render.EvalAsserts(ctx, in)
 }

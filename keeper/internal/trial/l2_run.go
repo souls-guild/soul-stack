@@ -268,6 +268,7 @@ func RunL2Case(ctx context.Context, c *L2Case, caseFile string, opts Options) (R
 	//    (not fixtures:), so map it to hermetic Fixtures.Input; rest of L2 pilot
 	//    context is empty (one host, no service vars/vault).
 	l0 := &Case{Name: c.Name, Fixtures: Fixtures{Input: c.Input}}
+	opts.soulEvaluatesWhen = true
 	rc, err := renderCase(ctx, l0, caseFile, opts)
 	rc.carryTo(&res)
 	if err != nil {

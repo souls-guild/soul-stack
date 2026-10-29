@@ -150,6 +150,11 @@ type Engine struct {
 
 	// noCache — [WithoutCompileCache]: compile skips the cache entirely.
 	noCache bool
+
+	// maintenance — in_maintenance_window() is registered ([maintenance.go]); when it
+	// is not, maintenanceRefusal is the [ErrUnsupported] feature a call is refused with.
+	maintenance        bool
+	maintenanceRefusal string
 }
 
 // Option configures the Engine at build ([New]). Applied before the CEL env is
@@ -161,8 +166,9 @@ type Option func(*engineConfig)
 // after applying options, New builds the env and moves the fields into the
 // Engine.
 type engineConfig struct {
-	kv      KVReader
-	noCache bool
+	kv          KVReader
+	noCache     bool
+	maintenance bool
 }
 
 // WithVault enables the CEL vault() function ([templating.md §2.3], [ADR-017]),
@@ -316,6 +322,9 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 			return nil, fmt.Errorf("building scenario-vars-Engine: WithVault is incompatible with scenario-vars mode (ADR-0082: a scenario vars: definition sees run data only)")
 		}
 	}
+	if (mode.migration || mode.serviceVars) && cfg.maintenance {
+		return nil, fmt.Errorf("building Engine: WithMaintenanceWindow is incompatible with migration and service-vars mode (ADR-0093: the window is read per step)")
+	}
 
 	envOpts := make([]cel.EnvOption, 0, len(vars)+6)
 	envOpts = append(envOpts, orderedMaps, cel.StdLib())
@@ -352,6 +361,20 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 	if genSecret {
 		envOpts = append(envOpts, secretRequestEnvOptions()...)
 	}
+	// in_maintenance_window() ([ADR-0093] §8): wherever the Keeper evaluates during a
+	// step's render. A flow-control Engine gets it only by option, because the same
+	// constructor builds the Soul's.
+	var maintenanceRefusal string
+	switch {
+	case mode.migration:
+		maintenanceRefusal = maintenanceFeatureMigration
+	case mode.serviceVars:
+		maintenanceRefusal = maintenanceFeatureServiceVars
+	case mode.flowControl && !cfg.maintenance:
+		maintenanceRefusal = MaintenanceSoulSideFeature
+	default:
+		envOpts = append(envOpts, maintenanceEnvOptions()...)
+	}
 
 	env, err := cel.NewEnv(envOpts...)
 	if err != nil {
@@ -374,6 +397,9 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 		migration:     mode.migration,
 		flowControl:   mode.flowControl,
 		genSecret:     genSecret,
+
+		maintenance:        maintenanceRefusal == "",
+		maintenanceRefusal: maintenanceRefusal,
 	}, nil
 }
 

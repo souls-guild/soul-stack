@@ -333,7 +333,7 @@ func (p *Pipeline) layoutStaticWhen(ctx context.Context, in RenderInput, task co
 		return false, err
 	}
 	var evalErr *cel.ErrEval
-	if _, err := evalStaticWhen(task.When, skip); err != nil && !errors.As(err, &evalErr) {
+	if _, err := evalStaticWhen(in, task.When, skip); err != nil && !errors.As(err, &evalErr) {
 		return false, &staticWhenEvalError{task: task.Name, when: task.When, err: err}
 	}
 	if err := p.emitStaticSkip(in, free, skip, tasks, plans, idx); err != nil {

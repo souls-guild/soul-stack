@@ -157,8 +157,11 @@ func (c *computeChecker) tasks(tasks []config.Task, prefix string) {
 		c.expression(where+".when", t.When, cel.ComputeOutOfScopeFlowControl)
 		c.expression(where+".changed_when", t.ChangedWhen, cel.ComputeOutOfScopeFlowControl)
 		c.expression(where+".failed_when", t.FailedWhen, cel.ComputeOutOfScopeFlowControl)
+		c.lateMaintenance(where+".changed_when", t.ChangedWhen, maintenanceLatePostModule)
+		c.lateMaintenance(where+".failed_when", t.FailedWhen, maintenanceLatePostModule)
 		if t.Retry != nil {
 			c.expression(where+".retry.until", t.Retry.Until, cel.ComputeOutOfScopeFlowControl)
+			c.lateMaintenance(where+".retry.until", t.Retry.Until, maintenanceLatePostModule)
 		}
 
 		// Everything below renders WITH the namespace, so what is checked there is
@@ -200,6 +203,7 @@ func (c *computeChecker) computeBlock(block config.ComputeBlock) {
 			continue // a literal passes through unrendered
 		}
 		c.check("$.compute."+cv.Name, s, false, cel.ComputeAvailable, i)
+		c.computeMaintenance("$.compute."+cv.Name, s)
 	}
 }
 
@@ -220,6 +224,7 @@ func (c *computeChecker) captureMatch(t *config.Task, where string) {
 	}
 	match, _ := t.Module.Params["match"].(string)
 	c.expression(where+".params.match", match, cel.ComputeOutOfScopeStateMatch)
+	c.lateMaintenanceMatch(where+".params.match", match)
 }
 
 // value walks a decoded YAML value (params:/vars:/apply.input:/loop.items:) and

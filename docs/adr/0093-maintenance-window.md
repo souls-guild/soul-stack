@@ -227,16 +227,26 @@ host has no window of its own (Not in v1).
 human-readable form (`Text()`), `incarnation.maintenance_window.next_start` is `NextStart(now)`,
 and `in_maintenance_window()` is `OpenAt(now)`. With no windows and no active freeze the function
 is true and `next_start` is now. A scenario uses them to say in a notification when the next window
-is, or to skip a disruptive step outside one. The contexts that may call the function and the CEL
-type of `next_start` are NIM-1073's. With no windows `Text()` renders `any time` (NIM-1072);
-whether CEL passes that through or gives `""` is NIM-1073's.
-
-### Open points
-
-- **Determinism of `in_maintenance_window()`.** It is the first time-dependent function in render
-  CEL: `now()` is refused as unsupported (`shared/cel/functions.go`, `Engine.guardUnsupported`).
-  A render result that is cached, memoised or re-rendered on a retry must not outlive the moment
-  it describes in a way that matters. NIM-1073 owns this, with the clock injected.
+is, or to skip a disruptive step outside one. Settled by NIM-1073 (2026-10-28):
+- **"Now" is the moment the Keeper renders the step.** The run reads the windows and freezes again
+  before every step and asks the calculator about one instant, so every host of a step gets one
+  answer and a freeze added mid-run reaches the next step. A step keeps its answer: a later pass
+  renders it again with the window it ran with, so a window that closed since does not re-decide an
+  include, an applier's `when:` or a loop of a step that ran and renumber the plan. The render reads
+  no clock: the answers arrive with the pass (`render.MaintenanceWindow`, per step), and a claim
+  that renders the step again gets the run's answers through its recipe rather than asking again.
+  Under the deprecated staged dispatch, whose passages do not follow the plan's order, the window
+  is read once per run.
+- **Where it is answered:** every cell the Keeper renders for the step — `params:`, `where:`,
+  `vars:`, `apply: input:`, `loop:`, `on:`, `assert:` — and every `when:` the Keeper decides (a
+  step's under linear dispatch, a keeper task's, an include's). **Refused** where an expression is
+  evaluated later, on the Soul, or for more than one step: `changed_when:`/`failed_when:`/
+  `retry.until:`, a bare capture `match:`, a destiny's predicates, a host task's `when:` under
+  `execution_model: staged`, `compute:`, service `vars/`, `validate:`, migration-CEL. The full list
+  is in
+  [templating.md §2.3](../templating.md#23-registered-cel-functions-starting-minimum).
+- `next_start` is an RFC3339 string in UTC; with no windows `text` is `""`, not `Text()`'s
+  `any time`.
 
 ### Not in v1
 
@@ -260,6 +270,10 @@ whether CEL passes that through or gives `""` is NIM-1073's.
 - **`overlap_policy` and a deferred child** (user, 2026-10-28) — a child waiting for its start holds
   back `parallel` as well as `skip` and `queue`; see the
   [amendment 2026-10-28 (NIM-1075)](#amendment-2026-10-28-nim-1075-a-cadence-spawn-and-the-window).
+- **Determinism of `in_maintenance_window()`** (NIM-1073, 2026-10-28) — the answer is sampled
+  once per step by the run and is a value of the render's input, and a step keeps it when
+  re-rendered, so no cache or re-render holds a clock or re-decides a step that ran; what is
+  evaluated later than the render, or for every step at once, refuses the function (§8).
 
 ### Rejected
 

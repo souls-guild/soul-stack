@@ -111,8 +111,8 @@ type RenderedPredicate struct {
 // Errors: what compiling the original returns ([ErrCompile], [ErrUnsupported]), or
 // [ErrPredicateRender].
 func (e *Engine) RenderPredicate(expr string, vars Vars, open []string) (RenderedPredicate, error) {
-	if !e.flowControl {
-		return RenderedPredicate{}, errors.New("RenderPredicate needs a flow-control Engine (NewFlowControl): the predicate is judged in the Soul's environment")
+	if !e.flowControl || e.maintenance {
+		return RenderedPredicate{}, errors.New("RenderPredicate needs the Soul's flow-control Engine (NewFlowControl, without WithMaintenanceWindow): the predicate is judged in the Soul's environment")
 	}
 	norm := normalize(expr)
 	if norm == "" {

@@ -129,7 +129,7 @@ func incarnationVars(in RenderInput, hostCount int) map[string]any {
 	if in.State != nil {
 		m["state"] = in.State
 	}
-	return m
+	return in.withMaintenanceWindow(m)
 }
 
 // hostVars builds cel.Vars for a specific host: the common run context
@@ -158,6 +158,8 @@ func hostVars(in RenderInput, host *topology.HostFacts, hostCount int) cel.Vars 
 		Ctx:            in.Ctx,
 		AllowHosts:     !in.destinyIsolated,
 		ComputeScope:   hostComputeScope(in),
+
+		InMaintenanceWindow: in.inMaintenanceWindow(),
 		// A host IS bound here, so a per-host root means what it says and the
 		// NIM-908 guard has nothing to refuse. Stated rather than left to the zero
 		// value: host_scope_guard_test.go requires every cel.Vars literal in this
