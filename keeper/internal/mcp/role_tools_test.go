@@ -493,9 +493,11 @@ func TestRoleTools_InManifest(t *testing.T) {
 // oracle.decree.
 // PLUS keeper.operator.jwt-list / jwt-revoke (NIM-1045).
 // PLUS keeper.operator.set-owner (NIM-1057).
+// PLUS keeper.incarnation.maintenance-window.* / freeze.* — list / create /
+// update / delete each (NIM-1072).
 func TestCatalog_TotalCount(t *testing.T) {
-	if n := len(listAllTools()); n != 100 {
-		t.Errorf("catalog size = %d, want 100", n)
+	if n := len(listAllTools()); n != 108 {
+		t.Errorf("catalog size = %d, want 108", n)
 	}
 }
 

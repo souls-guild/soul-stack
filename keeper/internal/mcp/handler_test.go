@@ -1107,8 +1107,9 @@ func TestDispatch_ToolsList_HasAllTools(t *testing.T) {
 	// captions left with the Cloud Provider/Profile registries (NIM-761).
 	// 99 = 97 + keeper.operator.jwt-list / jwt-revoke (NIM-1045).
 	// 100 = 99 + keeper.operator.set-owner (NIM-1057).
-	if len(res.Tools) != 100 {
-		t.Errorf("tool count = %d, want 100", len(res.Tools))
+	// 108 = 100 + keeper.incarnation.maintenance-window.* / freeze.* (NIM-1072).
+	if len(res.Tools) != 108 {
+		t.Errorf("tool count = %d, want 108", len(res.Tools))
 	}
 	// Names must stay stable (spec — mcp-tools.md).
 	names := map[string]bool{}

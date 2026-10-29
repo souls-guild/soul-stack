@@ -169,6 +169,19 @@ var rbacToolGates = map[string]toolGate{
 		args:     `{"id":"inc-probe","sid":"host-1.example.com"}`,
 	},
 	"keeper.incarnation.members": {asks: []string{"check:incarnation.get"}, args: `{"id":"inc-probe"}`},
+	// Maintenance windows and freezes (NIM-1072): reads ride on incarnation.get,
+	// writes ask incarnation.maintenance-set. Every argument but the
+	// incarnation id is checked AFTER the gate, as REST's middleware orders it,
+	// so each write probe makes EVERY such argument invalid: a check moved above
+	// the gate refuses the probe before it asks, whichever check it is.
+	"keeper.incarnation.maintenance-window.list":   {asks: []string{"check:incarnation.get"}, args: `{"id":"inc-probe"}`},
+	"keeper.incarnation.maintenance-window.create": {asks: []string{"check:incarnation.maintenance-set"}, args: `{"id":"inc-probe","window_id":"x"}`},
+	"keeper.incarnation.maintenance-window.update": {asks: []string{"check:incarnation.maintenance-set"}, args: `{"id":"inc-probe","window_id":"x"}`},
+	"keeper.incarnation.maintenance-window.delete": {asks: []string{"check:incarnation.maintenance-set"}, args: `{"id":"inc-probe","window_id":"x"}`},
+	"keeper.incarnation.freeze.list":               {asks: []string{"check:incarnation.get"}, args: `{"id":"inc-probe"}`},
+	"keeper.incarnation.freeze.create":             {asks: []string{"check:incarnation.maintenance-set"}, args: `{"id":"inc-probe","freeze_id":"x","starts_at":"x"}`},
+	"keeper.incarnation.freeze.update":             {asks: []string{"check:incarnation.maintenance-set"}, args: `{"id":"inc-probe","freeze_id":"x","starts_at":"x"}`},
+	"keeper.incarnation.freeze.delete":             {asks: []string{"check:incarnation.maintenance-set"}, args: `{"id":"inc-probe","freeze_id":"x"}`},
 
 	// --- souls. run-command is the one soul tool not paired with soul.<action>:
 	// a non-interactive shell is the console right (ADR-0074). ---

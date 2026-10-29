@@ -1425,4 +1425,19 @@ const (
 	EventTidingLabelChanged       EventType = "tiding.label_changed"
 	EventVigilLabelChanged        EventType = "vigil.label_changed"
 	EventDecreeLabelChanged       EventType = "decree.label_changed"
+
+	// An Archon changed an incarnation's maintenance windows or freezes (epic
+	// NIM-1069, NIM-1072), through REST or MCP under incarnation.maintenance-set.
+	// Payload `{incarnation_id, id, ...fields}`: a window's `days`, `start_time`,
+	// `duration_minutes`, `timezone`, `comment`, or a freeze's `starts_at`,
+	// `ends_at`, `comment`, as they are after the change (as they were, for a
+	// delete). `.updated` adds `previous`, the fields before it, read off the
+	// same statement. keeper/internal/maintenance builds the payload for both
+	// surfaces.
+	EventMaintenanceWindowCreated EventType = "maintenance_window.created"
+	EventMaintenanceWindowUpdated EventType = "maintenance_window.updated"
+	EventMaintenanceWindowDeleted EventType = "maintenance_window.deleted"
+	EventFreezeCreated            EventType = "freeze.created"
+	EventFreezeUpdated            EventType = "freeze.updated"
+	EventFreezeDeleted            EventType = "freeze.deleted"
 )

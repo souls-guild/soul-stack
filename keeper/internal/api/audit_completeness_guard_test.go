@@ -104,16 +104,22 @@ var auditedWriteRoutes = map[route]auditedRoute{
 
 	// incarnations — MIXED audit class (middleware create/run/unlock/upgrade +
 	// self-audit rerun/destroy/traits-set), all must emit.
-	{http.MethodPost, "/v1/incarnations"}:                           {events: []audit.EventType{audit.EventIncarnationCreated}},
-	{http.MethodPost, "/v1/incarnations/{id}/scenarios/{scenario}"}: {events: []audit.EventType{audit.EventIncarnationScenarioStarted}},
-	{http.MethodPost, "/v1/incarnations/{id}/unlock"}:               {events: []audit.EventType{audit.EventIncarnationUnlocked}},
-	{http.MethodPost, "/v1/incarnations/{id}/upgrade"}:              {events: []audit.EventType{audit.EventIncarnationUpgradeStarted}},
-	{http.MethodPost, "/v1/incarnations/{id}/rerun-last"}:           {events: []audit.EventType{audit.EventIncarnationRerunLast}, note: "self-audit: handler writes inside RerunLastTyped"},
-	{http.MethodDelete, "/v1/incarnations/{id}"}:                    {events: []audit.EventType{audit.EventIncarnationDestroyStarted}, note: "self-audit: destroy_started writes in the service layer incarnation.Destroy"},
-	{http.MethodPut, "/v1/incarnations/{id}/traits"}:                {events: []audit.EventType{audit.EventIncarnationTraitsChanged}, note: "self-audit: handler writes inside SetTraitsTyped"},
-	{http.MethodPost, "/v1/incarnations/{id}/members"}:              {events: []audit.EventType{audit.EventIncarnationMemberBound}, note: "self-audit: handler writes inside BindMembersTyped (NIM-209)"},
-	{http.MethodDelete, "/v1/incarnations/{id}/members/{sid}"}:      {events: []audit.EventType{audit.EventIncarnationMemberUnbound}, note: "self-audit: handler writes inside UnbindMemberTyped (NIM-209)"},
-	{http.MethodPost, "/v1/incarnations/{id}/secrets/reveal"}:       {events: []audit.EventType{audit.EventIncarnationSecretRevealed}, note: "self-audit after ReadKV"},
+	{http.MethodPost, "/v1/incarnations"}:                                        {events: []audit.EventType{audit.EventIncarnationCreated}},
+	{http.MethodPost, "/v1/incarnations/{id}/scenarios/{scenario}"}:              {events: []audit.EventType{audit.EventIncarnationScenarioStarted}},
+	{http.MethodPost, "/v1/incarnations/{id}/unlock"}:                            {events: []audit.EventType{audit.EventIncarnationUnlocked}},
+	{http.MethodPost, "/v1/incarnations/{id}/upgrade"}:                           {events: []audit.EventType{audit.EventIncarnationUpgradeStarted}},
+	{http.MethodPost, "/v1/incarnations/{id}/rerun-last"}:                        {events: []audit.EventType{audit.EventIncarnationRerunLast}, note: "self-audit: handler writes inside RerunLastTyped"},
+	{http.MethodDelete, "/v1/incarnations/{id}"}:                                 {events: []audit.EventType{audit.EventIncarnationDestroyStarted}, note: "self-audit: destroy_started writes in the service layer incarnation.Destroy"},
+	{http.MethodPut, "/v1/incarnations/{id}/traits"}:                             {events: []audit.EventType{audit.EventIncarnationTraitsChanged}, note: "self-audit: handler writes inside SetTraitsTyped"},
+	{http.MethodPost, "/v1/incarnations/{id}/members"}:                           {events: []audit.EventType{audit.EventIncarnationMemberBound}, note: "self-audit: handler writes inside BindMembersTyped (NIM-209)"},
+	{http.MethodDelete, "/v1/incarnations/{id}/members/{sid}"}:                   {events: []audit.EventType{audit.EventIncarnationMemberUnbound}, note: "self-audit: handler writes inside UnbindMemberTyped (NIM-209)"},
+	{http.MethodPost, "/v1/incarnations/{id}/secrets/reveal"}:                    {events: []audit.EventType{audit.EventIncarnationSecretRevealed}, note: "self-audit after ReadKV"},
+	{http.MethodPost, "/v1/incarnations/{id}/maintenance-windows"}:               {events: []audit.EventType{audit.EventMaintenanceWindowCreated}, note: "self-audit: handler writes inside CreateMaintenanceWindowTyped (NIM-1072)"},
+	{http.MethodPut, "/v1/incarnations/{id}/maintenance-windows/{window_id}"}:    {events: []audit.EventType{audit.EventMaintenanceWindowUpdated}, note: "self-audit: handler writes inside UpdateMaintenanceWindowTyped (NIM-1072)"},
+	{http.MethodDelete, "/v1/incarnations/{id}/maintenance-windows/{window_id}"}: {events: []audit.EventType{audit.EventMaintenanceWindowDeleted}, note: "self-audit: handler writes inside DeleteMaintenanceWindowTyped (NIM-1072)"},
+	{http.MethodPost, "/v1/incarnations/{id}/freezes"}:                           {events: []audit.EventType{audit.EventFreezeCreated}, note: "self-audit: handler writes inside CreateFreezeTyped (NIM-1072)"},
+	{http.MethodPut, "/v1/incarnations/{id}/freezes/{freeze_id}"}:                {events: []audit.EventType{audit.EventFreezeUpdated}, note: "self-audit: handler writes inside UpdateFreezeTyped (NIM-1072)"},
+	{http.MethodDelete, "/v1/incarnations/{id}/freezes/{freeze_id}"}:             {events: []audit.EventType{audit.EventFreezeDeleted}, note: "self-audit: handler writes inside DeleteFreezeTyped (NIM-1072)"},
 
 	// The ten display-caption mutations ([ADR-0085], NIM-728). Audited like every
 	// other write, and for the same reason: the trail says who changed what and

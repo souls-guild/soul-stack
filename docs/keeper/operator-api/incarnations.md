@@ -712,3 +712,68 @@ Removes the host from the roster — it stops being a target of **every future r
 **Errors:** `403 forbidden`, `404 not-found` (incarnation does not exist), `422 validation-failed` (invalid path-`id`/`sid`), `500 internal-error`.
 
 **Audit:** `incarnation.member_unbound` (payload `{name, sid, removed}`).
+
+#### Maintenance windows and freezes — `/v1/incarnations/{id}/maintenance-windows`, `/v1/incarnations/{id}/freezes`
+
+[ADR-0093](../../adr/0093-maintenance-window.md), epic NIM-1069, NIM-1072. Each incarnation has its own **maintenance windows** and **freezes**; there is no shared named window. A window is the time a run may **start**: a run already started is never cut off when the slot ends. A run that may not start now is meant to wait for the next open moment outside every freeze. During a **freeze** no automatic run is meant to start, with or without windows. **No windows at all means any time** (outside a freeze).
+
+The answer to "may a run start now, and if not, when" comes from one calculator, `keeper/internal/maintenance`. ⚠ **These routes only store the windows and freezes and report that answer.** Nothing starts or defers a run by them yet: a freeze created today does not stop a Cadence or the Reaper. The consumers come in the same release: scenario CEL (NIM-1073), the run and Voyage fields `in_maintenance_window` / `confirm_freeze` (NIM-1074), Cadence (NIM-1075) and the UI (NIM-1076); cert rotation (NIM-1081) joins with epic NIM-1070.
+
+**How a window is read.**
+
+- On each listed day a slot starts at `start_time` (wall clock in `timezone`) and lasts `duration_minutes` of **elapsed** time, at most 24 hours. A slot may cross midnight and belongs to the day it starts on: `sat 23:00` for 240 minutes is open until Sunday 03:00.
+- Overlapping slots, of one window or of several, simply add up.
+- Daylight saving: each slot is placed by its own zone's wall clock, so `mon 02:00 Europe/Berlin` is 01:00 UTC in winter and 00:00 UTC in summer. A start the spring change skips moves forward by the gap (02:30 on the night of 02:00 → 03:00 starts at 03:30). A start the autumn change repeats is its **first** occurrence. The duration stays elapsed time either way.
+- A freeze is the half-open interval `[starts_at, ends_at)`. Touching and overlapping freezes form one closed stretch, so the next start after a freeze is the end of the whole stretch, or the next slot start after it.
+
+Permissions: reads ride on `incarnation.get`, writes need `incarnation.maintenance-set`. Both are checked with the same incarnation scope (`coven=`/`service=`/`incarnation=` by path-`id`) as every other incarnation route. There is no status gate: a window only decides when a **future** run may start, so it can be edited while the incarnation is `applying` or `error_locked`. Limits: 50 windows and 200 freezes per incarnation, checked at insert.
+
+| Method | Path | Permission | MCP-tool | OperationID |
+|---|---|---|---|---|
+| `GET` | `…/maintenance-windows` | `incarnation.get` | `keeper.incarnation.maintenance-window.list` | `listIncarnationMaintenanceWindows` |
+| `POST` | `…/maintenance-windows` | `incarnation.maintenance-set` | `keeper.incarnation.maintenance-window.create` | `createIncarnationMaintenanceWindow` |
+| `PUT` | `…/maintenance-windows/{window_id}` | `incarnation.maintenance-set` | `keeper.incarnation.maintenance-window.update` | `updateIncarnationMaintenanceWindow` |
+| `DELETE` | `…/maintenance-windows/{window_id}` | `incarnation.maintenance-set` | `keeper.incarnation.maintenance-window.delete` | `deleteIncarnationMaintenanceWindow` |
+| `GET` | `…/freezes` | `incarnation.get` | `keeper.incarnation.freeze.list` | `listIncarnationFreezes` |
+| `POST` | `…/freezes` | `incarnation.maintenance-set` | `keeper.incarnation.freeze.create` | `createIncarnationFreeze` |
+| `PUT` | `…/freezes/{freeze_id}` | `incarnation.maintenance-set` | `keeper.incarnation.freeze.update` | `updateIncarnationFreeze` |
+| `DELETE` | `…/freezes/{freeze_id}` | `incarnation.maintenance-set` | `keeper.incarnation.freeze.delete` | `deleteIncarnationFreeze` |
+
+**Request `MaintenanceWindowRequest`** (`POST` creates, `PUT` replaces every field):
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `days` | `list<string>` | yes | Weekdays a slot starts on, 1..7 of `mon` `tue` `wed` `thu` `fri` `sat` `sun`, each at most once. Stored and returned in calendar order. |
+| `start_time` | `string` | yes | `HH:MM`, 00:00–23:59, wall clock in `timezone`. |
+| `duration_minutes` | `integer` | yes | 1..1440. |
+| `timezone` | `string` | yes | IANA zone (`Europe/Moscow`, `UTC`). A name whose meaning depends on the Keeper host is refused: `Local`, and the lower-case entries of a system zoneinfo (`localtime`, `posixrules`, `posix/…`, `right/…`). Each instance would read them as its own zone. |
+| `comment` | `string` | no | At most 500 characters. |
+
+```json
+{ "days": ["tue", "thu"], "start_time": "02:00", "duration_minutes": 180, "timezone": "Europe/Moscow", "comment": "nightly" }
+```
+
+`POST` answers `201` and `PUT` answers `200`, both with the window `{id, days, start_time, duration_minutes, timezone, comment, created_at, updated_at}`. `id` is a UUID.
+
+**`GET …/maintenance-windows` → `200`:** every window in creation order, plus the status over the windows **and** the freezes:
+
+```json
+{
+  "items": [ { "id": "0b9f7c1e-…", "days": ["tue", "thu"], "start_time": "02:00", "duration_minutes": 180,
+               "timezone": "Europe/Moscow", "comment": "nightly",
+               "created_at": "2026-10-27T18:00:00Z", "updated_at": "2026-10-27T18:00:00Z" } ],
+  "status": { "open_now": false, "next_start": "2026-10-29T23:00:00Z" }
+}
+```
+
+- `open_now`: a run may start now, meaning inside a slot (or there are no windows) and outside every freeze.
+- `next_start`: the first instant at or after now at which a run may start; it is now itself when `open_now` is true.
+- `active_freeze`: the freeze in force now. When several overlap it is the one that ends last. Absent when there is none.
+
+**Request `FreezeRequest`:** `starts_at` and `ends_at` (RFC 3339, both required, `ends_at` after `starts_at`), `comment` (optional, at most 500 characters). `POST` answers `201` and `PUT` answers `200`, both with the freeze `{id, starts_at, ends_at, comment, created_at, updated_at}`. **`GET …/freezes` → `200`** returns `{items}`, past freezes included, ordered by start.
+
+**`DELETE`** answers `204`. It is not idempotent: deleting again is `404`, so the trail never records a delete of something that was not there. Deleting the last window makes the incarnation open at any time outside a freeze.
+
+**Errors:** `400 malformed-request`; `403 forbidden`; `404 not-found` (no such incarnation, or no window/freeze with that id **on this incarnation**: the incarnation in the path is part of the address); `422 validation-failed` (a refused field, a malformed path id, or the incarnation is at its limit); `500 internal-error`.
+
+**Audit:** `maintenance_window.created` / `.updated` / `.deleted` and `freeze.created` / `.updated` / `.deleted` (`source: api` / `mcp`). The payload is `{incarnation_id, id, …fields}`. The fields are as they are after the change, or as they were before a delete. `.updated` also carries `previous`, the fields before the change, read from the same statement. The handler writes these events itself.

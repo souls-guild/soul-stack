@@ -69,6 +69,9 @@ components:
             - errand.invoked
             - errand.timed_out
             - eventstream.lease_force_released
+            - freeze.created
+            - freeze.deleted
+            - freeze.updated
             - herald.created
             - herald.deleted
             - herald.delivered
@@ -91,6 +94,9 @@ components:
             - incarnation.upgrade_started
             - input.vault_resolved
             - ldap_sync.settings_changed
+            - maintenance_window.created
+            - maintenance_window.deleted
+            - maintenance_window.updated
             - omen.created
             - omen.label_changed
             - omen.revoked
@@ -1170,6 +1176,65 @@ components:
       required:
         - name
       type: object
+    Freeze:
+      additionalProperties: false
+      properties:
+        comment:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        ends_at:
+          format: date-time
+          type: string
+        id:
+          description: freeze id (UUID)
+          type: string
+        starts_at:
+          format: date-time
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - id
+        - starts_at
+        - ends_at
+        - comment
+        - created_at
+        - updated_at
+      type: object
+    FreezeListReply:
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: "#/components/schemas/Freeze"
+          type:
+            - array
+            - "null"
+      required:
+        - items
+      type: object
+    FreezeRequest:
+      additionalProperties: false
+      properties:
+        comment:
+          description: free text, at most 500 characters
+          maxLength: 500
+          type: string
+        ends_at:
+          description: end of the freeze, RFC 3339 (exclusive); after starts_at
+          format: date-time
+          type: string
+        starts_at:
+          description: start of the freeze, RFC 3339 (inclusive)
+          format: date-time
+          type: string
+      required:
+        - starts_at
+        - ends_at
+      type: object
     GitRef:
       additionalProperties: false
       properties:
@@ -2214,6 +2279,123 @@ components:
       required:
         - aid
         - password
+      type: object
+    MaintenanceStatus:
+      additionalProperties: false
+      properties:
+        active_freeze:
+          $ref: "#/components/schemas/Freeze"
+          description: the freeze in force now - the one that ends last when several overlap; absent when none
+        next_start:
+          description: the first instant at or after now at which a run may start; now itself when open_now
+          format: date-time
+          type: string
+        open_now:
+          description: "a run may start now: inside a slot of some window (or there are no windows) and outside every freeze"
+          type: boolean
+      required:
+        - open_now
+        - next_start
+      type: object
+    MaintenanceWindow:
+      additionalProperties: false
+      properties:
+        comment:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        days:
+          description: weekdays a slot starts on, in calendar order
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        duration_minutes:
+          format: int64
+          type: integer
+        id:
+          description: window id (UUID)
+          type: string
+        start_time:
+          description: HH:MM in timezone
+          type: string
+        timezone:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - id
+        - days
+        - start_time
+        - duration_minutes
+        - timezone
+        - comment
+        - created_at
+        - updated_at
+      type: object
+    MaintenanceWindowListReply:
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: "#/components/schemas/MaintenanceWindow"
+          type:
+            - array
+            - "null"
+        status:
+          $ref: "#/components/schemas/MaintenanceStatus"
+      required:
+        - items
+        - status
+      type: object
+    MaintenanceWindowRequest:
+      additionalProperties: false
+      properties:
+        comment:
+          description: free text, at most 500 characters
+          maxLength: 500
+          type: string
+        days:
+          description: weekdays a slot starts on; a slot belongs to the day it starts on, even when it crosses midnight
+          items:
+            enum:
+              - mon
+              - tue
+              - wed
+              - thu
+              - fri
+              - sat
+              - sun
+            type: string
+          maxItems: 7
+          minItems: 1
+          type:
+            - array
+            - "null"
+          uniqueItems: true
+        duration_minutes:
+          description: slot length in minutes of elapsed time, at most a day; a slot over a DST change still lasts exactly this long
+          format: int64
+          maximum: 1440
+          minimum: 1
+          type: integer
+        start_time:
+          description: wall-clock start of each slot, HH:MM, in timezone. A time the spring DST change skips moves forward by the gap; a time the autumn change repeats is its first occurrence
+          pattern: ^([01][0-9]|2[0-3]):[0-5][0-9]$
+          type: string
+        timezone:
+          description: IANA zone of start_time, e.g. Europe/Moscow or UTC; names that depend on the Keeper host (Local, localtime, posix/...) are refused
+          maxLength: 64
+          minLength: 1
+          type: string
+      required:
+        - days
+        - start_time
+        - duration_minutes
+        - timezone
       type: object
     ModuleCatalogItem:
       additionalProperties: false
@@ -9179,6 +9361,210 @@ paths:
       summary: Remove Voice from Choir
       tags:
         - choir
+  /v1/incarnations/{id}/freezes:
+    get:
+      description: Every freeze of the incarnation, past ones included, ordered by start. During a freeze no automatic run starts, with or without windows; a forced run needs explicit consent. Permission incarnation.get. Read-only, no audit.
+      operationId: listIncarnationFreezes
+      parameters:
+        - description: incarnation id
+          in: path
+          name: id
+          required: true
+          schema:
+            description: incarnation id
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreezeListReply"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: List the incarnation's freezes
+      tags:
+        - incarnation
+    post:
+      description: Adds the freeze [starts_at, ends_at). 422 when ends_at is not after starts_at or the incarnation already has 200 freezes. Audit freeze.created. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start.
+      operationId: createIncarnationFreeze
+      parameters:
+        - description: incarnation id
+          in: path
+          name: id
+          required: true
+          schema:
+            description: incarnation id
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FreezeRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Freeze"
+          description: Created
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Add a freeze to an incarnation
+      tags:
+        - incarnation
+  /v1/incarnations/{id}/freezes/{freeze_id}:
+    delete:
+      description: "Deletes the freeze. Not idempotent: deleting it again is 404. Audit freeze.deleted. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start."
+      operationId: deleteIncarnationFreeze
+      parameters:
+        - description: incarnation id
+          in: path
+          name: id
+          required: true
+          schema:
+            description: incarnation id
+            type: string
+        - description: freeze id (UUID)
+          in: path
+          name: freeze_id
+          required: true
+          schema:
+            description: freeze id (UUID)
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Delete a freeze
+      tags:
+        - incarnation
+    put:
+      description: Replaces every field of the freeze. 404 when no freeze with that id belongs to this incarnation. Audit freeze.updated, with the fields before the change under `previous`. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start.
+      operationId: updateIncarnationFreeze
+      parameters:
+        - description: incarnation id
+          in: path
+          name: id
+          required: true
+          schema:
+            description: incarnation id
+            type: string
+        - description: freeze id (UUID)
+          in: path
+          name: freeze_id
+          required: true
+          schema:
+            description: freeze id (UUID)
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FreezeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Freeze"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Replace a freeze
+      tags:
+        - incarnation
   /v1/incarnations/{id}/history:
     get:
       description: state_history with apply_id filter and pagination. Outside RBAC scope -> 404. Permission incarnation.history. Read-only.
@@ -9329,6 +9715,210 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Set the incarnation display caption
+      tags:
+        - incarnation
+  /v1/incarnations/{id}/maintenance-windows:
+    get:
+      description: "Every maintenance window of the incarnation in creation order, plus `status`: whether a run may start now (`open_now`), the first instant it may (`next_start`, now itself when open) and the freeze in force (`active_freeze`). The status is computed over the windows AND the freezes: no windows means any time, and a freeze closes everything while it lasts. A window gates the start of a run; a started run is never cut off when the slot ends. Permission incarnation.get. Read-only, no audit."
+      operationId: listIncarnationMaintenanceWindows
+      parameters:
+        - description: incarnation id
+          in: path
+          name: id
+          required: true
+          schema:
+            description: incarnation id
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaintenanceWindowListReply"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: List the incarnation's maintenance windows
+      tags:
+        - incarnation
+    post:
+      description: "Adds a weekly slot set: on each listed day a slot starts at start_time in timezone and lasts duration_minutes (may cross midnight). 422 on a refused field or when the incarnation already has 50 windows. Audit maintenance_window.created. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start."
+      operationId: createIncarnationMaintenanceWindow
+      parameters:
+        - description: incarnation id
+          in: path
+          name: id
+          required: true
+          schema:
+            description: incarnation id
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MaintenanceWindowRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaintenanceWindow"
+          description: Created
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Add a maintenance window to an incarnation
+      tags:
+        - incarnation
+  /v1/incarnations/{id}/maintenance-windows/{window_id}:
+    delete:
+      description: "Deletes the window. Not idempotent: deleting it again is 404. Deleting the last window makes the incarnation open at any time outside a freeze. Audit maintenance_window.deleted. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start."
+      operationId: deleteIncarnationMaintenanceWindow
+      parameters:
+        - description: incarnation id
+          in: path
+          name: id
+          required: true
+          schema:
+            description: incarnation id
+            type: string
+        - description: maintenance window id (UUID)
+          in: path
+          name: window_id
+          required: true
+          schema:
+            description: maintenance window id (UUID)
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Delete a maintenance window
+      tags:
+        - incarnation
+    put:
+      description: Replaces every field of the window. 404 when no window with that id belongs to this incarnation. Audit maintenance_window.updated, with the fields before the change under `previous`. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start.
+      operationId: updateIncarnationMaintenanceWindow
+      parameters:
+        - description: incarnation id
+          in: path
+          name: id
+          required: true
+          schema:
+            description: incarnation id
+            type: string
+        - description: maintenance window id (UUID)
+          in: path
+          name: window_id
+          required: true
+          schema:
+            description: maintenance window id (UUID)
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MaintenanceWindowRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaintenanceWindow"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Replace a maintenance window
       tags:
         - incarnation
   /v1/incarnations/{id}/members:

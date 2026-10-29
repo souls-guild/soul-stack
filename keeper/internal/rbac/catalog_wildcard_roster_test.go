@@ -80,6 +80,10 @@ func TestCatalog_WildcardRostersPinnedForReleaseNotes(t *testing.T) {
 		// gains it on upgrade gains the ability to change a word on a screen and
 		// nothing else. It is enumerated anyway, because the point of this guard
 		// is that the roster is complete, not that every entry is alarming.
+		//
+		// incarnation.maintenance-set is the NIM-1072 addition: whoever holds it
+		// decides when the Cadence and the Reaper may start runs on the
+		// incarnation, and a freeze stops them altogether.
 		"incarnation": {
 			"incarnation.bind-member",
 			"incarnation.create",
@@ -88,6 +92,7 @@ func TestCatalog_WildcardRostersPinnedForReleaseNotes(t *testing.T) {
 			"incarnation.history",
 			"incarnation.label-set",
 			"incarnation.list",
+			"incarnation.maintenance-set",
 			"incarnation.rerun-last",
 			"incarnation.run",
 			"incarnation.traits-set",

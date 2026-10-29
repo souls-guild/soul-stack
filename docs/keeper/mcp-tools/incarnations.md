@@ -280,3 +280,41 @@ Lists the incarnation's roster. Permission: `incarnation.get` (the roster needs 
 | `total` | `integer` | Number of members visible to THIS operator, not the size of the whole roster (narrowed to the caller's soul scope). |
 
 **Errors:** `validation-failed` (broken `name`), `not-found`, `forbidden`, `internal-error`.
+
+### Maintenance windows and freezes (8)
+
+Parity with [`/v1/incarnations/{id}/maintenance-windows` and `/freezes`](../operator-api/incarnations.md) (NIM-1072); the semantics — what a window, a freeze and the status mean, DST, limits, audit — are there. Every tool takes the incarnation in `id` and checks it with the same body-scoped OR-Check over the incarnation's scope as the other incarnation tools: the `.list` tools ask `incarnation.get`, the rest `incarnation.maintenance-set`. Validation, storage and the audit payload are shared with REST. Async: **no**.
+
+#### `keeper.incarnation.maintenance-window.list`
+
+**Input:** `id`. **Output:** `{incarnation, items, status}` — `items` as REST (`created_at`/`updated_at` RFC 3339), `status` `{open_now, next_start, active_freeze?}`.
+
+#### `keeper.incarnation.maintenance-window.create`
+
+**Input:** `id`, `days`, `start_time`, `duration_minutes`, `timezone`, `comment?` — the REST body. **Output:** the window. Audit `maintenance_window.created`.
+
+#### `keeper.incarnation.maintenance-window.update`
+
+**Input:** `id`, `window_id`, and the full window as for create (replaces every field). **Output:** the window. Audit `maintenance_window.updated` with `previous`.
+
+#### `keeper.incarnation.maintenance-window.delete`
+
+**Input:** `id`, `window_id`. **Output:** `{incarnation, id}`. Not idempotent: deleting again is `not-found`. Audit `maintenance_window.deleted`.
+
+#### `keeper.incarnation.freeze.list`
+
+**Input:** `id`. **Output:** `{incarnation, items}`, past freezes included, ordered by start.
+
+#### `keeper.incarnation.freeze.create`
+
+**Input:** `id`, `starts_at`, `ends_at` (RFC 3339), `comment?`. **Output:** the freeze. Audit `freeze.created`.
+
+#### `keeper.incarnation.freeze.update`
+
+**Input:** `id`, `freeze_id`, `starts_at`, `ends_at`, `comment?` (replaces every field). **Output:** the freeze. Audit `freeze.updated` with `previous`.
+
+#### `keeper.incarnation.freeze.delete`
+
+**Input:** `id`, `freeze_id`. **Output:** `{incarnation, id}`. Audit `freeze.deleted`.
+
+**Errors (all eight):** `malformed-request` (unknown argument), `validation-failed` (a refused field, a malformed `id`/`window_id`/`freeze_id`, the incarnation at its limit), `forbidden`, `not-found` (no such incarnation, or no such window/freeze on it), `internal-error`.

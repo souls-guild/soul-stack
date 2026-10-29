@@ -375,6 +375,81 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
+	// --- Maintenance windows and freezes (8, NIM-1072) — parity with REST
+	// /v1/incarnations/{id}/maintenance-windows and /freezes. ---
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.incarnation.maintenance-window.list",
+			Description:  "Lists the incarnation's maintenance windows in creation order, plus status: open_now (a run may start now), next_start (the first instant at or after now a run may start; now itself when open) and active_freeze (the freeze in force; absent when none). The status counts the freezes too: no windows means any time, and a freeze closes everything while it lasts. A window gates the START of a run; a started run is never cut off. Permission: incarnation.get (scope incarnation/coven/service by name).",
+			InputSchema:  schemaIncarnationIDOnlyInput,
+			OutputSchema: schemaMaintenanceWindowListOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.incarnation.maintenance-window.create",
+			Description:  "Adds a maintenance window: on each listed day a slot starts at start_time (HH:MM wall clock in timezone) and lasts duration_minutes of elapsed time, at most a day; a slot may cross midnight and belongs to the day it starts on. A start the spring DST change skips moves forward by the gap; one the autumn change repeats is its first occurrence. At most 50 windows per incarnation. Permission: incarnation.maintenance-set (scope incarnation/coven/service by name); allowed in any incarnation status. Audit maintenance_window.created. Fails with code=validation-failed on a refused field, not-found if the incarnation doesn't exist.",
+			InputSchema:  schemaMaintenanceWindowCreateInput,
+			OutputSchema: schemaMaintenanceWindowOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.incarnation.maintenance-window.update",
+			Description:  "Replaces every field of one maintenance window. Permission: incarnation.maintenance-set. Audit maintenance_window.updated, with the fields before the change under previous. Fails with code=not-found when no window with that window_id belongs to this incarnation.",
+			InputSchema:  schemaMaintenanceWindowUpdateInput,
+			OutputSchema: schemaMaintenanceWindowOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.incarnation.maintenance-window.delete",
+			Description:  "Deletes one maintenance window. Not idempotent: deleting it again is code=not-found. Deleting the last window makes the incarnation open at any time outside a freeze. Permission: incarnation.maintenance-set. Audit maintenance_window.deleted.",
+			InputSchema:  schemaMaintenanceWindowDeleteInput,
+			OutputSchema: schemaMaintenanceDeleteOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.incarnation.freeze.list",
+			Description:  "Lists the incarnation's freezes, past ones included, ordered by start. During a freeze no automatic run starts, with or without windows. Permission: incarnation.get (scope incarnation/coven/service by name).",
+			InputSchema:  schemaIncarnationIDOnlyInput,
+			OutputSchema: schemaFreezeListOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.incarnation.freeze.create",
+			Description:  "Adds the freeze [starts_at, ends_at) (RFC 3339; ends_at after starts_at). At most 200 freezes per incarnation. Permission: incarnation.maintenance-set (scope incarnation/coven/service by name). Audit freeze.created. Fails with code=validation-failed on a refused field, not-found if the incarnation doesn't exist.",
+			InputSchema:  schemaFreezeCreateInput,
+			OutputSchema: schemaFreezeOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.incarnation.freeze.update",
+			Description:  "Replaces every field of one freeze. Permission: incarnation.maintenance-set. Audit freeze.updated, with the fields before the change under previous. Fails with code=not-found when no freeze with that freeze_id belongs to this incarnation.",
+			InputSchema:  schemaFreezeUpdateInput,
+			OutputSchema: schemaFreezeOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.incarnation.freeze.delete",
+			Description:  "Deletes one freeze. Not idempotent: deleting it again is code=not-found. Permission: incarnation.maintenance-set. Audit freeze.deleted.",
+			InputSchema:  schemaFreezeDeleteInput,
+			OutputSchema: schemaMaintenanceDeleteOutput,
+		},
+	},
+
 	// --- Soul (7) — create + issue-token + coven-assign + traits-assign +
 	// ssh-target.update + run-command implemented (parity with REST POST
 	// /v1/souls + issue-token + coven + traits + ssh-target); list stays a stub
@@ -1699,6 +1774,109 @@ var (
 "bound_at":{"type":"string","description":"RFC3339 timestamp of the bind."},
 "bound_by_aid":{"type":"string","description":"AID of the operator that bound the host; absent for a keeper-internal bind."}}}},
 "total":{"type":"integer","description":"Number of members visible to THIS operator, not the size of the whole roster."}}}`)
+
+	schemaIncarnationIDOnlyInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["id"],
+"properties":{
+"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id."}}}`)
+
+	schemaMaintenanceWindowCreateInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["id","days","start_time","duration_minutes","timezone"],
+"properties":{
+"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id."},
+` + maintenanceWindowFieldsSchema + `}}`)
+
+	schemaMaintenanceWindowUpdateInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["id","window_id","days","start_time","duration_minutes","timezone"],
+"properties":{
+"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id."},
+"window_id":{"type":"string","pattern":"` + maintenanceIDPattern + `","description":"Maintenance window id (UUID)."},
+` + maintenanceWindowFieldsSchema + `}}`)
+
+	schemaMaintenanceWindowDeleteInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["id","window_id"],
+"properties":{
+"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id."},
+"window_id":{"type":"string","pattern":"` + maintenanceIDPattern + `","description":"Maintenance window id (UUID)."}}}`)
+
+	schemaMaintenanceWindowOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+` + maintenanceWindowEntrySchema + `}`)
+
+	schemaMaintenanceWindowListOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["incarnation","items","status"],
+"properties":{
+"incarnation":{"type":"string"},
+"items":{"type":"array","items":{` + maintenanceWindowEntrySchema + `}},
+"status":{"type":"object","additionalProperties":false,"required":["open_now","next_start"],"properties":{
+"open_now":{"type":"boolean","description":"A run may start now: inside a slot of some window (or there are no windows) and outside every freeze."},
+"next_start":{"type":"string","description":"RFC3339: the first instant at or after now at which a run may start; now itself when open_now."},
+"active_freeze":{` + freezeEntrySchema + `,"description":"The freeze in force now - the one that ends last when several overlap; absent when none."}}}}}`)
+
+	schemaFreezeCreateInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["id","starts_at","ends_at"],
+"properties":{
+"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id."},
+` + freezeFieldsSchema + `}}`)
+
+	schemaFreezeUpdateInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["id","freeze_id","starts_at","ends_at"],
+"properties":{
+"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id."},
+"freeze_id":{"type":"string","pattern":"` + maintenanceIDPattern + `","description":"Freeze id (UUID)."},
+` + freezeFieldsSchema + `}}`)
+
+	schemaFreezeDeleteInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["id","freeze_id"],
+"properties":{
+"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id."},
+"freeze_id":{"type":"string","pattern":"` + maintenanceIDPattern + `","description":"Freeze id (UUID)."}}}`)
+
+	schemaFreezeOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+` + freezeEntrySchema + `}`)
+
+	schemaFreezeListOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["incarnation","items"],
+"properties":{
+"incarnation":{"type":"string"},
+"items":{"type":"array","items":{` + freezeEntrySchema + `}}}}`)
+
+	schemaMaintenanceDeleteOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["incarnation","id"],
+"properties":{
+"incarnation":{"type":"string"},
+"id":{"type":"string","description":"Id of the deleted window or freeze."}}}`)
 
 	schemaSoulCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

@@ -901,6 +901,22 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationListMembers(newHumaCadenceAPI(r), incH)
 			})
 
+			// /v1/incarnations/{id}/maintenance-windows[/{window_id}] and
+			// /freezes[/{freeze_id}] (epic NIM-1069, NIM-1072). The writes take
+			// incarnation.maintenance-set, the reads incarnation.get, both with incScope.
+			// WRITE-SELF-AUDIT: maintenance_window.* / freeze.* are written by the
+			// handler itself (audit-middleware is NOT wired on this scoped group).
+			r.With(
+				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "get", incScope),
+			).Group(func(r chi.Router) {
+				registerHumaIncarnationMaintenanceRead(newHumaCadenceAPI(r), incH)
+			})
+			r.With(
+				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "maintenance-set", incScope),
+			).Group(func(r chi.Router) {
+				registerHumaIncarnationMaintenanceWrite(newHumaCadenceAPI(r), incH)
+			})
+
 			// /v1/incarnations/{id}/choirs — CRUD of the Choir/Voice topology (ADR-044,
 			// S-T3). A Choir belongs to an incarnation → the same scope selector incScope
 			// (incarnation/service/coven by path-{name}) as incarnation mutations.

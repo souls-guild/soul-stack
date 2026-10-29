@@ -296,6 +296,14 @@ Source of truth for semantics, bodies and CRUD error codes - [rbac.md → REST `
 | `DELETE` | `/v1/incarnations/{id}` | `incarnation.destroy` | `keeper.incarnation.destroy` |
 | `PUT` | `/v1/incarnations/{id}/traits` | `incarnation.traits-set` | `keeper.incarnation.traits-set` |
 | `PUT` | `/v1/incarnations/{id}/label` | `incarnation.label-set` | `keeper.incarnation.label-set` |
+| `GET` | `/v1/incarnations/{id}/maintenance-windows` | `incarnation.get` | `keeper.incarnation.maintenance-window.list` |
+| `POST` | `/v1/incarnations/{id}/maintenance-windows` | `incarnation.maintenance-set` | `keeper.incarnation.maintenance-window.create` |
+| `PUT` | `/v1/incarnations/{id}/maintenance-windows/{window_id}` | `incarnation.maintenance-set` | `keeper.incarnation.maintenance-window.update` |
+| `DELETE` | `/v1/incarnations/{id}/maintenance-windows/{window_id}` | `incarnation.maintenance-set` | `keeper.incarnation.maintenance-window.delete` |
+| `GET` | `/v1/incarnations/{id}/freezes` | `incarnation.get` | `keeper.incarnation.freeze.list` |
+| `POST` | `/v1/incarnations/{id}/freezes` | `incarnation.maintenance-set` | `keeper.incarnation.freeze.create` |
+| `PUT` | `/v1/incarnations/{id}/freezes/{freeze_id}` | `incarnation.maintenance-set` | `keeper.incarnation.freeze.update` |
+| `DELETE` | `/v1/incarnations/{id}/freezes/{freeze_id}` | `incarnation.maintenance-set` | `keeper.incarnation.freeze.delete` |
 | `POST` | `/v1/incarnations/{id}/secrets/reveal` | `incarnation.view-secrets` | — (REST only) |
 | `GET` | `/v1/incarnations/{id}/secrets/revealable` | `incarnation.view-secrets` | — (REST only) |
 

@@ -20,6 +20,9 @@ type (
 	ErrandResult                      = wire.ErrandResult
 	ErrandResultStatus                = wire.ErrandResultStatus
 	ErrandRunRequest                  = wire.ErrandRunRequest
+	Freeze                            = wire.Freeze
+	FreezeListReply                   = wire.FreezeListReply
+	FreezeRequest                     = wire.FreezeRequest
 	GitRefType                        = wire.GitRefType
 	HeraldType                        = wire.HeraldType
 	IncarnationCreateReply            = wire.IncarnationCreateReply
@@ -52,6 +55,10 @@ type (
 	IncarnationUpgradeReply           = wire.IncarnationUpgradeReply
 	IncarnationUpgradeRequest         = wire.IncarnationUpgradeRequest
 	LabelSetRequest                   = wire.LabelSetRequest
+	MaintenanceStatus                 = wire.MaintenanceStatus
+	MaintenanceWindow                 = wire.MaintenanceWindow
+	MaintenanceWindowListReply        = wire.MaintenanceWindowListReply
+	MaintenanceWindowRequest          = wire.MaintenanceWindowRequest
 	OmenViewSourceType                = wire.OmenViewSourceType
 	OperatorAuthMethod                = wire.OperatorAuthMethod
 	PushApplyReply                    = wire.PushApplyReply

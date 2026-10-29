@@ -387,6 +387,17 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **Maintenance windows and freezes per incarnation (NIM-1072, epic NIM-1069).** An incarnation
+  gets its own weekly slots (`days`, `start_time`, `duration_minutes`, IANA `timezone`) and
+  one-off freezes, under `/v1/incarnations/{id}/maintenance-windows` and `/freezes`. The new
+  tables are `incarnation_maintenance_windows` and `incarnation_freezes` (migration 133), and both
+  cascade with the incarnation. The MCP tools are `keeper.incarnation.maintenance-window.*` and
+  `keeper.incarnation.freeze.*`. Writes need the new permission `incarnation.maintenance-set`, and
+  reads stay under `incarnation.get`. The audit events are `maintenance_window.*` and `freeze.*`. A
+  window list read also returns `status {open_now, next_start, active_freeze}`, computed by the one
+  calculator in `keeper/internal/maintenance`, which handles DST, slots across midnight and freezes
+  cutting slots. Nothing starts or defers runs by it yet: that is NIM-1073..1075.
+
 - **A run task's input is shown per host (NIM-985).** `GET /v1/incarnations/{id}/runs/{apply_id}/tasks`
   gains `params_by_host` for a task whose masked params differ between hosts: every leaf of the
   input with the values it took and the hosts that took each, a multi-line value compared line by
@@ -1579,6 +1590,10 @@ order to act in.
     on upgrade gains the ability to change a word on a screen and nothing else. It
     is named here because the roster is meant to be complete, not because it is
     alarming.
+  - **`incarnation.*` now grants `incarnation.maintenance-set`** (NIM-1072): edit
+    the incarnation's maintenance windows and freezes. Its holder decides when
+    a Cadence may start on the incarnation, and a freeze stops automatic runs
+    altogether, the Reaper's cert rotation included.
 
   A role that must not gain these enumerates actions instead of the wildcard.
   The full `soul.*` expansion as of this release is `soul.list`, `soul.create`,

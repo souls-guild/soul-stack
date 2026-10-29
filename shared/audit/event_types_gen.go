@@ -51,6 +51,9 @@ var allEventTypes = []EventType{
 	"errand.invoked",                            // EventTypeErrandInvoked
 	"errand.timed_out",                          // EventTypeErrandTimedOut
 	"eventstream.lease_force_released",          // EventLeaseForceReleased
+	"freeze.created",                            // EventFreezeCreated
+	"freeze.deleted",                            // EventFreezeDeleted
+	"freeze.updated",                            // EventFreezeUpdated
 	"herald.created",                            // EventHeraldCreated
 	"herald.deleted",                            // EventHeraldDeleted
 	"herald.delivered",                          // EventHeraldDelivered
@@ -73,6 +76,9 @@ var allEventTypes = []EventType{
 	"incarnation.upgrade_started",               // EventIncarnationUpgradeStarted
 	"input.vault_resolved",                      // EventInputVaultResolved
 	"ldap_sync.settings_changed",                // EventLDAPSyncSettingsChanged
+	"maintenance_window.created",                // EventMaintenanceWindowCreated
+	"maintenance_window.deleted",                // EventMaintenanceWindowDeleted
+	"maintenance_window.updated",                // EventMaintenanceWindowUpdated
 	"omen.created",                              // EventOmenCreated
 	"omen.label_changed",                        // EventOmenLabelChanged
 	"omen.revoked",                              // EventOmenRevoked

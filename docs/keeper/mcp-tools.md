@@ -169,7 +169,7 @@ Full list of error codes - stable URN suffixes from [operator-api.md → Error t
 
 Extending the code list - only-add symmetrically Operator API.
 
-## Catalog 100 MCP-tool
+## Catalog 108 MCP-tool
 
 1:1 with HTTP endpoints from [operator-api.md → Mapping endpoint ↔ MCP-tool ↔ permission](operator-api.md#mapping-endpoint--mcp-tool--permission). For each tool: input schema (short table of fields), output schema, cross-link to the endpoint section of operator-api.md as a source of truth for semantics.
 
@@ -189,7 +189,7 @@ Moved to a domain file - [mcp-tools/synods.md](mcp-tools/synods.md): `keeper.syn
 
 ### Incarnation (12)
 
-Moved to a domain file - [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.destroy`, `keeper.incarnation.traits-set`, `keeper.incarnation.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md)) - eleven tools with MCP pairing to REST routes [operator-api.md → Incarnation (18)](operator-api.md). Six REST-only routes do not have an MCP tool: `PATCH /v1/incarnations/{id}/hosts`, `POST …/scenarios/{scenario}/form-prefill`, `GET …/runs`, `GET …/runs/{apply_id}`, `POST …/secrets/reveal`, `GET …/secrets/revealable`; global `GET /v1/runs` + `/v1/runs/stats` ([operator-api.md → Runs (2)](operator-api.md)) - also REST-only. The source of truth for semantics is [operator-api/incarnations.md](operator-api/incarnations.md).
+Moved to a domain file - [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.destroy`, `keeper.incarnation.traits-set`, `keeper.incarnation.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md)), and the eight maintenance-window and freeze tools `keeper.incarnation.maintenance-window.list`/`.create`/`.update`/`.delete` and `keeper.incarnation.freeze.list`/`.create`/`.update`/`.delete` (NIM-1072) - tools with MCP pairing to REST routes [operator-api.md → Incarnation (18)](operator-api.md). Six REST-only routes do not have an MCP tool: `PATCH /v1/incarnations/{id}/hosts`, `POST …/scenarios/{scenario}/form-prefill`, `GET …/runs`, `GET …/runs/{apply_id}`, `POST …/secrets/reveal`, `GET …/secrets/revealable`; global `GET /v1/runs` + `/v1/runs/stats` ([operator-api.md → Runs (2)](operator-api.md)) - also REST-only. The source of truth for semantics is [operator-api/incarnations.md](operator-api/incarnations.md).
 
 ### Soul (8)
 

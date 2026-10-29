@@ -13,12 +13,12 @@ package rbac
 import "sort"
 
 // AllowedPermissions — the catalog of permission names from rbac.md →
-// §Catalog of permissions. 123 names (sum of the categories below):
+// §Catalog of permissions. 124 names (sum of the categories below):
 //
 //   - operator (8): create / revoke / issue-token / jwt-revoke / set-password (NIM-1051) / set-owner (NIM-1057) / list / read;
 //   - role (8): create / create-root / delete / list / list-all / update / grant-operator / revoke-operator;
 //   - synod (9): create / update / delete / list / list-all / add-operator / remove-operator / grant-role / revoke-role (ADR-049; list-all — NIM-216);
-//   - incarnation (14): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / traits-set / view-secrets / bind-member / unbind-member (NIM-209) / label-set ([ADR-0085]);
+//   - incarnation (15): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / traits-set / view-secrets / bind-member / unbind-member (NIM-209) / label-set ([ADR-0085]) / maintenance-set (NIM-1072);
 //   - soul (8): list / create / issue-token / coven-assign / traits-assign / ssh-target-update / console (ADR-0074) / forget (NIM-386);
 //   - plugin (3): allow / revoke / list;
 //   - sigil (4): key-introduce / key-retire / key-list / key-set-primary;
@@ -493,6 +493,15 @@ var AllowedPermissions = map[string]struct{}{
 	"tiding.label-set":        {},
 	"vigil.label-set":         {},
 	"decree.label-set":        {},
+
+	// incarnation.maintenance-set — create, update and delete an incarnation's
+	// maintenance windows and freezes (epic NIM-1069, NIM-1072). Reading them
+	// stays under incarnation.get. Separate from incarnation.run on purpose:
+	// whoever edits the windows decides when a Cadence may touch the incarnation,
+	// and a freeze stops it and the Reaper's cert rotation alike, so it is not a
+	// right every operator who may start a run should have. Same incarnation scope as every
+	// other incarnation mutation. Audit: maintenance_window.* and freeze.*.
+	"incarnation.maintenance-set": {},
 }
 
 // IsAllowedPermission checks a `<resource>.<action>` string against the

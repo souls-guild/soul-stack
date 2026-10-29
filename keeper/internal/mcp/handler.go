@@ -535,6 +535,24 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callIncarnationUnbindMember(ctx, claims, req, p.Arguments), false
 	case "keeper.incarnation.members":
 		return h.callIncarnationMembers(ctx, claims, req, p.Arguments), false
+	// Maintenance windows and freezes (NIM-1072); mirror REST
+	// .../maintenance-windows and .../freezes.
+	case "keeper.incarnation.maintenance-window.list":
+		return h.callMaintenanceWindowList(ctx, claims, req, p.Arguments), false
+	case "keeper.incarnation.maintenance-window.create":
+		return h.callMaintenanceWindowCreate(ctx, claims, req, p.Arguments), false
+	case "keeper.incarnation.maintenance-window.update":
+		return h.callMaintenanceWindowUpdate(ctx, claims, req, p.Arguments), false
+	case "keeper.incarnation.maintenance-window.delete":
+		return h.callMaintenanceWindowDelete(ctx, claims, req, p.Arguments), false
+	case "keeper.incarnation.freeze.list":
+		return h.callFreezeList(ctx, claims, req, p.Arguments), false
+	case "keeper.incarnation.freeze.create":
+		return h.callFreezeCreate(ctx, claims, req, p.Arguments), false
+	case "keeper.incarnation.freeze.update":
+		return h.callFreezeUpdate(ctx, claims, req, p.Arguments), false
+	case "keeper.incarnation.freeze.delete":
+		return h.callFreezeDelete(ctx, claims, req, p.Arguments), false
 
 	// Soul-tools (parity with REST POST /v1/souls + issue-token). soul.list
 	// remains a stub (caught by status==toolStatusStub above). 1:1 with
