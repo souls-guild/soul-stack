@@ -45,7 +45,7 @@ func scopeSize(raw []byte) int {
 type MaintenanceGate struct{}
 
 // Decide implements [StartGate].
-func (MaintenanceGate) Decide(ctx context.Context, db ExecQueryRower, v *Voyage, now time.Time) (GateVerdict, error) {
+func (g MaintenanceGate) Decide(ctx context.Context, db ExecQueryRower, v *Voyage, now time.Time) (GateVerdict, error) {
 	var ids []string
 	if err := json.Unmarshal(v.TargetResolved, &ids); err != nil {
 		return GateVerdict{NoStart: true, Reason: "the run's targets cannot be read"}, nil
@@ -54,6 +54,13 @@ func (MaintenanceGate) Decide(ctx context.Context, db ExecQueryRower, v *Voyage,
 	if err != nil {
 		return GateVerdict{}, fmt.Errorf("voyage: start gate: %w", err)
 	}
+	return g.DecideRules(rules, ids, v, now), nil
+}
+
+// DecideRules is [MaintenanceGate.Decide] over the rules of ids, v's targets,
+// loaded by the caller — one that also reads them to explain a NoStart loads
+// them once.
+func (MaintenanceGate) DecideRules(rules map[string]maintenance.Rules, ids []string, v *Voyage, now time.Time) GateVerdict {
 	cals := make([]*maintenance.Calculator, 0, len(rules))
 	for _, id := range ids {
 		r, ok := rules[id]
@@ -66,7 +73,7 @@ func (MaintenanceGate) Decide(ctx context.Context, db ExecQueryRower, v *Voyage,
 			// row beats returning the error: the claim reads the queue head
 			// first, and an error would hold every Voyage behind this one.
 			return GateVerdict{NoStart: true,
-				Reason: fmt.Sprintf("the maintenance windows of incarnation %s cannot be evaluated: %v", id, err)}, nil
+				Reason: fmt.Sprintf("the maintenance windows of incarnation %s cannot be evaluated: %v", id, err)}
 		}
 		cals = append(cals, c)
 	}
@@ -74,10 +81,10 @@ func (MaintenanceGate) Decide(ctx context.Context, db ExecQueryRower, v *Voyage,
 	if !ok {
 		return GateVerdict{NoStart: true, Reason: fmt.Sprintf(
 			"the targets' maintenance windows never meet: no moment within %d days after their last freeze ends at which all of them may start",
-			int(maintenance.CommonStartHorizon/(24*time.Hour)))}, nil
+			int(maintenance.CommonStartHorizon/(24*time.Hour)))}
 	}
 	if start.After(now) {
-		return GateVerdict{DeferTo: start}, nil
+		return GateVerdict{DeferTo: start}
 	}
-	return GateVerdict{}, nil
+	return GateVerdict{}
 }

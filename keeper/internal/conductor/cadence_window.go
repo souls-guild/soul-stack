@@ -27,27 +27,26 @@ type noWindow struct {
 // any target covers: the row records no consent, and a Cadence has no way to
 // give one. A zero time is now. A non-nil noWindow means the targets share no
 // moment at all, which the claim would answer by failing the row.
+//
+// incarnations are row's targets (cadence.BuildVoyage marshals them into
+// TargetResolved), so the rules are loaded once for the gate and the skip.
 func spawnStart(ctx context.Context, db voyage.ExecQueryRower, row *voyage.Voyage, incarnations []string, now time.Time) (time.Time, *noWindow, error) {
-	verdict, err := voyage.MaintenanceGate{}.Decide(ctx, db, row, now)
+	rules, err := maintenance.LoadRules(ctx, db, incarnations)
 	if err != nil {
 		return time.Time{}, nil, err
 	}
+	verdict := voyage.MaintenanceGate{}.DecideRules(rules, incarnations, row, now)
 	if !verdict.NoStart {
 		return verdict.DeferTo, nil, nil
 	}
-	nw, err := describeNoWindow(ctx, db, incarnations, now)
-	return time.Time{}, nw, err
+	return time.Time{}, describeNoWindow(rules, len(incarnations), now), nil
 }
 
 // describeNoWindow lists, per incarnation, when it opens on its own. Only
 // incarnations with windows or freezes are listed: one with neither is always
 // open and never the reason. Broken ones come first: one of them alone explains
 // the skip, and the cap must not hide it behind twenty that are merely closed.
-func describeNoWindow(ctx context.Context, db maintenance.DB, incarnations []string, now time.Time) (*noWindow, error) {
-	rules, err := maintenance.LoadRules(ctx, db, incarnations)
-	if err != nil {
-		return nil, err
-	}
+func describeNoWindow(rules map[string]maintenance.Rules, incarnations int, now time.Time) *noWindow {
 	names := make([]string, 0, len(rules))
 	for inc := range rules {
 		names = append(names, inc)
@@ -58,11 +57,11 @@ func describeNoWindow(ctx context.Context, db maintenance.DB, incarnations []str
 	for i, inc := range names {
 		calcs[i], errs[i] = rules[inc].Gate(true, nil)
 	}
-	nw := &noWindow{incarnations: len(incarnations)}
+	nw := &noWindow{incarnations: incarnations}
 	for _, wantBroken := range []bool{true, false} {
 		for i, inc := range names {
 			if len(nw.rows) == noWindowListMax {
-				return nw, nil
+				return nw
 			}
 			if (errs[i] != nil) != wantBroken {
 				continue
@@ -76,5 +75,5 @@ func describeNoWindow(ctx context.Context, db maintenance.DB, incarnations []str
 			nw.rows = append(nw.rows, row)
 		}
 	}
-	return nw, nil
+	return nw
 }

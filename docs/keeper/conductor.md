@@ -18,7 +18,7 @@ A background, leader-elected subsystem inside the `keeper` binary — the execut
 
 When an instance holds the lease `conductor:leader`, on each tick it performs the same due-selection and spawn normalized in [ADR-046 §4/§5](../adr/0046-cadence.md):
 
-1. `SELECT … FROM cadences WHERE enabled AND next_run_at <= NOW() FOR UPDATE SKIP LOCKED` — selecting matured schedules.
+1. `SELECT … FROM cadences WHERE enabled AND next_run_at <= NOW() FOR UPDATE SKIP LOCKED` — selecting matured schedules, at most 100 per tick, oldest `next_run_at` first. A `queue` schedule whose previous run is still live is left out: it would neither spawn nor advance, and enough of them waiting for a maintenance window would fill every batch ([ADR-046, amendment 2026-10-29](../adr/0046-cadence.md#amendment-2026-10-29-nim-1113-a-held-queue-schedule-is-not-picked)).
 2. For each due row **in a single PG transaction**: apply `overlap_policy` (`skip` / `queue` / `parallel`) → on an allowed spawn, `INSERT` into `voyages` / `voyage_targets` with `cadence_id` → recompute `next_run_at` (cron parser for `cron`, anchored `next_run_at + interval_seconds` for `interval`) → `last_run_at = NOW()`.
 
    **The recompute anchor is the planned slot, not `NOW()`.** For `interval`, the next run is computed from the **previous planned `next_run_at`** (the one by which the row became due), not from the actual `last_run_at`/`NOW()` — otherwise tick drift (Conductor fired a bit past the deadline) would accumulate and slots would "walk off". Anchoring to the planned grid makes the interval drift-free. See [ADR-046 §4](../adr/0046-cadence.md).

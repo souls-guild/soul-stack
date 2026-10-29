@@ -185,6 +185,11 @@ func TestProcessOne_InMaintenanceWindow_NoCommonWindow_IsARecordedSkip(t *testin
 	if rec == nil || rec.skipReason != skipReasonNoWindow {
 		t.Fatalf("record = %+v; want a no_window skip", rec)
 	}
+	// The gate and the skip's explanation read one set of rules: the skip
+	// recurs at every slot, inside the transaction that locks the batch.
+	if tx.windowQueries != 1 {
+		t.Fatalf("window reads = %d; want 1", tx.windowQueries)
+	}
 
 	ad := &spawnAudit{}
 	newSpawnerFor(tx, stubResolver{}, ad).emit(context.Background(), rec)

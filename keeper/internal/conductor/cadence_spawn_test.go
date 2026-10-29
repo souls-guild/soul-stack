@@ -33,6 +33,7 @@ type spawnFakeTx struct {
 	// means no incarnation has any.
 	windows       []maintenance.Window
 	freezes       []maintenance.Freeze
+	windowQueries int
 	deferredCalls int
 
 	execCalls    int // AdvanceSchedule
@@ -75,6 +76,7 @@ func (t *spawnFakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.R
 func (t *spawnFakeTx) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
 	switch {
 	case strings.Contains(sql, "FROM incarnation_maintenance_windows"):
+		t.windowQueries++
 		ids, _ := args[0].([]string)
 		var vals [][]any
 		for _, w := range t.windows {

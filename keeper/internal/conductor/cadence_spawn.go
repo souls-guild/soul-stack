@@ -258,6 +258,8 @@ func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.C
 		if c.OverlapPolicy == cadence.OverlapPolicyQueue {
 			// queue: don't advance next_run_at — leave the row due, the next
 			// tick retries the check. No audit (this is waiting, not a skip).
+			// The due pick leaves such a row out already (NIM-1113); this
+			// check, under the row lock, is the one that decides.
 			return nil, false, nil
 		}
 		// skip (and parallel behind a deferred child): spawn skipped, but the

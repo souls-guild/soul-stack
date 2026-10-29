@@ -574,17 +574,24 @@ func SetEnabled(ctx context.Context, db ExecQueryRower, id string, enabled bool)
 const selectDueForUpdateSQL = `SELECT ` + selectColumns + `
 FROM cadences
 WHERE enabled AND next_run_at IS NOT NULL AND next_run_at <= NOW()
+  AND NOT (overlap_policy = 'queue' AND EXISTS(
+      SELECT 1 FROM voyages v
+      WHERE v.cadence_id = cadences.id AND v.status ` + liveVoyageStatusSQL + `
+  ))
 ORDER BY next_run_at ASC
 FOR UPDATE SKIP LOCKED
 LIMIT $1
 `
 
 // SelectDueForUpdate reads due schedules (enabled AND next_run_at <= NOW())
-// under FOR UPDATE SKIP LOCKED — the basis of the Reaper rule
-// spawn_due_cadence spawn-tx (ADR-046 §4). SKIP LOCKED gives single-executor
-// semantics even if several Keeper instances happen to enter spawn at once
-// (though normally only the Reaper leader spawns): a row locked by one tx is
-// skipped by another.
+// under FOR UPDATE SKIP LOCKED — the basis of the Conductor's spawn tx
+// (ADR-046 §4, ADR-048). SKIP LOCKED gives single-executor semantics even if
+// several Keeper instances happen to enter spawn at once (though normally only
+// the Conductor leader spawns): a row locked by one tx is skipped by another.
+//
+// A `queue` schedule with a live child is not picked: it would neither spawn
+// nor advance, only take a slot of the batch, and a hundred of them waiting for
+// a window would starve every other due schedule until it opens (NIM-1113).
 //
 // db MUST be a pgx.Tx (the FOR UPDATE lock is held until the end of the
 // transaction that does the spawn + schedule advance). limit caps the number
@@ -748,11 +755,16 @@ func AdvanceSchedule(ctx context.Context, db ExecQueryRower, id string, nextRunA
 	return nil
 }
 
+// liveVoyageStatusSQL is the non-terminal half of voyage.IsTerminal, shared by
+// the overlap check and the due pick: if they disagreed, the pick would hand
+// processOne a queue row it then holds, or hide one it would spawn.
+const liveVoyageStatusSQL = `NOT IN ('succeeded', 'failed', 'partial_failed', 'cancelled')`
+
 const hasLiveChildSQL = `
 SELECT EXISTS(
     SELECT 1 FROM voyages
     WHERE cadence_id = $1
-      AND status NOT IN ('succeeded', 'failed', 'partial_failed', 'cancelled')
+      AND status ` + liveVoyageStatusSQL + `
 )
 `
 

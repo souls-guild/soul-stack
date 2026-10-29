@@ -586,15 +586,19 @@ func seedChild(t *testing.T, cadenceID string, status voyage.Status) string {
 	return id
 }
 
-// TestIntegration_Spawn_LiveChildMatchesIsTerminal — the SQL literal in
-// hasLiveChildSQL and the Go function voyage.IsTerminal are two copies of one
-// list, and nothing in the build compares them.
+// TestIntegration_Spawn_LiveChildMatchesIsTerminal — the SQL literal
+// liveVoyageStatusSQL and the Go function voyage.IsTerminal are two copies of
+// one list, and nothing in the build compares them.
 //
-// Driven off the declared Status set rather than a hand-written pair of lists,
-// so a status added to voyage without amending the SQL fails here. The
+// Driven off one list of every Status, checked against voyage.IsTerminal,
+// rather than a hand-written pair of lists, so a status that moves between live
+// and terminal without amending the SQL fails here. A new Status has to be
+// added to that list to be checked at all. The
 // consequence of drift is one-sided and quiet: a new terminal status the SQL
 // does not know keeps counting as "live", so every skip/queue schedule with a
-// finished child stops spawning and nothing reports it.
+// finished child stops spawning and nothing reports it. Both readers of the
+// list are asked: the overlap check, and the due pick that leaves a held queue
+// row out (NIM-1113) — a queue row the pick hides is never checked at all.
 func TestIntegration_Spawn_LiveChildMatchesIsTerminal(t *testing.T) {
 	all := []voyage.Status{
 		voyage.StatusScheduled, voyage.StatusPending, voyage.StatusRunning,
@@ -616,8 +620,28 @@ func TestIntegration_Spawn_LiveChildMatchesIsTerminal(t *testing.T) {
 			want := !voyage.IsTerminal(st)
 			if live != want {
 				t.Errorf("HasLiveChild with a %q child = %v, want %v — "+
-					"the terminal set in hasLiveChildSQL and voyage.IsTerminal have drifted",
+					"the terminal set in liveVoyageStatusSQL and voyage.IsTerminal have drifted",
 					st, live, want)
+			}
+
+			queued := seedCadence(t, cadenceID(51), cadence.OverlapPolicyQueue, -time.Minute)
+			seedChild(t, queued.ID, st)
+			tx, err := integrationPool.Begin(ctx)
+			if err != nil {
+				t.Fatalf("Begin: %v", err)
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			due, err := cadence.SelectDueForUpdate(ctx, tx, 10)
+			if err != nil {
+				t.Fatalf("SelectDueForUpdate: %v", err)
+			}
+			picked := false
+			for _, c := range due {
+				picked = picked || c.ID == queued.ID
+			}
+			if picked != !want {
+				t.Errorf("due pick of a queue schedule with a %q child = %v, want %v — "+
+					"the due pick and voyage.IsTerminal have drifted", st, picked, !want)
 			}
 		})
 	}

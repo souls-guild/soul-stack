@@ -21,12 +21,12 @@
    - **Computed timings:** `next_run_at` (timestamptz — when to spawn the next Voyage), `last_run_at` (timestamptz nullable — the moment of the last spawn).
    - `created_by_aid` (FK `operators(aid)`), `created_at` / `updated_at`.
 
-4. **Trigger — a leader-elected executor (Conductor).** The spawn is driven by a **single-executor** leader ([ADR-006](0006-cache-redis.md#adr-006-cache-and-coordination--redis) Redis lease), which gives exactly-one-spawn per tick without a race between Keeper instances. On each tick: `SELECT … FROM cadences WHERE enabled AND next_run_at <= NOW() FOR UPDATE SKIP LOCKED` → for each due row in **one PG transaction**: (apply `overlap_policy`, p.5) + Insert `voyages`/`voyage_targets` with `cadence_id` (if the policy allows a spawn) + recompute `next_run_at` + `last_run_at = NOW()`. The recompute of `next_run_at` is **anchored to the planned slot** (`next_run_at` BEFORE the recompute), not to `last_run_at`/`NOW()`: for `interval` — `planned_slot + interval_seconds`, for `cron` — the next cron moment by the parser from the planned slot. The anchor is precisely the planned slot, because `last_run_at = NOW()` in the same tx, and `last_run_at + interval` would again give a now-anchor (the tick arrives at `NOW() ≈ planned_slot + ε`, the drift ε would accumulate in `next_run_at` and the ticker would miss the grid). **Missed-slot policy** (after downtime, the planned slot is in the past): `next_run_at` is recomputed to the **first future grid slot strictly after `NOW()`** — one catch-up spawn per current due, WITHOUT re-spawning every missed slot (anti-storm); symmetric for cron and interval. The spawned Voyage enters the ordinary Voyage lifecycle (`pending` → claim by the VoyageWorker → `running` → terminal); Cadence does **not** drive it further (a one-shot spawn, like `current_apply_id` in the Tide-spawn path of ADR-027).
+4. **Trigger — a leader-elected executor (Conductor).** The spawn is driven by a **single-executor** leader ([ADR-006](0006-cache-redis.md#adr-006-cache-and-coordination--redis) Redis lease), which gives exactly-one-spawn per tick without a race between Keeper instances. On each tick: `SELECT … FROM cadences WHERE enabled AND next_run_at <= NOW() FOR UPDATE SKIP LOCKED` (a `queue` row with a live child is left out — [amendment 2026-10-29](#amendment-2026-10-29-nim-1113-a-held-queue-schedule-is-not-picked)) → for each due row in **one PG transaction**: (apply `overlap_policy`, p.5) + Insert `voyages`/`voyage_targets` with `cadence_id` (if the policy allows a spawn) + recompute `next_run_at` + `last_run_at = NOW()`. The recompute of `next_run_at` is **anchored to the planned slot** (`next_run_at` BEFORE the recompute), not to `last_run_at`/`NOW()`: for `interval` — `planned_slot + interval_seconds`, for `cron` — the next cron moment by the parser from the planned slot. The anchor is precisely the planned slot, because `last_run_at = NOW()` in the same tx, and `last_run_at + interval` would again give a now-anchor (the tick arrives at `NOW() ≈ planned_slot + ε`, the drift ε would accumulate in `next_run_at` and the ticker would miss the grid). **Missed-slot policy** (after downtime, the planned slot is in the past): `next_run_at` is recomputed to the **first future grid slot strictly after `NOW()`** — one catch-up spawn per current due, WITHOUT re-spawning every missed slot (anti-storm); symmetric for cron and interval. The spawned Voyage enters the ordinary Voyage lifecycle (`pending` → claim by the VoyageWorker → `running` → terminal); Cadence does **not** drive it further (a one-shot spawn, like `current_apply_id` in the Tide-spawn path of ADR-027).
    - **Executor — Conductor, a separate leader-elected subsystem ([ADR-048](0048-conductor.md#adr-048-conductor--leader-elected-executor-of-cadence-schedules)).** **Amendment 2026-06-02:** initially (S0) the spawn was hung on the **Reaper leader** via a new Reaper rule `spawn_due_cadence` (`action: spawn`). This has been moved into a separate subsystem **Conductor** with its own Redis lease `conductor:leader` and its own tick-interval (`cadence_scheduler.interval`, ~15–30s) — independent of `reaper.interval` (1h): the cleanup domain of Reaper and the scheduling domain of Cadence have different natural rhythms, a common 1h tick does not let Cadence spawn frequently (see [ADR-048 "Context"](0048-conductor.md#adr-048-conductor--leader-elected-executor-of-cadence-schedules)). **The spawn semantics (due selection, three `overlap_policy`, recompute of `next_run_at`, single-executor) is carried over unchanged** — only the executor changes. After the extraction (C4) Reaper **loses** the rule `spawn_due_cadence` and `action: spawn`; the closed-enum Reaper action returns to `expire`/`delete`/`set_status`/`report`/`soft_delete`. Conductor is **default-ON when Redis is present** (a schedule without a working scheduler silently does not spawn — a footgun guard); it is turned off per-Cadence via `enabled: false`, not by a global kill.
 
 5. **`overlap_policy` — three policies (the operator chooses at creation).** When `next_run_at` has come, but the previous Voyage spawned by this Cadence is not yet terminal (`pending`/`running`):
    - **`skip`** — the spawn is skipped; the audit event `cadence.skipped_overlap` is written; `next_run_at` is recomputed anyway (the series does not "stick"). Protection against accumulating runs when the period is shorter than the run duration.
-   - **`queue`** — the spawn is postponed: the next Voyage starts only after the previous one's terminal (Cadence does not spawn while there is a live child; on the next due tick, if the previous one is still running, it stays waiting). Guarantees strict sequentiality without losing launches.
+   - **`queue`** — the spawn is postponed: the next Voyage starts only after the previous one's terminal (Cadence does not spawn while there is a live child; on the next due tick, if the previous one is still running, it stays waiting). Guarantees strict sequentiality without losing launches — as built, the slots that come due while it waits give one spawn (§4 missed-slot policy). While it waits, the due selection does not pick it, so it takes no place in a tick's batch ([amendment 2026-10-29](#amendment-2026-10-29-nim-1113-a-held-queue-schedule-is-not-picked)).
    - **`parallel`** — the spawn happens regardless of the state of the previous ones: the new Voyage starts overlapping (several children of one Cadence can be `running` simultaneously). Workers/concurrency limits are at the level of the Voyage/Acolyte itself. **Since NIM-1075 a child still waiting for its start (`scheduled`, deferred to a maintenance window or past a freeze) holds `parallel` back as `skip` would** — see the amendment of 2026-10-27 and its "As built" note below.
    - **All three — an MVP goal** (the user's decision; `queue` is not postponed). The check "is there a live previous child" — `EXISTS(SELECT 1 FROM voyages WHERE cadence_id=$1 AND status NOT IN (<terminal>))` in the same spawn tx.
 
@@ -96,3 +96,38 @@ its target incarnations; targets with no common open moment within the bound of 
 `cadence.skipped_no_window`; a child waiting for its start holds back `overlap_policy: parallel`
 as well as `skip`/`queue`; `in_maintenance_window` on a `kind: command` recipe is refused (422).
 Full text — [ADR-0093, amendment 2026-10-28](0093-maintenance-window.md#amendment-2026-10-28-nim-1075-a-cadence-spawn-and-the-window).
+
+### Amendment 2026-10-29 (NIM-1113): a held `queue` schedule is not picked
+
+A `queue` schedule with a live child neither spawns nor advances (§5), so its `next_run_at` stays
+in the past for as long as the child lives. The due selection used to pick it anyway. It ordered
+by `next_run_at` and took the first `LIMIT` rows (100 per tick), so the oldest rows were the held
+ones. A hundred `queue` schedules whose children wait for a 02:00 window filled every tick's batch
+all day. No other due schedule was reached until the window opened and those runs ended. A
+long-running child caused the same thing before windows existed, but only for the length of the
+run.
+
+- **The due selection leaves out a `queue` row with a live child** (user, 2026-10-29):
+  `AND NOT (overlap_policy = 'queue' AND EXISTS(<a non-terminal child>))`. "Live" is the same
+  status set as the §5 overlap check, because both read one SQL fragment
+  (`keeper/internal/cadence/crud.go`). The two are separate statements: a child that ends between
+  them leaves its row out for one tick.
+- **Nothing else about `queue` changes.** The row is not advanced and nothing is audited while it
+  waits. On the first tick after its child ends, it is a due row again with its `next_run_at` still
+  in the past. It is processed like any due row: the overlap check runs again under the row lock
+  and decides, the other gates of the spawn (an empty target, the console gate, no common window)
+  may still skip it, and the §4 missed-slot rule turns the slots missed while it waited into at
+  most one spawn.
+- The filter reads only `queue`. `skip` and `parallel` rows are picked as before.
+- **Rejected: moving a held row's `next_run_at` to its child's `schedule_at`.** That would cover
+  only a child waiting for a window, not one that is running. On an `interval` schedule it would
+  also move the series off its grid, re-anchored at the window start (§4). And a freeze added after
+  the tick defers the child at the claim (ADR-0093 §3), so the copied time goes stale and the row is
+  held at the head of the batch again.
+- **The cost moved, and it has no new index** (user, 2026-10-29). Before, the overlap check ran for
+  at most the 100 rows a tick picked. Now the selection probes every held `queue` row on every
+  tick, because those are the oldest rows and the filter runs before `LIMIT`. Each probe is a
+  lookup in `voyages_cadence_id_idx` (`cadence_id` only) that reads that schedule's children until
+  it finds a live one. With the `purge_voyages` rule on, that history is bounded by its `max_age`
+  (30 days by default); without it, the history is unbounded. If held schedules grow into the
+  thousands, the lever is a partial index on non-terminal children.
