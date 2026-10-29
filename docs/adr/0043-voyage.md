@@ -152,3 +152,13 @@ Three entities, three PG tables (`tides` / `errand_runs` / `apply_runs`), three 
 - **The `kind=command` code reaches the row** (NIM-617): the Errand bridge already classified a pre-dispatch refusal (`soul_not_connected`, the three `dry_run` capability codes, …) and the Voyage spawner discarded it; `CommandSpawner.SpawnCommand` now returns it. This closes the "the row does not say why" limit of the 2026-08-08 amendment.
 
 Item 4's `voyage_targets` columns are extended by the two above; nothing else in this ADR changes.
+
+### Amendment 2026-10-27 (NIM-1071): a scheduled Voyage carries a run deferred to a maintenance window
+
+A run of an incarnation that asks for its maintenance window (`in_maintenance_window: true`) and
+cannot start in one becomes a `scheduled` Voyage with `schedule_at = NextStart(now)` — the existing
+deferred start, with no new state. The claim asks the window and freeze gate for every scenario
+Voyage, and decides it before the row leaves `pending` or `scheduled`. The create request gains
+`in_maintenance_window` and `confirm_freeze`; a run whose start falls inside a freeze without
+consent is refused with 409 `freeze-active`. `kind: command` is unaffected. Full text —
+[ADR-0093](0093-maintenance-window.md).

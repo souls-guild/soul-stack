@@ -82,3 +82,11 @@
 - **Migration 075** (`075_create_purge_voyages.up.sql`) — the SQL function `purge_voyages(max_age interval, batch_limit integer DEFAULT 1000)`: batch-delete of finished Voyages (`succeeded`/`failed`/`partial_failed`/`cancelled` with `finished_at IS NOT NULL`) older than `max_age`; does not touch `scheduled`/`pending`/`running`. Age — from `finished_at` (parity with `purge_apply_runs`, 021). `voyage_targets` are carried away by `ON DELETE CASCADE` (059). The LIMIT parameter is named `batch_limit` (not `batch_size`), because `voyages` carries a column of the same name — otherwise `LIMIT batch_size` would give `column reference ambiguous` (42702).
 - **Go wrapper** `reaper.Purger.PurgeVoyages` (`keeper/internal/reaper/purger.go`) — one batch through the common `callIntervalBatch` path of Reaper rules.
 - **Cascades and the correlation invariant:** the soft links `voyage_targets.apply_id`/`errand_id` (to `apply_runs`/`errands`) and `tidings.voyage_id` (ephemeral) — are NOT FKs to `voyages`, purge does not delete them and leaves no broken references (ephemeral Tidings are removed earlier by the rule `purge_orphan_ephemeral_tidings`). `voyages.cadence_id` → `cadences` `ON DELETE SET NULL` (066): purge of children does NOT touch the schedule. The default window is aligned with `purge_apply_runs` (30d), so that the drill "voyage → apply_runs" does not lose one of the sides.
+
+### Amendment 2026-10-27 (NIM-1071): a Cadence spawn and the incarnation's maintenance window
+
+The run recipe gains `in_maintenance_window`, the same field as the Voyage create request; a
+spawned Voyage carries it and is deferred to the incarnation's next open moment. A spawn of a
+`kind: scenario` Cadence never starts during a freeze of its incarnation, flag or no flag: it is
+deferred past the freeze, and a Cadence has no consent path. Full text —
+[ADR-0093](0093-maintenance-window.md).
