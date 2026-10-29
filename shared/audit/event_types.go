@@ -1116,15 +1116,16 @@ const (
 	// via the Operator API (`POST /v1/cadences`) or an MCP tool. `source: api`
 	// or `mcp`, `archon_aid` = the initiator's JWT.sub (created_by_aid is taken
 	// from the context, NOT from the body). Payload: `{cadence_id, name,
-	// schedule_kind, kind, scenario_name?, module?, overlap_policy, enabled}` —
-	// the recipe's `input` is NOT put in the payload (invariant A ADR-027).
+	// schedule_kind, kind, scenario_name?, module?, overlap_policy, enabled,
+	// in_maintenance_window}` — the recipe's `input` is NOT put in the payload
+	// (invariant A ADR-027).
 	EventCadenceCreated EventType = "cadence.created"
 
 	// EventCadenceUpdated — an Archon changed a Cadence (recipe / schedule /
 	// enabled toggle) via `PATCH /v1/cadences/{id}` or an MCP tool. `source:
 	// api`/`mcp`, `archon_aid` is the initiator. Payload: `{cadence_id, name,
-	// schedule_kind, kind, overlap_policy, enabled}` (fields after the edit;
-	// `input` is not included).
+	// schedule_kind, kind, overlap_policy, enabled, in_maintenance_window}`
+	// (fields after the edit; `input` is not included).
 	EventCadenceUpdated EventType = "cadence.updated"
 
 	// EventCadenceDeleted — an Archon deleted a Cadence via
@@ -1144,15 +1145,18 @@ const (
 	// value is NOT in the closed audit.Source enum, see observations), `archon_aid` = the Cadence's `created_by_aid` (spawn on
 	// behalf of the creator, ADR-046 §7), `correlation_id` = voyage_id. Payload:
 	// `{cadence_id, voyage_id, scheduled_for, scope_size}` — `scheduled_for` is
-	// the planned moment (next_run_at before recompute); the recipe's `input`
-	// is NOT put in the payload (invariant A ADR-027).
+	// the planned moment (next_run_at before recompute); plus `schedule_at` when
+	// the child waits for a maintenance window or a freeze's end (ADR-0093 §4,
+	// NIM-1075); the recipe's `input` is NOT put in the payload (invariant A
+	// ADR-027).
 	EventCadenceSpawned EventType = "cadence.spawned"
 
 	// EventCadenceSkippedOverlap — `overlap_policy: skip` skipped a spawn due to
 	// a live previous child (ADR-046 §5/§8): next_run_at arrived, but the
 	// Cadence has a non-terminal (pending/scheduled/running) child Voyage → the
 	// spawn does NOT happen, next_run_at is recomputed anyway (the series does
-	// not "stick"). `source: background`, `archon_aid` = `created_by_aid`,
+	// not "stick"). `parallel` writes it too while a child waits for its start
+	// (`scheduled`, ADR-0093 §4). `source: background`, `archon_aid` = `created_by_aid`,
 	// `correlation_id` = cadence_id (no voyage_id — there was no spawn).
 	// Payload: `{cadence_id, scheduled_for, reason: "overlap"}`.
 	EventCadenceSkippedOverlap EventType = "cadence.skipped_overlap"
@@ -1172,6 +1176,21 @@ const (
 	// `soul.console` on it is the fix; the recipe's `input` is NOT in the payload
 	// (invariant A ADR-027).
 	EventCadenceSkippedForbidden EventType = "cadence.skipped_forbidden"
+
+	// EventCadenceSkippedNoWindow — a due `in_maintenance_window` Cadence did NOT
+	// spawn because its target incarnations share no open moment within
+	// maintenance.CommonStartHorizon (ADR-0093 §4, NIM-1075): their windows never
+	// overlap, or one no longer compiles. A Voyage request in the same position is
+	// refused with 422; a schedule has nobody to answer, so it records the skip
+	// and advances, and the next tick asks again. A separate type for the same
+	// reason as `skipped_forbidden`: the schedule produces no runs until an
+	// operator changes the windows or the target.
+	// `source: background`, `correlation_id` = cadence_id. Payload: `{cadence_id,
+	// scheduled_for, reason: "no_window", incarnation_count, next_starts}` —
+	// next_starts is at most 20 `{incarnation, next_start | error}` rows by
+	// incarnation, only those with windows or freezes, broken ones first — what
+	// the operator needs to see why they never meet.
+	EventCadenceSkippedNoWindow EventType = "cadence.skipped_no_window"
 
 	// EventHeraldDelivered — the terminal of a SUCCESSFUL notification delivery
 	// to a Herald channel (ADR-052(d), S3): the claim-queue worker did a webhook

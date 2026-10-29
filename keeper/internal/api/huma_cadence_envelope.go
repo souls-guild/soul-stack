@@ -86,6 +86,7 @@ type cadence struct {
 	FailThresholdPercent *int          `json:"fail_threshold_percent,omitempty"`
 	RequireAlive         *bool         `json:"require_alive,omitempty"`
 	OnFailure            string        `json:"on_failure,omitempty" enum:"abort,continue"`
+	InMaintenanceWindow  bool          `json:"in_maintenance_window" doc:"each spawn is deferred to the first moment every target incarnation is open (ADR-0093)"`
 	NextRunAt            *time.Time    `json:"next_run_at,omitempty"`
 	LastRunAt            *time.Time    `json:"last_run_at,omitempty"`
 	CreatedByAID         string        `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern

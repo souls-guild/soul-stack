@@ -64,6 +64,9 @@ type CadenceSpawner struct {
 	soulReader soul.ExecQueryRower
 
 	logger *slog.Logger
+
+	// now is the clock the window and freeze decisions read; nil is time.Now.
+	now func() time.Time
 }
 
 // ConsoleChecker is the narrow RBAC surface the spawn path needs — one
@@ -123,18 +126,23 @@ type spawnedRecord struct {
 	cadenceID    string
 	voyageID     string // empty for a skip record
 	scheduledFor time.Time
+	scheduleAt   *time.Time // the spawned Voyage's deferred start; nil when it starts at once
 	scopeSize    int
 	skipped      bool   // true → a skip event, false → spawned
 	skipReason   string // why the spawn was skipped; empty ⇒ overlap
 	module       string // verb-shell module of a gate-skipped recipe (skipReasonConsoleRequired)
+	noWindow     *noWindow
 }
 
 // Skip reasons carried by [spawnedRecord]. `overlap` is the original
 // overlap_policy skip; `console_required` is the console gate refusing a recipe
-// whose creator no longer satisfies it (NIM-197).
+// whose creator no longer satisfies it (NIM-197); `no_window` is an
+// in_maintenance_window recipe whose incarnations share no open moment
+// (NIM-1075).
 const (
 	skipReasonOverlap         = "overlap"
 	skipReasonConsoleRequired = "console_required"
+	skipReasonNoWindow        = "no_window"
 )
 
 // Run performs one iteration of due-cadence spawning. Returns the number of
@@ -176,6 +184,9 @@ func (s *CadenceSpawner) Run(ctx context.Context, _ time.Duration, batchSize int
 		records []spawnedRecord
 	)
 	now := time.Now().UTC()
+	if s.now != nil {
+		now = s.now().UTC()
+	}
 	for _, c := range due {
 		rec, didSpawn, perr := s.processOne(ctx, tx, c, now)
 		if perr != nil {
@@ -211,53 +222,64 @@ func (s *CadenceSpawner) Run(ctx context.Context, _ time.Duration, batchSize int
 // Returns (record for audit | nil, whether a spawn happened, error).
 //
 // overlap_policy decisions (ADR-046 §5):
-//   - parallel — always spawn (no live check needed).
+//   - parallel — spawn alongside running children; only a deferred one holds
+//     it back (below).
 //   - skip     — live child exists → do NOT spawn, audit skipped_overlap,
 //     next_run_at is still recalculated (the series doesn't stall).
 //   - queue    — live child exists → do NOT spawn and do NOT advance
 //     next_run_at: the next tick retries as soon as the previous child
 //     terminates (simple queue semantics — "wait for completion, the nearest
 //     due tick picks it up").
+//
+// A child deferred to a window or past a freeze is `scheduled`, so it is live
+// for skip and queue as it stands. Under parallel it is the one child that
+// holds the spawn back, as skip would (ADR-0093 §4): otherwise every tick of the
+// wait would add a run, and all of them would start together when it ends.
 func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.Cadence, now time.Time) (*spawnedRecord, bool, error) {
 	scheduledFor := now
 	if c.NextRunAt != nil {
 		scheduledFor = c.NextRunAt.UTC()
 	}
 
-	if c.OverlapPolicy != cadence.OverlapPolicyParallel {
-		live, err := cadence.HasLiveChild(ctx, tx, c.ID)
-		if err != nil {
-			return nil, false, err
+	var (
+		held bool
+		err  error
+	)
+	switch {
+	case c.OverlapPolicy != cadence.OverlapPolicyParallel:
+		held, err = cadence.HasLiveChild(ctx, tx, c.ID)
+	case c.Kind == cadence.KindScenario:
+		held, err = cadence.HasDeferredChild(ctx, tx, c.ID)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if held {
+		if c.OverlapPolicy == cadence.OverlapPolicyQueue {
+			// queue: don't advance next_run_at — leave the row due, the next
+			// tick retries the check. No audit (this is waiting, not a skip).
+			return nil, false, nil
 		}
-		if live {
-			switch c.OverlapPolicy {
-			case cadence.OverlapPolicyQueue:
-				// queue: don't advance next_run_at — leave the row due, the next
-				// tick retries the check. No audit (this is waiting, not a skip).
-				return nil, false, nil
-			case cadence.OverlapPolicySkip:
-				// skip: spawn skipped, but the schedule advances (the series
-				// doesn't stall). Anchored to the planned slot (scheduledFor),
-				// not to now — otherwise the skip series would drift the same
-				// way as the spawn path (ADR-046 §4).
-				nextRun, nerr := cadence.NextRunAnchored(c, scheduledFor, now)
-				if nerr != nil {
-					return nil, false, nerr
-				}
-				if aerr := cadence.AdvanceSchedule(ctx, tx, c.ID, nextRun, nil); aerr != nil {
-					return nil, false, aerr
-				}
-				return &spawnedRecord{
-					cadenceID:    c.ID,
-					scheduledFor: scheduledFor,
-					skipped:      true,
-					skipReason:   skipReasonOverlap,
-				}, false, nil
-			}
+		// skip (and parallel behind a deferred child): spawn skipped, but the
+		// schedule advances (the series doesn't stall). Anchored to the planned
+		// slot (scheduledFor), not to now — otherwise the skip series would
+		// drift the same way as the spawn path (ADR-046 §4).
+		nextRun, nerr := cadence.NextRunAnchored(c, scheduledFor, now)
+		if nerr != nil {
+			return nil, false, nerr
 		}
+		if aerr := cadence.AdvanceSchedule(ctx, tx, c.ID, nextRun, nil); aerr != nil {
+			return nil, false, aerr
+		}
+		return &spawnedRecord{
+			cadenceID:    c.ID,
+			scheduledFor: scheduledFor,
+			skipped:      true,
+			skipReason:   skipReasonOverlap,
+		}, false, nil
 	}
 
-	// Spawn allowed (parallel, or skip/queue with no live child).
+	// Spawn allowed: nothing above held it back.
 	resolved, err := s.resolveScope(ctx, c)
 	if err != nil {
 		return nil, false, err
@@ -310,6 +332,34 @@ func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.C
 
 	voyageID := cadence.NewVoyageID()
 	row, targets := cadence.BuildVoyage(c, voyageID, resolved)
+	var startAt time.Time
+	if c.Kind == cadence.KindScenario {
+		at, nw, serr := spawnStart(ctx, tx, row, resolved, now)
+		if serr != nil {
+			return nil, false, serr
+		}
+		if nw != nil {
+			// Recorded skip, as the console gate's: a Voyage request here is
+			// refused with 422, and a schedule has nobody to answer it.
+			if aerr := cadence.AdvanceSchedule(ctx, tx, c.ID, nextRun, nil); aerr != nil {
+				return nil, false, aerr
+			}
+			return &spawnedRecord{
+				cadenceID:    c.ID,
+				scheduledFor: scheduledFor,
+				skipped:      true,
+				skipReason:   skipReasonNoWindow,
+				noWindow:     nw,
+			}, false, nil
+		}
+		startAt = at
+	}
+	if startAt.After(now) {
+		// Status set here rather than left to Insert, which compares
+		// schedule_at with the wall clock, not with this tick's now.
+		at := startAt.UTC()
+		row.ScheduleAt, row.Status = &at, voyage.StatusScheduled
+	}
 	if err := voyage.Insert(ctx, tx, row); err != nil {
 		return nil, false, fmt.Errorf("insert voyage: %w", err)
 	}
@@ -324,6 +374,7 @@ func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.C
 		cadenceID:    c.ID,
 		voyageID:     voyageID,
 		scheduledFor: scheduledFor,
+		scheduleAt:   row.ScheduleAt,
 		scopeSize:    len(resolved),
 	}, true, nil
 }
@@ -377,7 +428,7 @@ func (s *CadenceSpawner) resolveScope(ctx context.Context, c *cadence.Cadence) (
 	return cadence.ResolveScope(ctx, c, s.scenarioR, s.commandR)
 }
 
-// emit writes cadence.spawned or cadence.skipped_overlap (ADR-046 §8). source
+// emit writes cadence.spawned or one of the cadence.skipped_* (ADR-046 §8). source
 // = background (ADR-048 §4: a new `scheduler` source is NOT introduced —
 // `background` is semantically accurate for a periodic background keeper rule
 // with no initiating operator; the Reaper→Conductor executor change doesn't
@@ -408,6 +459,19 @@ func (s *CadenceSpawner) emit(ctx context.Context, rec *spawnedRecord) {
 				"module":        rec.module,
 			},
 		}
+	case rec.skipped && rec.skipReason == skipReasonNoWindow:
+		ev = &audit.Event{
+			EventType:     audit.EventCadenceSkippedNoWindow,
+			Source:        audit.SourceBackground,
+			CorrelationID: rec.cadenceID,
+			Payload: map[string]any{
+				"cadence_id":        rec.cadenceID,
+				"scheduled_for":     rec.scheduledFor,
+				"reason":            skipReasonNoWindow,
+				"incarnation_count": rec.noWindow.incarnations,
+				"next_starts":       rec.noWindow.rows,
+			},
+		}
 	case rec.skipped:
 		ev = &audit.Event{
 			EventType:     audit.EventCadenceSkippedOverlap,
@@ -430,6 +494,9 @@ func (s *CadenceSpawner) emit(ctx context.Context, rec *spawnedRecord) {
 				"scheduled_for": rec.scheduledFor,
 				"scope_size":    rec.scopeSize,
 			},
+		}
+		if rec.scheduleAt != nil {
+			ev.Payload["schedule_at"] = *rec.scheduleAt
 		}
 	}
 	if err := s.audit.Write(ctx, ev); err != nil && s.logger != nil {

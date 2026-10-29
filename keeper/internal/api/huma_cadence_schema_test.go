@@ -152,7 +152,7 @@ func TestSchemaNames_CadenceListEnvelope(t *testing.T) {
 	}
 	assertRequiredExactly(t, cad, "Cadence",
 		"cadence_id", "name", "enabled", "schedule_kind", "overlap_policy",
-		"kind", "created_by_aid", "created_at", "updated_at")
+		"kind", "in_maintenance_window", "created_by_aid", "created_at", "updated_at")
 
 	const targetRef = "#/components/schemas/VoyageTarget"
 	if got := propRef(t, schemas, "Cadence", "target"); got != targetRef {

@@ -233,11 +233,6 @@ whether CEL passes that through or gives `""` is NIM-1073's.
 
 ### Open points
 
-- **`overlap_policy` and a deferred child.** The overlap check counts every non-terminal child
-  (`docs/adr/0046-cadence.md` §5), a `scheduled` one included. So `skip` and `queue` hold back
-  while a child waits for its window, but `parallel` spawns one deferred Voyage per tick, and they
-  are all released together at `NextStart`. NIM-1075 decides how `parallel` treats a deferred
-  child.
 - **Determinism of `in_maintenance_window()`.** It is the first time-dependent function in render
   CEL: `now()` is refused as unsupported (`shared/cel/functions.go`, `Engine.guardUnsupported`).
   A render result that is cached, memoised or re-rendered on a retry must not outlive the moment
@@ -250,6 +245,8 @@ whether CEL passes that through or gives `""` is NIM-1073's.
   `kind: command` Voyage or Cadence, an Errand and a console session address hosts, and a host has
   no window of its own. A command run on a host of a frozen incarnation is not held back.
 - No shared named windows and no window on a service or a Coven (§1).
+- No Cadence schedule kind "at the start of every window" (user, 2026-10-28, NIM-1075). A cron
+  with the window's period and `in_maintenance_window` gives one run per window.
 
 ### Settled points
 
@@ -260,6 +257,9 @@ whether CEL passes that through or gives `""` is NIM-1073's.
   covers a freeze on one target at the claim: the whole row is deferred past it.
 - **Deferring rerun-last and the upgrade's scenario** (user, 2026-10-28) — consent only, never
   deferred. Both start through the runner with `FromLocked`, which a scenario Voyage cannot carry.
+- **`overlap_policy` and a deferred child** (user, 2026-10-28) — a child waiting for its start holds
+  back `parallel` as well as `skip` and `queue`; see the
+  [amendment 2026-10-28 (NIM-1075)](#amendment-2026-10-28-nim-1075-a-cadence-spawn-and-the-window).
 
 ### Rejected
 
@@ -278,3 +278,34 @@ whether CEL passes that through or gives `""` is NIM-1073's.
   for the length of a freeze is worse than the change a freeze guards against.
 - **Letting a destroy through a freeze silently** (NIM-1085). It is the most destructive operator
   act on an incarnation, and it is exactly what a freeze must not let happen by accident.
+
+### Amendment 2026-10-28 (NIM-1075): a Cadence spawn and the window
+
+Built by NIM-1075 (`keeper/internal/conductor/cadence_window.go`, `cadence_spawn.go`). The rules of
+§4 for a Cadence, made exact:
+
+- **The spawn decides the start at its tick.** A `kind: scenario` spawn reads the windows and
+  freezes of every incarnation its target resolved to, in the spawn transaction, and inserts the
+  child `scheduled` with the start below when it lies ahead, else `pending`. The claim asks the
+  gate again (§3), so a freeze added after the tick defers the child further.
+- **One Voyage, one start, common to all its targets** — the choice NIM-1074 made for a Voyage
+  request (user, 2026-10-28). With `in_maintenance_window` it is the first moment every target is
+  open (`maintenance.CommonStart`); without it, the first moment no freeze of any target covers
+  (`maintenance.CommonStart` over freeze-only gates), the windows not asked. The spawn asks
+  `voyage.MaintenanceGate` of the row it is about to insert — the gate the claim asks — so the tick
+  and the claim cannot disagree.
+- **No common open moment is a recorded skip** (user, 2026-10-28) — none within the bound the
+  claim uses (`maintenance.CommonStart`: 366 days past the targets' last freeze end or latest single
+  start, at most 1000 search steps). A
+  request in that position gets 422 and a row at the claim fails; a schedule has nobody to answer.
+  Nothing is spawned, `next_run_at` advances, and `cadence.skipped_no_window` names up to 20
+  incarnations with their own next start, a window that no longer compiles first. The next tick
+  asks again.
+- **A deferred child holds back `parallel` too** (user, 2026-10-28). Under `skip` and `queue` a
+  `scheduled` child is live already (ADR-046 §5). Under `parallel` it is the one child that counts
+  (`cadence.HasDeferredChild`, status `scheduled`): the tick is a `cadence.skipped_overlap` and
+  advances. Otherwise every tick of a wait adds a run, and all of them start together when the
+  window opens. A running child still does not hold `parallel` back.
+- **`in_maintenance_window` on a `kind: command` recipe is refused** with 422, and by the CHECK
+  `cadences_in_maintenance_window_scenario_only` (migration 135): it would be accepted and do
+  nothing. A command spawn reads no windows and no freezes.

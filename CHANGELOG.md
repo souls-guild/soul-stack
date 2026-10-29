@@ -387,6 +387,19 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **A Cadence starts in its incarnations' maintenance window and never during a freeze (NIM-1075,
+  epic NIM-1069).** The recipe gains `in_maintenance_window` (`POST`/`PATCH /v1/cadences`, always
+  present on `GET`; column `cadences.in_maintenance_window`, migration 135). A `kind: scenario`
+  spawn sets its child's start at the tick: with the flag, the first moment every target
+  incarnation is inside a window and outside a freeze; without it, the first moment no freeze of
+  any target covers — a Cadence has no `confirm_freeze`. A start ahead makes the child `scheduled`,
+  and `cadence.spawned` carries its `schedule_at`. Targets with no common open moment within the
+  bound of `maintenance.CommonStart` (the one the claim uses) spawn nothing: the tick is the new audit event `cadence.skipped_no_window`, naming up to 20
+  incarnations and when each opens, and the schedule advances. A child waiting for its start now
+  holds back `overlap_policy: parallel` as well (`cadence.skipped_overlap`), so a wait no longer
+  piles up runs that start together. The flag on a `kind: command` recipe is refused with 422.
+  Spec — [docs/keeper/operator-api/cadences.md](docs/keeper/operator-api/cadences.md#maintenance-windows-and-freezes).
+
 - **Maintenance windows and freezes per incarnation (NIM-1072, epic NIM-1069).** An incarnation
   gets its own weekly slots (`days`, `start_time`, `duration_minutes`, IANA `timezone`) and
   one-off freezes, under `/v1/incarnations/{id}/maintenance-windows` and `/freezes`. The new

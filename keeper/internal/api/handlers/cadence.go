@@ -190,6 +190,7 @@ type cadenceCreateRequest struct {
 	InterUnitIntervalMS  *int    `json:"inter_unit_interval_ms,omitempty"`
 	RequireAlive         *bool   `json:"require_alive,omitempty"`
 	OnFailure            string  `json:"on_failure,omitempty"`
+	InMaintenanceWindow  bool    `json:"in_maintenance_window,omitempty"`
 
 	// Notify — subscriptions for notifications about runs of THIS schedule (ADR-052
 	// §m). Unlike voyage.notify[] (a one-off ephemeral rule for a single run), here
@@ -622,6 +623,7 @@ func (h *CadenceHandler) buildCadence(req *cadenceCreateRequest, id, createdByAI
 		FailThreshold:        req.FailThreshold,
 		FailThresholdPercent: req.failThresholdPercent,
 		RequireAlive:         req.RequireAlive,
+		InMaintenanceWindow:  req.InMaintenanceWindow,
 		CreatedByAID:         createdByAID,
 	}
 	if req.CronExpr != "" {
@@ -979,6 +981,7 @@ type cadenceDTO struct {
 	FailThresholdPercent *int            `json:"fail_threshold_percent,omitempty"`
 	RequireAlive         *bool           `json:"require_alive,omitempty"`
 	OnFailure            string          `json:"on_failure,omitempty"`
+	InMaintenanceWindow  bool            `json:"in_maintenance_window"`
 	NextRunAt            *time.Time      `json:"next_run_at,omitempty"`
 	LastRunAt            *time.Time      `json:"last_run_at,omitempty"`
 	CreatedByAID         string          `json:"created_by_aid"`
@@ -1002,6 +1005,7 @@ func toCadenceDTO(c *cadence.Cadence) cadenceDTO {
 		FailThreshold:        c.FailThreshold,
 		FailThresholdPercent: c.FailThresholdPercent,
 		RequireAlive:         c.RequireAlive,
+		InMaintenanceWindow:  c.InMaintenanceWindow,
 		NextRunAt:            c.NextRunAt,
 		LastRunAt:            c.LastRunAt,
 		CreatedByAID:         c.CreatedByAID,
@@ -1172,6 +1176,8 @@ type cadencePatchRequest struct {
 	FailThreshold *int    `json:"fail_threshold,omitempty"`
 	RequireAlive  *bool   `json:"require_alive,omitempty"`
 	OnFailure     *string `json:"on_failure,omitempty"`
+
+	InMaintenanceWindow *bool `json:"in_maintenance_window,omitempty"`
 
 	// failThresholdPercent — the stashed percent from max_failures="N%" (parity with
 	// create); filled by applyCadencePatchMaxFailures, carried into applyCadencePatch.
@@ -1417,6 +1423,9 @@ func applyCadencePatch(c *cadence.Cadence, req *cadencePatchRequest) {
 	}
 	if req.RequireAlive != nil {
 		c.RequireAlive = req.RequireAlive
+	}
+	if req.InMaintenanceWindow != nil {
+		c.InMaintenanceWindow = *req.InMaintenanceWindow
 	}
 	if req.OnFailure != nil {
 		if *req.OnFailure == "" {
@@ -1725,12 +1734,13 @@ func (h *CadenceHandler) emitWrite(aid string, source audit.Source, eventType au
 		return
 	}
 	payload := map[string]any{
-		"cadence_id":     c.ID,
-		"name":           c.Name,
-		"schedule_kind":  string(c.ScheduleKind),
-		"kind":           string(c.Kind),
-		"overlap_policy": string(c.OverlapPolicy),
-		"enabled":        c.Enabled,
+		"cadence_id":            c.ID,
+		"name":                  c.Name,
+		"schedule_kind":         string(c.ScheduleKind),
+		"kind":                  string(c.Kind),
+		"overlap_policy":        string(c.OverlapPolicy),
+		"enabled":               c.Enabled,
+		"in_maintenance_window": c.InMaintenanceWindow,
 	}
 	if c.ScenarioName != nil {
 		payload["scenario_name"] = *c.ScenarioName

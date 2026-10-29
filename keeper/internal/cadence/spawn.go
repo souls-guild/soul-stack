@@ -150,6 +150,9 @@ func BuildVoyage(c *Cadence, voyageID string, resolved []string) (*voyage.Voyage
 		FailThreshold:  effFailThreshold,
 		RequireAlive:   c.RequireAlive,
 		CadenceID:      &c.ID,
+		// No ConfirmedFreezeIDs: a schedule consents to no freeze, so the
+		// claim defers the child past every one (ADR-0093 §4).
+		InMaintenanceWindow: c.InMaintenanceWindow,
 	}
 	if c.OnFailure != nil {
 		of := voyage.OnFailure(*c.OnFailure)

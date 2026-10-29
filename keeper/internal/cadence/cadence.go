@@ -54,9 +54,10 @@ const (
 	// OverlapPolicyQueue defers the spawn until the previous child goes
 	// terminal (strict sequencing without dropping runs).
 	OverlapPolicyQueue OverlapPolicy = "queue"
-	// OverlapPolicyParallel spawns regardless of previous state
-	// (overlapping runs are allowed; limits live at the Voyage/Acolyte
-	// layer).
+	// OverlapPolicyParallel spawns alongside running children (overlapping
+	// runs are allowed; limits live at the Voyage/Acolyte layer). A child
+	// still waiting for its maintenance window or a freeze's end holds it back
+	// as skip would ([HasDeferredChild], ADR-0093 §4).
 	OverlapPolicyParallel OverlapPolicy = "parallel"
 )
 
@@ -141,6 +142,10 @@ type Cadence struct {
 	InterUnitInterval    *time.Duration // per-unit pause in window.
 	RequireAlive         *bool          // liveness presence filter at scope resolution; nil ⇒ false.
 	OnFailure            *OnFailure
+	// InMaintenanceWindow defers each spawn to the first moment every target
+	// incarnation is open (ADR-0093 §4). kind=scenario only: a host has no
+	// window. Without it a scenario spawn still waits out a freeze.
+	InMaintenanceWindow bool
 
 	// Computed timings (scheduler is S2; S1 CRUD reads/writes as-is).
 	NextRunAt *time.Time

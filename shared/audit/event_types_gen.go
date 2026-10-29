@@ -17,6 +17,7 @@ var allEventTypes = []EventType{
 	"cadence.created",                           // EventCadenceCreated
 	"cadence.deleted",                           // EventCadenceDeleted
 	"cadence.skipped_forbidden",                 // EventCadenceSkippedForbidden
+	"cadence.skipped_no_window",                 // EventCadenceSkippedNoWindow
 	"cadence.skipped_overlap",                   // EventCadenceSkippedOverlap
 	"cadence.spawned",                           // EventCadenceSpawned
 	"cadence.updated",                           // EventCadenceUpdated

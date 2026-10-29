@@ -43,10 +43,26 @@ Permission: `cadence.create` (middleware) **+** Voyage-permission by `kind` (han
 | `inter_batch_interval_ms` / `inter_unit_interval_ms` | `integer` (≥0) | no | Pauses between Legs (barrier) / per-unit (window). |
 | `require_alive` | `boolean` | no | Presence filter for living people on the scope resolution (kind=command). Default `false`. |
 | `on_failure` | `string` (`abort`/`continue`) | no | Behavior upon failure of Leg. |
+| `in_maintenance_window` | `boolean` | no | Defer each spawn to the first moment **every** target incarnation is inside a maintenance window and outside a freeze ([ADR-0093](../../adr/0093-maintenance-window.md)). `kind=scenario` only: on `kind=command` → `422`, a host has no window. Default `false`. See ["Maintenance windows and freezes"](#maintenance-windows-and-freezes) below. |
 | `enabled` | `boolean` | no | Is the schedule included? Default **`true`** (default-ON; `false` → pause). |
 | `notify` | `array<VoyageNotify>` | no | Subscriptions to notifications about runs of THIS schedule. The shape of the element is the same [`VoyageNotify`](voyages.md) as that of the one-time `voyage.notify`. See ["Notifications `notify[]`"](#notifications-notify---permanent-tiding-from-the-schedule-form) below. |
 
 Percentages `batch`/`max_failures` (format `N%`) **do not resolve to absolute on create** - Cadence spawn-scope is unknown on creation; the percentage goes into the `batch_percent`/`fail_threshold_percent` columns and resolves to the spawn-scope when Voyage spawns.
+
+### Maintenance windows and freezes
+
+The windows and freezes are the target incarnations' own ([ADR-0093](../../adr/0093-maintenance-window.md), [incarnation maintenance windows](incarnations.md)). A `kind=scenario` spawn asks them at its tick; a `kind=command` spawn addresses hosts and is never held back.
+
+| Recipe | At the tick | The spawned Voyage |
+|---|---|---|
+| `in_maintenance_window: true` | the first moment every target incarnation is open (inside a window, outside a freeze); an incarnation with no windows is open whenever no freeze covers it | `scheduled` with that `schedule_at`, or `pending` when it is now |
+| `in_maintenance_window` absent | the first moment no freeze of any target covers — the end of the freeze, taken again while another one covers that end; the windows are not asked | `scheduled` until then, else `pending` at the tick |
+
+- **A Cadence never starts during a freeze, and there is no consent for it.** `confirm_freeze` is an operator's answer to a request; a schedule has no request to answer, so a freeze always defers it.
+- **One Voyage, one start.** A spawn over several incarnations starts when all of them are open together. When there is no such moment within the bound of `maintenance.CommonStart` (366 days past the targets' last freeze end or latest single start, at most 1000 search steps) — windows that never overlap, say Monday and Tuesday — nothing is spawned: the tick is skipped, `next_run_at` advances, and `cadence.skipped_no_window` `{cadence_id, scheduled_for, reason: "no_window", incarnation_count, next_starts}` names up to 20 of the incarnations that have windows or freezes, each with its own next start (or the error of a window that no longer compiles, listed first). The next tick asks again. A child already spawned whose windows are edited afterwards so they never meet fails at the claim with the target code `no_common_window`, as any Voyage does.
+- **A deferred child holds the next spawn back under every `overlap_policy`.** Under `skip` and `queue` it is a live child like a running one. Under `parallel` it is the one child that counts: the tick is skipped with `cadence.skipped_overlap` while a child waits for its window, so the runs of the wait do not pile up and start together. A running child still does not hold `parallel` back.
+- `cadence.spawned` carries `schedule_at` when the child was deferred.
+- **The start is decided at the tick and checked again when the Voyage starts** — a freeze added after the spawn defers the child further (NIM-1074). Nothing brings a child forward: lifting a freeze early leaves it waiting for its `schedule_at`, and the series behind it waiting too. Cancel the child (`DELETE /v1/voyages/{id}`) and the next tick spawns afresh.
 
 ### Notifications `notify[]` - permanent Tiding from the schedule form
 
@@ -83,13 +99,13 @@ Permission: `cadence.list`. MCP-tool: no. Query: `enabled` (`true` → enabled o
 
 ### `GET /v1/cadences/{id}` - Cadence part
 
-Permission: `cadence.list`. MCP-tool: no. `id` - ULID. Response `200 Cadence` (recipe + schedule + `next_run_at`/`last_run_at` + audit metadata; `input` NOT given). `404 cadence_not_found` (no entry); `422 validation-failed` (`id` is not a ULID).
+Permission: `cadence.list`. MCP-tool: no. `id` - ULID. Response `200 Cadence` (recipe + schedule + `next_run_at`/`last_run_at` + audit metadata; `in_maintenance_window` always present; `input` NOT given). `404 cadence_not_found` (no entry); `422 validation-failed` (`id` is not a ULID).
 
 ### `PATCH /v1/cadences/{id}` - update Cadence
 
 Permission: `cadence.update` (middleware) **+** two-level guard (handler, see above). MCP-tool: no. Read-modify-write: specified fields are overwritten, omitted fields are retained. Request `CadencePatchRequest` (all fields are optional; `kind` is missing - does not change). When changing the schedule (`schedule_kind`/`interval_seconds`/`cron_expr`), `next_run_at` is recalculated. Response `200 Cadence`. Audit: `cadence.updated`.
 
-**Errors:** `400` (invalid JSON); `403` (two-level RBAC deny on post-patch target); `404 cadence_not_found`; `422 validation-failed` (invalid recipe/schedule, batch-spec conflict, **floor-limit** - including when transferring the schedule to `interval`); `500` (DB failure).
+**Errors:** `400` (invalid JSON); `403` (two-level RBAC deny on post-patch target); `404 cadence_not_found`; `422 validation-failed` (invalid recipe/schedule, batch-spec conflict, **floor-limit** - including when transferring the schedule to `interval`, `in_maintenance_window: true` on a `kind=command` recipe); `500` (DB failure).
 
 ### `POST /v1/cadences/{id}/enable` | `POST /v1/cadences/{id}/disable` — toggle schedules
 

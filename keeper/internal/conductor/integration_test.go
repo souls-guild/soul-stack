@@ -502,7 +502,7 @@ func TestIntegration_Spawn_ErrorRollsBackTheWholeTick(t *testing.T) {
 // and it is the difference between a series that keeps its grid, one that waits,
 // and one that piles up:
 //
-//   - parallel — always spawn.
+//   - parallel — spawn beside running children (a deferred one holds it).
 //   - skip     — do not spawn, but DO advance (the series does not stall).
 //   - queue    — do not spawn and do NOT advance (retry on the next tick).
 //

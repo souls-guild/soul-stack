@@ -135,6 +135,9 @@ func validate(c *Cadence) error {
 	if c.OnFailure != nil && !ValidOnFailure(*c.OnFailure) {
 		return fmt.Errorf("cadence: invalid on_failure %q", *c.OnFailure)
 	}
+	if c.InMaintenanceWindow && c.Kind != KindScenario {
+		return fmt.Errorf("cadence: in_maintenance_window applies to kind=scenario only: a kind=command recipe addresses hosts, and a host has no maintenance window")
+	}
 	return nil
 }
 
@@ -168,7 +171,7 @@ func ValidateIntervalFloor(c *Cadence, floorSeconds int) error {
 // recipeArgs unpacks the Cadence recipe/schedule into positional SQL
 // arguments for INSERT/UPDATE. Nullable fields → nil interface (NULL in the
 // DB); INTERVAL is a text literal via pgutil.Interval (parity voyage).
-// Returns 23 values in column order from `name` through `last_run_at`. id
+// Returns 24 values in column order from `name` through `in_maintenance_window`. id
 // (PK) and created_by_aid (fixed, not written on UPDATE) are added
 // separately by the caller: Insert adds both, Update only id.
 func recipeArgs(c *Cadence) []any {
@@ -256,6 +259,7 @@ func recipeArgs(c *Cadence) []any {
 		onFailureArg,
 		nextRunArg,
 		lastRunArg,
+		c.InMaintenanceWindow,
 	}
 }
 
@@ -266,7 +270,7 @@ INSERT INTO cadences (
     kind, scenario_name, module, target, input,
     batch_mode, batch_size, batch_percent, concurrency, fail_threshold, fail_threshold_percent,
     inter_batch_interval, inter_unit_interval, require_alive, on_failure,
-    next_run_at, last_run_at,
+    next_run_at, last_run_at, in_maintenance_window,
     created_by_aid
 ) VALUES (
     $1, $2, $3,
@@ -274,8 +278,8 @@ INSERT INTO cadences (
     $8, $9, $10, $11, $12,
     $13, $14, $15, $16, $17, $18,
     $19::interval, $20::interval, $21, $22,
-    $23, $24,
-    $25
+    $23, $24, $25,
+    $26
 )
 RETURNING created_at, updated_at
 `
@@ -323,7 +327,7 @@ const selectColumns = `
     EXTRACT(EPOCH FROM inter_batch_interval)::float8,
     EXTRACT(EPOCH FROM inter_unit_interval)::float8,
     require_alive, on_failure,
-    next_run_at, last_run_at,
+    next_run_at, last_run_at, in_maintenance_window,
     created_by_aid, created_at, updated_at
 `
 
@@ -398,6 +402,7 @@ func scanCadence(row pgx.Row) (*Cadence, error) {
 		&onFailureStr,
 		&c.NextRunAt,
 		&c.LastRunAt,
+		&c.InMaintenanceWindow,
 		&c.CreatedByAID,
 		&c.CreatedAt,
 		&c.UpdatedAt,
@@ -517,6 +522,7 @@ UPDATE cadences SET
     on_failure             = $22,
     next_run_at            = $23,
     last_run_at            = $24,
+    in_maintenance_window  = $25,
     updated_at             = NOW()
 WHERE id = $1
 RETURNING created_at, updated_at
@@ -764,6 +770,30 @@ func HasLiveChild(ctx context.Context, db ExecQueryRower, cadenceID string) (boo
 		return false, fmt.Errorf("cadence: has live child: %w", err)
 	}
 	return live, nil
+}
+
+const hasDeferredChildSQL = `
+SELECT EXISTS(
+    SELECT 1 FROM voyages
+    WHERE cadence_id = $1
+      AND status = 'scheduled'
+)
+`
+
+// HasDeferredChild reports whether the Cadence has a spawned Voyage still
+// waiting to start — deferred to a maintenance window or past a freeze, since a
+// spawn sets schedule_at for no other reason. It is the overlap check of
+// `parallel` (ADR-0093 §4): running children may overlap, but children piled up
+// behind one window would all start together when it opens.
+func HasDeferredChild(ctx context.Context, db ExecQueryRower, cadenceID string) (bool, error) {
+	if cadenceID == "" {
+		return false, fmt.Errorf("cadence: empty cadence_id")
+	}
+	var deferred bool
+	if err := db.QueryRow(ctx, hasDeferredChildSQL, cadenceID).Scan(&deferred); err != nil {
+		return false, fmt.Errorf("cadence: has deferred child: %w", err)
+	}
+	return deferred, nil
 }
 
 const deleteSQL = `DELETE FROM cadences WHERE id = $1`

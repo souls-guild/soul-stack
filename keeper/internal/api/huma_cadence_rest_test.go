@@ -140,7 +140,7 @@ func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 // cadenceRestTestID — a valid ULID (26 Crockford-base32) for the path-{id} guards.
 const cadenceRestTestID = "01HZ0000000000000000000000"
 
-// cadenceRestStoredRow — a pgx.Row for cadence.scanCadence (27 dest, parity with the
+// cadenceRestStoredRow — a pgx.Row for cadence.scanCadence (28 dest, parity with the
 // handler test's cadenceFullRow): the minimal stored command-kind row (cron +
 // service-target), enough for a PATCH/Get round-trip. service-target + incReader=nil →
 // per-target scope is skipped after the bare-check (parity newCadenceHandler).
@@ -174,9 +174,10 @@ func (r cadenceRestStoredRow) Scan(dest ...any) error {
 	*dest[21].(**string) = nil // on_failure
 	*dest[22].(**time.Time) = nil
 	*dest[23].(**time.Time) = nil
-	*dest[24].(*string) = "archon-alice"
-	*dest[25].(*time.Time) = now
+	*dest[24].(*bool) = false // in_maintenance_window
+	*dest[25].(*string) = "archon-alice"
 	*dest[26].(*time.Time) = now
+	*dest[27].(*time.Time) = now
 	return nil
 }
 
@@ -490,7 +491,7 @@ func TestHumaCadenceRest_Get_GoldenWire(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	got := normalizeCadenceTimestamps(t, rec.Body.Bytes())
-	const golden = `{"cadence_id":"01HZ0000000000000000000000","created_at":"TS","created_by_aid":"archon-alice","cron_expr":"0 * * * *","enabled":true,"kind":"command","module":"core.cmd.shell","name":"hourly","overlap_policy":"queue","schedule_kind":"cron","target":{"coven":["prod"]},"updated_at":"TS"}`
+	const golden = `{"cadence_id":"01HZ0000000000000000000000","created_at":"TS","created_by_aid":"archon-alice","cron_expr":"0 * * * *","enabled":true,"in_maintenance_window":false,"kind":"command","module":"core.cmd.shell","name":"hourly","overlap_policy":"queue","schedule_kind":"cron","target":{"coven":["prod"]},"updated_at":"TS"}`
 	if got != golden {
 		t.Errorf("GOLDEN wire drift GET {id}:\n got  = %s\n want = %s\n(key set/$schema changed - check cadenceGetOutput/toCadenceDTO)", got, golden)
 	}

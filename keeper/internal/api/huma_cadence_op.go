@@ -60,6 +60,7 @@ type CadenceCreateRequest struct {
 	InterUnitIntervalMS  *int    `json:"inter_unit_interval_ms,omitempty"`
 	RequireAlive         *bool   `json:"require_alive,omitempty"`
 	OnFailure            string  `json:"on_failure,omitempty"`
+	InMaintenanceWindow  bool    `json:"in_maintenance_window,omitempty" doc:"defer each spawn to the first moment every target incarnation is inside a maintenance window and outside a freeze; kind=scenario only (ADR-0093)"`
 
 	Notify []VoyageNotify `json:"notify,omitempty" doc:"subscriptions to run notifications for this schedule"`
 }
@@ -157,6 +158,8 @@ type CadencePatchRequest struct {
 	FailThreshold *int    `json:"fail_threshold,omitempty" minimum:"1"`
 	RequireAlive  *bool   `json:"require_alive,omitempty"`
 	OnFailure     *string `json:"on_failure,omitempty" doc:"abort|continue (empty string → clear)"`
+
+	InMaintenanceWindow *bool `json:"in_maintenance_window,omitempty" doc:"defer each spawn to the first moment every target incarnation is inside a maintenance window and outside a freeze; kind=scenario only (ADR-0093)"`
 }
 
 // cadencePatchOutput — huma output for PATCH /v1/cadences/{id} (FULL-TYPED). Status=200;

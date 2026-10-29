@@ -27,7 +27,7 @@
 5. **`overlap_policy` — three policies (the operator chooses at creation).** When `next_run_at` has come, but the previous Voyage spawned by this Cadence is not yet terminal (`pending`/`running`):
    - **`skip`** — the spawn is skipped; the audit event `cadence.skipped_overlap` is written; `next_run_at` is recomputed anyway (the series does not "stick"). Protection against accumulating runs when the period is shorter than the run duration.
    - **`queue`** — the spawn is postponed: the next Voyage starts only after the previous one's terminal (Cadence does not spawn while there is a live child; on the next due tick, if the previous one is still running, it stays waiting). Guarantees strict sequentiality without losing launches.
-   - **`parallel`** — the spawn happens regardless of the state of the previous ones: the new Voyage starts overlapping (several children of one Cadence can be `running` simultaneously). Workers/concurrency limits are at the level of the Voyage/Acolyte itself.
+   - **`parallel`** — the spawn happens regardless of the state of the previous ones: the new Voyage starts overlapping (several children of one Cadence can be `running` simultaneously). Workers/concurrency limits are at the level of the Voyage/Acolyte itself. **Since NIM-1075 a child still waiting for its start (`scheduled`, deferred to a maintenance window or past a freeze) holds `parallel` back as `skip` would** — see the amendment of 2026-10-27 and its "As built" note below.
    - **All three — an MVP goal** (the user's decision; `queue` is not postponed). The check "is there a live previous child" — `EXISTS(SELECT 1 FROM voyages WHERE cadence_id=$1 AND status NOT IN (<terminal>))` in the same spawn tx.
 
 6. **API — CRUD `/v1/cadences`** (sketch, normalized in S4/S5):
@@ -90,3 +90,9 @@ spawned Voyage carries it and is deferred to the incarnation's next open moment.
 `kind: scenario` Cadence never starts during a freeze of its incarnation, flag or no flag: it is
 deferred past the freeze, and a Cadence has no consent path. Full text —
 [ADR-0093](0093-maintenance-window.md).
+
+**As built (NIM-1075, 2026-10-28).** The spawn sets the child's start at its tick, common to all
+its target incarnations; targets with no common open moment within the bound of `maintenance.CommonStart` are a recorded skip,
+`cadence.skipped_no_window`; a child waiting for its start holds back `overlap_policy: parallel`
+as well as `skip`/`queue`; `in_maintenance_window` on a `kind: command` recipe is refused (422).
+Full text — [ADR-0093, amendment 2026-10-28](0093-maintenance-window.md#amendment-2026-10-28-nim-1075-a-cadence-spawn-and-the-window).

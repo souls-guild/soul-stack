@@ -244,7 +244,7 @@ func (r cadenceScalarRow) Scan(dest ...any) error {
 	return nil
 }
 
-// cadenceFullRow — Row for cadence.scanCadence (26 selectColumns in
+// cadenceFullRow — Row for cadence.scanCadence (28 selectColumns in
 // scanCadence order). Minimal set for a GET/list/PATCH round-trip.
 type cadenceFullRow struct {
 	id           string
@@ -262,11 +262,12 @@ type cadenceFullRow struct {
 	batchPercent         *int
 	failThreshold        *int
 	failThresholdPercent *int
+	inMaintenanceWindow  bool
 }
 
 func (r cadenceFullRow) Scan(dest ...any) error {
-	if len(dest) != 27 {
-		return errors.New("cadenceFullRow: expected 27 dest")
+	if len(dest) != 28 {
+		return errors.New("cadenceFullRow: expected 28 dest")
 	}
 	now := time.Now().UTC()
 	*dest[0].(*string) = r.id
@@ -293,9 +294,10 @@ func (r cadenceFullRow) Scan(dest ...any) error {
 	*dest[21].(**string) = nil // on_failure
 	*dest[22].(**time.Time) = nil
 	*dest[23].(**time.Time) = nil
-	*dest[24].(*string) = "archon-alice"
-	*dest[25].(*time.Time) = now
+	*dest[24].(*bool) = r.inMaintenanceWindow
+	*dest[25].(*string) = "archon-alice"
 	*dest[26].(*time.Time) = now
+	*dest[27].(*time.Time) = now
 	return nil
 }
 

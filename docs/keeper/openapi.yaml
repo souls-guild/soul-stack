@@ -35,6 +35,7 @@ components:
             - cadence.created
             - cadence.deleted
             - cadence.skipped_forbidden
+            - cadence.skipped_no_window
             - cadence.skipped_overlap
             - cadence.spawned
             - cadence.updated
@@ -291,6 +292,9 @@ components:
         fail_threshold_percent:
           format: int64
           type: integer
+        in_maintenance_window:
+          description: each spawn is deferred to the first moment every target incarnation is open (ADR-0093)
+          type: boolean
         interval_seconds:
           format: int64
           type: integer
@@ -342,6 +346,7 @@ components:
         - schedule_kind
         - overlap_policy
         - kind
+        - in_maintenance_window
         - created_by_aid
         - created_at
         - updated_at
@@ -401,6 +406,9 @@ components:
           format: int64
           minimum: 1
           type: integer
+        in_maintenance_window:
+          description: defer each spawn to the first moment every target incarnation is inside a maintenance window and outside a freeze; kind=scenario only (ADR-0093)
+          type: boolean
         input:
           additionalProperties: {}
           description: recipe parameters
@@ -539,6 +547,9 @@ components:
           format: int64
           minimum: 1
           type: integer
+        in_maintenance_window:
+          description: defer each spawn to the first moment every target incarnation is inside a maintenance window and outside a freeze; kind=scenario only (ADR-0093)
+          type: boolean
         input:
           additionalProperties: {}
           description: recipe parameters

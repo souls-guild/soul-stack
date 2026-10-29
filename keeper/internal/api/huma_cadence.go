@@ -413,6 +413,8 @@ func toCadencePatchRequest(b CadencePatchRequest) handlers.CadencePatchRequest {
 		FailThreshold:   b.FailThreshold,
 		RequireAlive:    b.RequireAlive,
 		OnFailure:       b.OnFailure,
+
+		InMaintenanceWindow: b.InMaintenanceWindow,
 	}
 	if b.Target != nil {
 		req.Target = &handlers.VoyageTargetRequest{
@@ -460,6 +462,7 @@ func toCadenceCreateRequest(b CadenceCreateRequest) handlers.CadenceCreateReques
 		InterUnitIntervalMS:  b.InterUnitIntervalMS,
 		RequireAlive:         b.RequireAlive,
 		OnFailure:            b.OnFailure,
+		InMaintenanceWindow:  b.InMaintenanceWindow,
 		Notify:               toNotifyRequests(b.Notify),
 	}
 }

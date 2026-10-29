@@ -205,6 +205,10 @@ func TestEventCadence_VoyageTerminals(t *testing.T) {
 	if got := eventCadence(audit.EventCadenceSkippedOverlap, map[string]any{"cadence_id": cid}); got != cid {
 		t.Fatalf("eventCadence(cadence.skipped_overlap) broken: = %q, want %q", got, cid)
 	}
+	// A schedule held by its targets' windows says so to its own Tidings (NIM-1075).
+	if got := eventCadence(audit.EventCadenceSkippedNoWindow, map[string]any{"cadence_id": cid}); got != cid {
+		t.Fatalf("eventCadence(cadence.skipped_no_window) = %q, want %q", got, cid)
+	}
 	// Other events (incarnation.created) do not carry cadence_id: "".
 	if got := eventCadence(audit.EventIncarnationCreated, map[string]any{"cadence_id": cid}); got != "" {
 		t.Fatalf("eventCadence(incarnation.created) = %q, want empty (not a cadence event)", got)

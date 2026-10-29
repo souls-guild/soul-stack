@@ -245,6 +245,9 @@ func TestInsert_ValidationErrors(t *testing.T) {
 		{"fail_threshold_percent out of range low", func(c *Cadence) { c.FailThresholdPercent = intptr(0) }, "fail_threshold_percent must be in [1, 100]"},
 		{"fail_threshold + percent XOR", func(c *Cadence) { c.FailThreshold = intptr(2); c.FailThresholdPercent = intptr(50) }, "fail_threshold and fail_threshold_percent are mutually exclusive"},
 		{"invalid on_failure", func(c *Cadence) { f := OnFailure("noop"); c.OnFailure = &f }, "invalid on_failure"},
+		{"in_maintenance_window on command", func(c *Cadence) {
+			c.Kind, c.ScenarioName, c.Module, c.InMaintenanceWindow = KindCommand, nil, strptr("core.pkg.present"), true
+		}, "in_maintenance_window applies to kind=scenario only"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -315,9 +318,9 @@ func TestInsert_HappyPath_Interval(t *testing.T) {
 	if !strings.Contains(fdb.queryRowSQL, "INSERT INTO cadences") {
 		t.Errorf("unexpected SQL: %.200s", fdb.queryRowSQL)
 	}
-	// id + 24 recipe/schedule arguments = 25 (in sync with insertSQL $1..$25).
-	if got := len(fdb.queryRowArgs); got != 25 {
-		t.Errorf("queryRowArgs len = %d, want 25", got)
+	// id + 24 recipe/schedule arguments + created_by_aid = 26 (in sync with insertSQL $1..$26).
+	if got := len(fdb.queryRowArgs); got != 26 {
+		t.Errorf("queryRowArgs len = %d, want 26", got)
 	}
 	if fdb.queryRowArgs[0] != c.ID {
 		t.Errorf("arg[0] = %v, want id %q", fdb.queryRowArgs[0], c.ID)
@@ -428,11 +431,12 @@ type fullCadenceRow struct {
 	createdByAID         string
 	createdAt            time.Time
 	updatedAt            time.Time
+	inMaintenanceWindow  bool
 }
 
 func (r fullCadenceRow) Scan(dest ...any) error {
-	if len(dest) != 27 {
-		return errors.New("fullCadenceRow: expected 27 dest")
+	if len(dest) != 28 {
+		return errors.New("fullCadenceRow: expected 28 dest")
 	}
 	*dest[0].(*string) = r.id
 	*dest[1].(*string) = r.name
@@ -458,9 +462,10 @@ func (r fullCadenceRow) Scan(dest ...any) error {
 	*dest[21].(**string) = r.onFailure
 	*dest[22].(**time.Time) = r.nextRunAt
 	*dest[23].(**time.Time) = r.lastRunAt
-	*dest[24].(*string) = r.createdByAID
-	*dest[25].(*time.Time) = r.createdAt
-	*dest[26].(*time.Time) = r.updatedAt
+	*dest[24].(*bool) = r.inMaintenanceWindow
+	*dest[25].(*string) = r.createdByAID
+	*dest[26].(*time.Time) = r.createdAt
+	*dest[27].(*time.Time) = r.updatedAt
 	return nil
 }
 
@@ -626,9 +631,9 @@ func TestUpdate_HappyPath(t *testing.T) {
 	if !strings.Contains(fdb.queryRowSQL, "UPDATE cadences") {
 		t.Errorf("unexpected SQL: %.200s", fdb.queryRowSQL)
 	}
-	// UPDATE does not write created_by_aid: id + 23 recipe/schedule args = 24 ($1..$24).
-	if got := len(fdb.queryRowArgs); got != 24 {
-		t.Errorf("queryRowArgs len = %d, want 24 (id + 23)", got)
+	// UPDATE does not write created_by_aid: id + 24 recipe/schedule args = 25 ($1..$25).
+	if got := len(fdb.queryRowArgs); got != 25 {
+		t.Errorf("queryRowArgs len = %d, want 25 (id + 24)", got)
 	}
 }
 
@@ -735,7 +740,7 @@ var cadenceScanColumns = []string{
 	"kind", "scenario_name", "module", "target", "input",
 	"batch_mode", "batch_size", "batch_percent", "concurrency", "fail_threshold", "fail_threshold_percent",
 	"inter_batch_interval", "inter_unit_interval", "require_alive", "on_failure",
-	"next_run_at", "last_run_at",
+	"next_run_at", "last_run_at", "in_maintenance_window",
 	"created_by_aid", "created_at", "updated_at",
 }
 

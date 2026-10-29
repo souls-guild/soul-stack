@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/cadence"
+	"github.com/souls-guild/soul-stack/keeper/internal/maintenance"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
@@ -22,9 +24,16 @@ import (
 // voyage.Insert (RETURNING created_at) → timestamp, AdvanceSchedule (Exec) →
 // UPDATE 1, InsertTargets (CopyFrom) → counter.
 type spawnFakeTx struct {
-	live bool // HasLiveChild answer
+	live     bool // HasLiveChild answer
+	deferred bool // HasDeferredChild answer
 
 	dueRows []*cadence.Cadence // rows for SelectDueForUpdate (Query)
+
+	// The maintenance tables, as maintenance.LoadRules reads them; empty
+	// means no incarnation has any.
+	windows       []maintenance.Window
+	freezes       []maintenance.Freeze
+	deferredCalls int
 
 	execCalls    int // AdvanceSchedule
 	copyCalls    int // InsertTargets
@@ -48,6 +57,9 @@ func (t *spawnFakeTx) Exec(_ context.Context, _ string, _ ...any) (pgconn.Comman
 
 func (t *spawnFakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
+	case strings.Contains(sql, "EXISTS") && strings.Contains(sql, "status = 'scheduled'"):
+		t.deferredCalls++
+		return boolRow{v: t.deferred}
 	case strings.Contains(sql, "EXISTS"):
 		t.hasLiveCalls++
 		return boolRow{v: t.live}
@@ -60,7 +72,28 @@ func (t *spawnFakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.R
 	}
 }
 
-func (t *spawnFakeTx) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+func (t *spawnFakeTx) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+	switch {
+	case strings.Contains(sql, "FROM incarnation_maintenance_windows"):
+		ids, _ := args[0].([]string)
+		var vals [][]any
+		for _, w := range t.windows {
+			if slices.Contains(ids, w.IncarnationID) {
+				vals = append(vals, []any{w.ID, w.IncarnationID, w.Days, w.StartTime, w.DurationMinutes,
+					w.Timezone, w.Comment, w.CreatedAt, w.UpdatedAt})
+			}
+		}
+		return &valueRows{vals: vals}, nil
+	case strings.Contains(sql, "FROM incarnation_freezes"):
+		ids, _ := args[0].([]string)
+		var vals [][]any
+		for _, f := range t.freezes {
+			if slices.Contains(ids, f.IncarnationID) {
+				vals = append(vals, []any{f.ID, f.IncarnationID, f.StartsAt, f.EndsAt, f.Comment, f.CreatedAt, f.UpdatedAt})
+			}
+		}
+		return &valueRows{vals: vals}, nil
+	}
 	// SelectDueForUpdate. With no prepared rows — behavior of earlier tests
 	// (processOne bypasses Query): signal an error.
 	if t.dueRows == nil {
@@ -111,7 +144,7 @@ type errScanRow struct{ err error }
 func (r errScanRow) Scan(_ ...any) error { return r.err }
 
 // dueRows is a pgx.Rows stub for SelectDueForUpdate: yields pre-built
-// *cadence.Cadence via a scanCadence-compatible Scan (27 dest in scanCadence
+// *cadence.Cadence via a scanCadence-compatible Scan (28 dest in scanCadence
 // order). Covers the batch/fail-threshold fields (needed by the spawn
 // late-binding tests); the rest are nullable — nil.
 type dueRows struct {
@@ -153,9 +186,10 @@ func (r *dueRows) Scan(dest ...any) error {
 	*dest[21].(**string) = nil
 	*dest[22].(**time.Time) = c.NextRunAt
 	*dest[23].(**time.Time) = c.LastRunAt
-	*dest[24].(*string) = c.CreatedByAID
-	*dest[25].(*time.Time) = c.CreatedAt
-	*dest[26].(*time.Time) = c.UpdatedAt
+	*dest[24].(*bool) = c.InMaintenanceWindow
+	*dest[25].(*string) = c.CreatedByAID
+	*dest[26].(*time.Time) = c.CreatedAt
+	*dest[27].(*time.Time) = c.UpdatedAt
 	return nil
 }
 
