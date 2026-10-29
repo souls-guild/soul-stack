@@ -16,7 +16,7 @@ package api
 // OUTPUT-PATTERN (documentation only, NOT runtime validation): huma does NOT validate
 // the response body (empirically 200, not 500). created_by_aid/added_by_aid ←
 // operator.AIDPattern; Voice.sid ← soul.SIDPattern; incarnation_name ←
-// incarnation.IDPattern (batch 5, FK to incarnation; path-{name} on write). The
+// incarnation.IDPattern (batch 5, FK to incarnation; path-{id} on write). The
 // format is for client codegen; the pattern does not affect json.Marshal (golden
 // byte-exact stays intact). choir_name is NOT tagged: it has its own grammar
 // choir.choirNamePattern (kebab+`_`), outside this batch's name scope.

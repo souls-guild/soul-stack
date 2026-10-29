@@ -1599,7 +1599,7 @@ func TestIncarnationScopeSelector_ReadsRow(t *testing.T) {
 		}}
 	}}
 	sel := IncarnationScopeSelector(db)
-	req := newChiRequest(http.MethodGet, "/v1/incarnations/redis-prod", nil, "name", "redis-prod")
+	req := newChiRequest(http.MethodGet, "/v1/incarnations/redis-prod", nil, "id", "redis-prod")
 	ctxs := sel(req)
 	if !hasCovenCtx(ctxs, "redis-prod", "redis", "prod") {
 		t.Errorf("missing coven=prod in %v", ctxs)
@@ -1612,7 +1612,7 @@ func TestIncarnationScopeSelector_ReadsRow(t *testing.T) {
 func TestIncarnationScopeSelector_NotFound_Nil(t *testing.T) {
 	db := &fakeIncDB{} // SelectByID → ErrNoRows
 	sel := IncarnationScopeSelector(db)
-	req := newChiRequest(http.MethodGet, "/v1/incarnations/missing", nil, "name", "missing")
+	req := newChiRequest(http.MethodGet, "/v1/incarnations/missing", nil, "id", "missing")
 	if got := sel(req); got != nil {
 		t.Errorf("got = %v, want nil (fail-closed) for not-found", got)
 	}
@@ -1621,7 +1621,7 @@ func TestIncarnationScopeSelector_NotFound_Nil(t *testing.T) {
 func TestIncarnationScopeSelector_InvalidName_Nil(t *testing.T) {
 	db := &fakeIncDB{}
 	sel := IncarnationScopeSelector(db)
-	req := newChiRequest(http.MethodGet, "/v1/incarnations/Bad_Name", nil, "name", "Bad_Name")
+	req := newChiRequest(http.MethodGet, "/v1/incarnations/Bad_Name", nil, "id", "Bad_Name")
 	if got := sel(req); got != nil {
 		t.Errorf("got = %v, want nil for invalid name", got)
 	}

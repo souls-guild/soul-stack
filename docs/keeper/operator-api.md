@@ -497,7 +497,7 @@ CRUD registry `tidings` (subscription rule: which `event_types` to respond to �
 
 ### Choir (6) - named topology of hosts within an incarnation, [ADR-044](../adr/0044-choir.md)
 
-CRUD topology Choir/Voice inside incarnation (`/v1/incarnations/{id}/choirs*`). Choir belongs to incarnation → the same scope selector `incarnation`/`service`/`coven` (via path-`{name}`) as incarnation mutations. Connect only when the ChoirDB pool is configured. **REST-only - no MCP-tools** ([mcp-tools/choirs.md](mcp-tools/choirs.md)). The source of truth for semantics, bodies is [operator-api/choirs.md](operator-api/choirs.md).
+CRUD topology Choir/Voice inside incarnation (`/v1/incarnations/{id}/choirs*`). Choir belongs to incarnation → the same scope selector `incarnation`/`service`/`coven` (via path-`{id}`) as incarnation mutations. Connect only when the ChoirDB pool is configured. **REST-only - no MCP-tools** ([mcp-tools/choirs.md](mcp-tools/choirs.md)). The source of truth for semantics, bodies is [operator-api/choirs.md](operator-api/choirs.md).
 
 | Method | Path | Permission | MCP-tool |
 |---|---|---|---|
@@ -508,7 +508,7 @@ CRUD topology Choir/Voice inside incarnation (`/v1/incarnations/{id}/choirs*`). 
 | `GET` | `/v1/incarnations/{id}/choirs/{choir}/voices` | `choir.list` | — (REST only) |
 | `DELETE` | `/v1/incarnations/{id}/choirs/{choir}/voices/{sid}` | `choir.remove-voice` | — (REST only) |
 
-`choir.*` - incarnation-scope (via `IncarnationScopeSelector` on path-`{name}`); Voice-actions hyphenated (`add-voice`/`remove-voice`) according to the grammar `<resource>.<action>`. `list` covers both the Choir list and the Voice list. Mutating-CRUD is audited (payload is written by the handler itself - choir/voice-snapshot is available only after mutation).
+`choir.*` - incarnation-scope (via `IncarnationScopeSelector` on path-`{id}`); Voice-actions hyphenated (`add-voice`/`remove-voice`) according to the grammar `<resource>.<action>`. `list` covers both the Choir list and the Voice list. Mutating-CRUD is audited (payload is written by the handler itself - choir/voice-snapshot is available only after mutation).
 
 ### Your own tokens (3) - auth-only, [ADR-014 amendment NIM-1052](../adr/0014-operator-identity.md)
 

@@ -644,8 +644,8 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		//     (service= + multi-value coven= from declared covens ∪ {name}) —
 		//     a coven-scoped operator cannot create an incarnation with a tag outside its scope.
 		//   - Run/Unlock/Upgrade/Destroy/… — [handlers.IncarnationScopeSelector]
-		//     (multi-context): reads the incarnation by path-{name} and lands
-		//     incarnation= + service= + multi-value coven= (covens ∪ {name}).
+		//     (multi-context): reads the incarnation by path-{id} and lands
+		//     incarnation= + service= + multi-value coven= (the declared covens only).
 		//     RequirePermissionMulti ORs the contexts — roles `incarnation.* on
 		//     coven=…` / `on service=…` match (mutate routes have no state-scoped
 		//     read hole: their scope in MVP is coven/service/incarnation, not state).
@@ -657,9 +657,9 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// destroy/traits-set — WRITE-SELF-AUDIT (audit is written by the handler ITSELF
 		// INSIDE *Typed via h.auditW.Write — the payload is assembled after the domain operation;
 		// audit-middleware is NOT wired, newHumaCadenceAPI); list/get/history — read (no
-		// audit). TOPOLOGY: chi.Route("/{name}") is REMOVED — all incarnation ops carry the FULL
-		// path /{name}[/...] on the /v1/incarnations group (otherwise sibling-shadowing of the
-		// /{name} node → 405, the blocker of batch-2f). Coexists with the choir-mount (batch-2f) on the SAME
+		// audit). TOPOLOGY: chi.Route("/{id}") is REMOVED — all incarnation ops carry the FULL
+		// path /{id}[/...] on the /v1/incarnations group (otherwise sibling-shadowing of the
+		// /{id} node → 405, the blocker of batch-2f). Coexists with the choir-mount (batch-2f) on the SAME
 		// group. Each write route has its OWN chi group with its own RBAC/event (Toll on run);
 		// huma inherits the chi-middleware. MCP incarnation-tools call the incarnation.*
 		// domain directly (bypassing the handler) — integrity preserved.
@@ -715,7 +715,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			// pre-fill of the scenario UI form from incarnation.state (docs/input.md). A READ
 			// resolve (not a mutation): audit is NOT wired, newHumaCadenceAPI. Permission
 			// incarnation.get (reuse: whoever reads the incarnation also gets the prefill of its
-			// form); per-{name} scope — the in-handler inScope predicate (GetInScopeFor,
+			// form); per-{id} scope — the in-handler inScope predicate (GetInScopeFor,
 			// action=get), as in Get/History. The path-whitelist and secret exclusion —
 			// are inside FormPrefillTyped.
 			r.With(
@@ -737,7 +737,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 
 			// GET /v1/incarnations/{id}/secrets/revealable — discovery of revealable
 			// secrets + keys from state (NIM-74). READ (no audit, newHumaCadenceAPI).
-			// Existence-gate RequireAction(view-secrets); per-{name} scope — in-handler
+			// Existence-gate RequireAction(view-secrets); per-{id} scope — in-handler
 			// inScope (GetInScopeFor, action=view-secrets), as get/form-prefill.
 			r.With(
 				apimiddleware.RequireAction(enforcer, "incarnation", "view-secrets"),
@@ -749,7 +749,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			// (ADR-0068 §6): a cheap list of registry tags + on-demand ?to= per-target.
 			// READ (no audit, newHumaCadenceAPI). Permission incarnation.upgrade (the read
 			// facet, the same as POST .../upgrade); existence-gate RequireAction(action=
-			// upgrade), per-{name} scope — in-handler inScope (GetInScopeFor, action=
+			// upgrade), per-{id} scope — in-handler inScope (GetInScopeFor, action=
 			// upgrade), as get/form-prefill.
 			r.With(
 				apimiddleware.RequireAction(enforcer, "incarnation", "upgrade"),
@@ -768,7 +768,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			// (apply_run) is NOT a Voyage: closes the UI bug apply_id→/voyages/ 404. READ
 			// (no audit, newHumaCadenceAPI). Permission incarnation.history (reuse of the
 			// read-tier: whoever sees the incarnation history also sees its runs); per-
-			// {name} scope — the in-handler inScope predicate (GetInScopeFor, action=history),
+			// {id} scope — the in-handler inScope predicate (GetInScopeFor, action=history),
 			// as in History; a WHERE on incarnation_name in the store layer cuts off runs
 			// of another incarnation (cross-incarnation apply_id → 404).
 			r.With(
@@ -881,7 +881,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			//
 			// WRITE-SELF-AUDIT: incarnation.member_bound / .member_unbound are written by
 			// the handler itself (audit-middleware is NOT wired; newHumaCadenceAPI). The
-			// sub-resource carries the FULL path /{name}/members[/{sid}] relative to the
+			// sub-resource carries the FULL path /{id}/members[/{sid}] relative to the
 			// /v1/incarnations group — the choir-voices layout.
 			r.With(
 				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "bind-member", incScope),
@@ -919,7 +919,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 
 			// /v1/incarnations/{id}/choirs — CRUD of the Choir/Voice topology (ADR-044,
 			// S-T3). A Choir belongs to an incarnation → the same scope selector incScope
-			// (incarnation/service/coven by path-{name}) as incarnation mutations.
+			// (incarnation/service/coven by path-{id}) as incarnation mutations.
 			// resource — `choir`; actions — create / delete / list + add-voice /
 			// remove-voice. Mounted ONLY when choirH is non-nil (the errandH pattern):
 			// a keeper without a ChoirDB pool returns 404, the drift-test keeps the paths in
@@ -931,9 +931,9 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			// DeleteTyped/AddVoiceTyped/RemoveVoiceTyped — audit-middleware is NOT wired
 			// (unlike the middleware-audit domains role/operator). newHumaCadenceAPI
 			// (no audit wiring). Multi-resource: voices — a sub-resource; the huma op carries
-			// the FULL path /{name}/choirs[/...] relative to the /v1/incarnations group (NOT
-			// nested in chi.Route("/{name}") — otherwise chi would double the {name} prefix,
-			// the soul/synod multi-resource pattern; huma binds {name}/{choir}/{sid} itself,
+			// the FULL path /{id}/choirs[/...] relative to the /v1/incarnations group (NOT
+			// nested in chi.Route("/{id}") — otherwise chi would double the {id} prefix,
+			// the soul/synod multi-resource pattern; huma binds {id}/{choir}/{sid} itself,
 			// the chi-RBAC selector incScope reads them from the humachi pattern). list/list-voices
 			// — read (no audit). Each route has its OWN chi group with its own RBAC; huma
 			// inherits. No MCP choir.

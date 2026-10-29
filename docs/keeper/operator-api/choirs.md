@@ -6,7 +6,7 @@ Domain section [Operator API](../operator-api.md): endpoints `/v1/incarnations/{
 
 Mapping endpoint ↔ permission (table of 6 routes) - in the root [operator-api.md → Choir (6)](../operator-api.md). The full request/response scheme is [`openapi.yaml`](../openapi.yaml) (`ChoirCreateRequest` / `Choir` / `ChoirListReply` / `VoiceAddRequest` / `Voice` / `VoiceListReply` - **source of truth in form**).
 
-Choir belongs to the incarnation → all six routes carry the scope selector `incarnation`/`service`/`coven` (along path-`{name}`, the same `IncarnationScopeSelector` as for incarnation mutations); bare/`*` — unrestricted. Connect only when the ChoirDB pool is configured (otherwise `404`). Voice-actions hyphenated (`add-voice`/`remove-voice`) according to the grammar permission `<resource>.<action>`. `created_by_aid`/`added_by_aid` are taken from the JWT context, NOT from the body.
+Choir belongs to the incarnation → all six routes carry the scope selector `incarnation`/`service`/`coven` (along path-`{id}`, the same `IncarnationScopeSelector` as for incarnation mutations); bare/`*` — unrestricted. Connect only when the ChoirDB pool is configured (otherwise `404`). Voice-actions hyphenated (`add-voice`/`remove-voice`) according to the grammar permission `<resource>.<action>`. `created_by_aid`/`added_by_aid` are taken from the JWT context, NOT from the body.
 
 | Method/Path | Permission |
 |---|---|

@@ -526,8 +526,8 @@ func incarnationScopeContexts(name, service string, covens []string) []map[strin
 
 // IncarnationScopeSelector builds a [middleware.MultiSelectorExtractor] for routes
 // over an EXISTING incarnation (get / history / run / unlock / upgrade / destroy):
-// reads the incarnation row by path-`{name}` via reader and lands it into the RBAC
-// context `incarnation=<name>`, `service=<inc.service>` and multi-value `coven=`
+// reads the incarnation row by path-`{id}` via reader and lands it into the RBAC
+// context `incarnation=<id>`, `service=<inc.service>` and multi-value `coven=`
 // (the DECLARED covens only — the name is an identity, reachable through the
 // `incarnation=` dimension, never as a coven) — closing the docs↔code drift where roles
 // `incarnation.* on coven=…` / `on service=…` silently did NOT match
@@ -538,18 +538,24 @@ func incarnationScopeContexts(name, service string, covens []string) []map[strin
 // carrying inc from middleware into the handler via context — is needless coupling
 // for one round-trip on a non-bulk operation).
 //
-// Fail-closed: an invalid/empty name or a not-found incarnation → nil set;
+// Fail-closed: an invalid/empty id, a not-found incarnation or no reader → nil set;
 // [middleware.RequirePermissionMulti] then admits only bare/`*` roles (scoped —
 // deny). The handler returns 404 for a nonexistent incarnation itself after a
 // bare/`*` operator passes (parity with prior behavior: RBAC never knew about the
 // incarnation's existence before either).
+//
+// The path parameter is `id`, the one every route under /v1/incarnations declares
+// (ADR-0085). A selector reading a parameter no route declares gets "" on every
+// request and refuses every scoped role while bare roles pass, so nothing looks
+// broken to an admin; TestIncarnationScope_EveryScopedRouteSeesItsIncarnation
+// sends a request through each gated route of the real router to keep the two in step.
 func IncarnationScopeSelector(reader IncarnationContextReader) middleware.MultiSelectorExtractor {
 	return func(r *http.Request) []map[string]string {
-		name := chi.URLParam(r, "name")
-		if !incarnation.ValidID(name) {
+		id := chi.URLParam(r, "id")
+		if reader == nil || !incarnation.ValidID(id) {
 			return nil
 		}
-		inc, err := incarnation.SelectByID(r.Context(), reader, name)
+		inc, err := incarnation.SelectByID(r.Context(), reader, id)
 		if err != nil {
 			// Not found / DB error → fail-closed for scoped roles. bare/`*` pass the
 			// empty set, the handler returns 404 / 500 as before.

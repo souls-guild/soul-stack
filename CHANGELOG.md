@@ -1056,6 +1056,19 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Fixed
 
+- **A role scoped by `incarnation=` / `service=` / `coven=` passes the gates of incarnation routes
+  (NIM-1087).** The REST gate's scope selector read the path parameter `name`, while every route
+  under `/v1/incarnations` declares `{id}` (ADR-0085). The selector therefore got an empty value on
+  every request and fell back to the empty context. As a result, a scoped role got `403` on every
+  incarnation route its gate checks with scope:
+  - run, unlock, upgrade, rerun-last, destroy;
+  - traits, label, secret reveal;
+  - binding, unbinding and listing members;
+  - choirs, maintenance windows and freezes.
+
+  Bare and `*` roles were unaffected. The MCP tools for these operations checked the scope
+  correctly all along; choirs and the secret reveal have no MCP tool. See the upgrade note.
+
 - **A Soul keeps reading its stream after a failback swap (NIM-949).** The swap waited for the
   retired stream's reader to exit while that reader waited to hand the session loop the stream's
   end, so the agent stayed connected — its host present — and read nothing on the new stream until
@@ -1316,6 +1329,17 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   resolves the set once and both rights read it.
 
 ### Upgrade notes
+
+- **Scoped incarnation roles now work over REST** (NIM-1087). A role such as
+  `incarnation.run on service=redis` or `incarnation.destroy on coven=prod` was refused on every
+  REST incarnation route, and now passes for the incarnations its scope names.
+  - For operations with an MCP tool, it already passed through MCP.
+  - **`choir.*` and `incarnation.view-secrets` are REST-only**, so a scoped holder of those gains
+    something it had on no surface before. For example, `incarnation.view-secrets on coven=prod`
+    now reveals the plaintext secrets of `prod` incarnations.
+
+  Before upgrading, review every scoped `incarnation.*`, `choir.*` and `incarnation.view-secrets`
+  grant.
 
 - **Scenario runs are linear by default** (`NIM-952`, [ADR-0091](docs/adr/0091-scenario-linear-barrier.md)).
   What an existing scenario does differently:

@@ -67,7 +67,7 @@ func TestIncarnationLabel_NotAnRBACScopeValue(t *testing.T) {
 		return guardLabelledIncRow(name, guardScopeLabel)
 	}}
 	sel := IncarnationScopeSelector(db)
-	req := newChiRequest(http.MethodPut, "/v1/incarnations/"+guardScopeID+"/label", nil, "name", guardScopeID)
+	req := newChiRequest(http.MethodPut, "/v1/incarnations/"+guardScopeID+"/label", nil, "id", guardScopeID)
 
 	ctxs := sel(req)
 	if len(ctxs) == 0 {
@@ -106,7 +106,7 @@ func TestIncarnationLabel_ScopeIgnoresCaptionChanges(t *testing.T) {
 			return guardLabelledIncRow(name, label)
 		}}
 		sel := IncarnationScopeSelector(db)
-		req := newChiRequest(http.MethodPut, "/v1/incarnations/"+guardScopeID+"/label", nil, "name", guardScopeID)
+		req := newChiRequest(http.MethodPut, "/v1/incarnations/"+guardScopeID+"/label", nil, "id", guardScopeID)
 		return sel(req)
 	}
 

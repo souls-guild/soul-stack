@@ -202,7 +202,7 @@ type runEventsGrant struct {
 // authorizeRunEventsSSE — RBAC check of the subscription to apply_id (ADR-068 §A3, parity
 // with /mcp/events authorizeSSE). fail-closed on any failure / nil deps. Order:
 //   - Access/RBAC nil or lookup error / not found → deny (anti-enum, indistinguishable from a denial);
-//   - apply_id belongs to a DIFFERENT incarnation (not path-{name}) → deny (foreign run);
+//   - apply_id belongs to a DIFFERENT incarnation (not path-{id}) → deny (foreign run);
 //   - the run initiator (started_by_aid == sub) → allow;
 //   - otherwise allow on incarnation.get OR incarnation.history on the incarnation.
 //
@@ -216,7 +216,7 @@ func authorizeRunEventsSSE(ctx context.Context, deps *runEventsDeps, sub, name, 
 	if err != nil {
 		return zero, false
 	}
-	// apply_id must be a run of THIS exact incarnation (path-{name}); otherwise it is a foreign
+	// apply_id must be a run of THIS exact incarnation (path-{id}); otherwise it is a foreign
 	// run, deny without revealing that apply_id lives in another incarnation.
 	if acc.IncarnationName != name {
 		return zero, false

@@ -138,11 +138,20 @@ func revokedGateRouterFull(t *testing.T, enforcer RBACProvider, soulH *handlers.
 // revocation source of its own.
 func revokedGateRouterVerifier(t *testing.T, verifier *keeperjwt.Verifier, enforcer RBACProvider, soulH *handlers.SoulHandler, auditW audit.Writer, webUI bool) http.Handler {
 	t.Helper()
+	return revokedGateRouterIncarnation(t, verifier, enforcer,
+		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil), soulH, auditW, webUI)
+}
+
+// revokedGateRouterIncarnation is [revokedGateRouterVerifier] with the incarnation
+// handler supplied by the caller. The incarnation scope selector reads the row
+// through that handler's DB, so the scope guard (NIM-1087) needs one that answers.
+func revokedGateRouterIncarnation(t *testing.T, verifier *keeperjwt.Verifier, enforcer RBACProvider, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, auditW audit.Writer, webUI bool) http.Handler {
+	t.Helper()
 	return buildRouter(
 		verifier,
 		health.NewHandler(health.Deps{}),
 		stubOperatorHandler(t),
-		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil),
+		incH,
 		soulH,
 		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t),

@@ -655,7 +655,7 @@ Both run **before** the row is inserted, so a refusal leaves no half-made incarn
 
 ### Choir (5) — [ADR-044](../adr/0044-choir.md)
 
-CRUD named host topology inside incarnation (Choir / Voice, tables `incarnation_choirs` / `incarnation_choir_voices`). **REST-only** (`/v1/incarnations/{id}/choirs*`, no MCP tools; bodies and semantics - [operator-api/choirs.md](operator-api/choirs.md)); routes are connected only when the ChoirDB pool is configured. Choir belongs to the incarnation, so the selector is the same as `incarnation.*`: `incarnation=` / `service=` / `coven=` (landing on path-`{name}`); bare - unrestricted. Those who mutate write audit, read-only `choir.list` - no.
+CRUD named host topology inside incarnation (Choir / Voice, tables `incarnation_choirs` / `incarnation_choir_voices`). **REST-only** (`/v1/incarnations/{id}/choirs*`, no MCP tools; bodies and semantics - [operator-api/choirs.md](operator-api/choirs.md)); routes are connected only when the ChoirDB pool is configured. Choir belongs to the incarnation, so the selector is the same as `incarnation.*`: `incarnation=` / `service=` / `coven=` (landing on path-`{id}`); bare - unrestricted. Those who mutate write audit, read-only `choir.list` - no.
 
 | Permission | Semantics | Audit-event |
 |---|---|---|

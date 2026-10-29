@@ -137,7 +137,7 @@ var AllowedPermissions = map[string]struct{}{
 	// right from `incarnation.create`/`incarnation.unlock`: rerun clears
 	// error_locked and restarts the last failed scenario in one action,
 	// requires a reason. Same scope selector (incarnation/coven/service by
-	// path-{name}).
+	// path-{id}).
 	"incarnation.rerun-last": {},
 	"incarnation.run":        {},
 	"incarnation.get":        {},
@@ -154,7 +154,7 @@ var AllowedPermissions = map[string]struct{}{
 	// neither can produce or overwrite the other's. Action is
 	// hyphenated (`traits-set`) since the permission grammar is exactly
 	// `<resource>.<action>` (pattern: soul.traits-assign). Same scope
-	// selector incarnation/coven/service by path-{name} as the other
+	// selector incarnation/coven/service by path-{id} as the other
 	// incarnation mutations.
 	"incarnation.traits-set": {},
 	// incarnation.bind-member / incarnation.unbind-member — the OPERATOR
@@ -171,7 +171,7 @@ var AllowedPermissions = map[string]struct{}{
 	// separately from binding. Reading the roster needs no right of its own:
 	// it rides on `incarnation.get`.
 	//
-	// Scope selector — the incarnation/coven/service triple by path-{name},
+	// Scope selector — the incarnation/coven/service triple by path-{id},
 	// same as other incarnation mutations. That gate alone is NOT enough:
 	// a scope predicate on `incarnation=` is satisfied without ever looking
 	// at the host, so a holder of `incarnation.bind-member on
@@ -188,7 +188,7 @@ var AllowedPermissions = map[string]struct{}{
 	// registry it replaced is gone): POST .../secrets/reveal + discovery
 	// GET .../secrets/revealable. Strictly more privileged than
 	// `incarnation.get` (unmasking, not reading under the mask). Same
-	// scope selector incarnation/coven/service by path-{name} as other
+	// scope selector incarnation/coven/service by path-{id} as other
 	// incarnation mutations. Audited as `incarnation.secret_revealed` (no
 	// value logged).
 	"incarnation.view-secrets": {},
@@ -342,7 +342,7 @@ var AllowedPermissions = map[string]struct{}{
 	// incarnation (Choir/Voice, ADR-044, S-T3). A Choir belongs to an
 	// incarnation, so it uses the same selector as incarnation.* —
 	// `incarnation=` / `service=` / `coven=` (resolved by
-	// [IncarnationScopeSelector] via path-{name}); bare — unrestricted.
+	// [IncarnationScopeSelector] via path-{id}); bare — unrestricted.
 	// resource is `choir`; actions — create / delete / list + add-voice /
 	// remove-voice (Voice membership management). Voice actions are
 	// hyphenated (`add-voice`/`remove-voice`) since the permission grammar

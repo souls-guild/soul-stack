@@ -17,7 +17,7 @@ package handlers
 // TWO GATES, both required (rbac.md § Incarnation membership):
 //
 //	(a) the incarnation — `incarnation.bind-member` / `unbind-member` with the
-//	    incarnation/coven/service selector by path-{name}; applied by middleware.
+//	    incarnation/coven/service selector by path-{id}; applied by middleware.
 //	(b) each host — the SID must be inside the caller's soul visibility
 //	    (`soul.list` purview). Gate (a) alone is NOT enough: a scope predicate on
 //	    `incarnation=` is satisfied without ever looking at the host, so a holder
