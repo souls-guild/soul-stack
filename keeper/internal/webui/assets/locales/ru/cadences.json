@@ -1,5 +1,6 @@
 {
   "colEnabled": "Статус",
+  "colInWindow": "Тех. окно",
   "colKind": "Тип",
   "colLastRun": "Последний запуск",
   "colName": "Имя",
@@ -21,6 +22,11 @@
   "enableConfirm": "Включить «{{name}}»? Оно начнёт спавнить прогоны по расписанию.",
   "enableTitle": "Включить расписание?",
   "enabled": "Активно",
+  "inWindowCommandNa": "— команда адресует хосты, а у хоста нет окна",
+  "inWindowOff": "в любое время вне фриза",
+  "inWindowOn": "каждый запуск стартует в тех окно",
+  "inWindowTurnOff": "Не ждать окна",
+  "inWindowTurnOn": "Запускать в окно",
   "notificationsHint": "Уведомления о результатах прогонов этого расписания настраиваются во вкладке Notifications (постоянное правило с этим расписанием).",
   "notificationsLinkLabel": "Настроить уведомления о прогонах",
   "overlap_parallel": "Параллельно",
