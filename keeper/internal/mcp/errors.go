@@ -52,6 +52,10 @@ const (
 	mcpCodeIncarnationExists     = "incarnation-already-exists"
 	mcpCodeIncarnationLocked     = "incarnation-locked"
 	mcpCodeRerunInputUnavailable = "rerun-input-unavailable"
+	// freeze-active mirrors REST TypeFreezeActive (ADR-0093 §5): the run or the
+	// destroy would start inside a freeze, and the call did not carry
+	// confirm_freeze: true. The detail names the frozen incarnations.
+	mcpCodeFreezeActive = "freeze-active"
 
 	// Role codes (RBAC CRUD, Slice 2b). role-already-exists — UNIQUE violation
 	// on rbac_roles.name; role-builtin — delete/update attempted on a builtin

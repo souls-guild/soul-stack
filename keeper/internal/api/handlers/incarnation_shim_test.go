@@ -182,10 +182,13 @@ func incRun(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	name := chi.URLParam(r, "name")
 	scenarioName := chi.URLParam(r, "scenario")
 	var body struct {
-		Input map[string]any `json:"input"`
+		Input               map[string]any `json:"input"`
+		InMaintenanceWindow bool           `json:"in_maintenance_window"`
+		ConfirmFreeze       bool           `json:"confirm_freeze"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	reply, err := h.RunTyped(r.Context(), claims, name, scenarioName, body.Input)
+	reply, err := h.RunTyped(r.Context(), claims, name, scenarioName, body.Input,
+		RunGate{InMaintenanceWindow: body.InMaintenanceWindow, ConfirmFreeze: body.ConfirmFreeze})
 	if err != nil {
 		renderProblem(rec, err)
 		return rec
@@ -230,10 +233,11 @@ func incUpgrade(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecord
 	claims, _ := shimClaims(r)
 	name := chi.URLParam(r, "name")
 	var body struct {
-		ToVersion string `json:"to_version"`
+		ToVersion     string `json:"to_version"`
+		ConfirmFreeze bool   `json:"confirm_freeze"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	reply, err := h.UpgradeTyped(r.Context(), claims, name, body.ToVersion)
+	reply, err := h.UpgradeTyped(r.Context(), claims, name, body.ToVersion, body.ConfirmFreeze)
 	if err != nil {
 		renderProblem(rec, err)
 		return rec

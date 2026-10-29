@@ -11,36 +11,36 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pgutil"
 )
 
-// claimReturning — RETURNING list for ClaimNext. Matches the order of
-// [selectColumns] (including EXTRACT EPOCH for inter_batch_interval), so the shared
-// [scanVoyage] can read the claimed row.
-const claimReturning = `
-    voyage_id, kind, scenario_name, module, input,
-    target_resolved, target_origin,
-    batch_size, concurrency, batch_mode, dry_run,
-    schedule_at, EXTRACT(EPOCH FROM inter_batch_interval)::float8, on_failure,
-    total_batches, current_batch_index, status,
-    claimed_by_kid, last_renewed_at, claim_expires_at, attempt,
-    started_by_aid, created_at, started_at, finished_at, summary,
-    batch_percent, fail_threshold, EXTRACT(EPOCH FROM inter_unit_interval)::float8, require_alive,
-    cadence_id
+// claimableWhere — the claimable predicate: `pending`, or `scheduled` whose
+// schedule_at has come (S4). The peek, the claim and the deferral all repeat
+// it, so a row another worker changed in between fails the later statement.
+const claimableWhere = `(status = 'pending' OR (status = 'scheduled' AND schedule_at <= NOW()))`
+
+// peekClaimableSQL — the next claimable Voyage, FIFO by created_at, together
+// with the database clock the predicate is evaluated against. The start gate
+// is asked at that instant: a Keeper whose clock runs behind the database would
+// otherwise find a row due by NOW() still closed, defer it to the same moment,
+// and spin on it.
+//
+// No lock: the claim that follows is a CAS on the same predicate, so two
+// workers that peek the same row cannot both claim it.
+const peekClaimableSQL = `SELECT ` + selectColumns + `, NOW()
+FROM voyages
+WHERE ` + claimableWhere + `
+ORDER BY created_at ASC
+LIMIT 1
 `
 
-// claimNextSQL — atomically claims a single claimable Voyage. Work-queue idiom,
-// parity with tide/errandrun.ClaimNext: the inner SELECT FOR UPDATE SKIP LOCKED
-// locks a single row and skips rows locked by competitors — two
-// VoyageWorkers from different instances will never claim the same Voyage. The outer
-// UPDATE transitions claimable → running, sets the owner/lease, sets
-// started_at on first claim, and increments attempt (fencing epoch, ADR-027(g)).
-//
-// Claimable = `pending` OR (`scheduled` AND schedule_at <= NOW()): a deferred
-// start (S4) becomes claimable as soon as its time arrives. A scheduled row with
-// schedule_at in the future is ignored (waits its turn). After claiming, the status
-// is always `running` — no separate branch is needed for the original status.
+// claimByIDSQL — claims the peeked Voyage: claimable → running, sets the
+// owner/lease, sets started_at on first claim, and increments attempt (fencing
+// epoch, ADR-027(g)). SKIP LOCKED makes a row a competitor is claiming at this
+// instant a miss rather than a wait; the predicate re-checked under the lock
+// makes a row it already claimed a miss too.
 //
 //	$1 kid   — KID of the owning Keeper
 //	$2 lease — interval until claim_expires_at (NOW() + $2)
-const claimNextSQL = `
+//	$3 id    — the peeked voyage_id
+const claimByIDSQL = `
 UPDATE voyages AS v
 SET status           = 'running',
     claimed_by_kid   = $1,
@@ -51,35 +51,151 @@ SET status           = 'running',
 WHERE v.voyage_id = (
     SELECT c.voyage_id
     FROM voyages AS c
-    WHERE c.status = 'pending'
-       OR (c.status = 'scheduled' AND c.schedule_at <= NOW())
-    ORDER BY c.created_at ASC
+    WHERE c.voyage_id = $3
+      AND (c.status = 'pending' OR (c.status = 'scheduled' AND c.schedule_at <= NOW()))
     FOR UPDATE SKIP LOCKED
-    LIMIT 1
 )
-RETURNING ` + claimReturning
+RETURNING ` + selectColumns
 
-// ClaimNext atomically claims a single claimable Voyage: (pending OR
-// scheduled-and-due) → running, claim fields + attempt+1 + started_at. FIFO
-// by created_at. Returns nil with no error if there are no claimable Voyages
-// (the caller sleeps PollInterval and retries).
-func ClaimNext(ctx context.Context, db ExecQueryRower, kid string, leaseTTL time.Duration) (*Voyage, error) {
+// deferByIDSQL — puts a row the start gate held back to `scheduled` at the
+// gate's time. started_at stays NULL and attempt is untouched: the row has not
+// started, so the next claim asks the gate again.
+const deferByIDSQL = `
+UPDATE voyages
+SET status      = 'scheduled',
+    schedule_at = $2
+WHERE voyage_id = $1
+  AND started_at IS NULL
+  AND ` + claimableWhere
+
+// refuseByIDSQL — fails a row whose targets have no common start, and cancels
+// its targets with the reason, in one statement so a crash cannot leave a
+// failed Voyage with awaiting targets. The count says whether the row was
+// still claimable.
+const refuseByIDSQL = `
+WITH v AS (
+    UPDATE voyages
+    SET status      = 'failed',
+        finished_at = NOW(),
+        summary     = $2
+    WHERE voyage_id = $1
+      AND started_at IS NULL
+      AND ` + claimableWhere + `
+    RETURNING voyage_id
+), t AS (
+    UPDATE voyage_targets AS vt
+    SET status        = 'cancelled',
+        finished_at   = NOW(),
+        error_code    = $3,
+        error_message = $4
+    FROM v
+    WHERE vt.voyage_id = v.voyage_id
+      AND vt.status = 'awaiting'
+)
+SELECT count(*) FROM v
+`
+
+// maxClaimHops bounds one [ClaimNext]: every hop is a row the gate held back
+// or a race lost to another worker. The caller retries at once when the hops
+// did something, so the bound only spreads the work over calls.
+const maxClaimHops = 32
+
+// GateOutcome is what the claim did with a row its [StartGate] held back:
+// deferred to Verdict.DeferTo, or failed for Verdict.NoStart. Voyage is the row
+// as peeked.
+type GateOutcome struct {
+	Voyage  *Voyage
+	Verdict GateVerdict
+}
+
+// ClaimNext claims the next claimable Voyage (pending, or scheduled and due),
+// FIFO by created_at: → running, claim fields + attempt+1 + started_at.
+//
+// A scenario Voyage that has not started yet is first put to gate (ADR-0093
+// §3) — every one, whoever created it: an operator's run, a Cadence spawn, the
+// Reaper's rotation. A held-back row is deferred, or failed when it can never
+// start, and the next row is tried; held-back rows come back as outcomes for
+// the caller to report. A row that already started is a reclaim after a lost
+// lease, and the gate is not asked again: a run that started runs to its end.
+//
+// Returns a nil Voyage when nothing is claimable. With outcomes but no Voyage,
+// the caller should call again at once rather than sleep.
+func ClaimNext(ctx context.Context, db ExecQueryRower, kid string, leaseTTL time.Duration, gate StartGate) (*Voyage, []GateOutcome, error) {
 	if kid == "" {
-		return nil, fmt.Errorf("voyage: empty kid")
+		return nil, nil, fmt.Errorf("voyage: empty kid")
 	}
 	if leaseTTL <= 0 {
-		return nil, fmt.Errorf("voyage: non-positive lease %s", leaseTTL)
+		return nil, nil, fmt.Errorf("voyage: non-positive lease %s", leaseTTL)
+	}
+	if gate == nil {
+		return nil, nil, fmt.Errorf("voyage: nil start gate")
 	}
 
-	row := db.QueryRow(ctx, claimNextSQL, kid, pgutil.Interval(leaseTTL))
-	v, err := scanVoyage(row)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
+	var outcomes []GateOutcome
+	for range maxClaimHops {
+		var now time.Time
+		cand, err := scanVoyage(db.QueryRow(ctx, peekClaimableSQL), &now)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, outcomes, nil
+			}
+			return nil, outcomes, fmt.Errorf("voyage: peek claimable: %w", err)
 		}
-		return nil, fmt.Errorf("voyage: claim next: %w", err)
+
+		if cand.Kind == KindScenario && cand.StartedAt == nil {
+			verdict, err := gate.Decide(ctx, db, cand, now)
+			if err != nil {
+				return nil, outcomes, err
+			}
+			held, err := holdBack(ctx, db, cand, verdict)
+			if err != nil {
+				return nil, outcomes, err
+			}
+			if held {
+				outcomes = append(outcomes, GateOutcome{Voyage: cand, Verdict: verdict})
+				continue
+			}
+			if !verdict.DeferTo.IsZero() || verdict.NoStart {
+				continue // lost the row to another worker
+			}
+		}
+
+		v, err := scanVoyage(db.QueryRow(ctx, claimByIDSQL, kid, pgutil.Interval(leaseTTL), cand.VoyageID))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return nil, outcomes, fmt.Errorf("voyage: claim next: %w", err)
+		}
+		return v, outcomes, nil
 	}
-	return v, nil
+	return nil, outcomes, nil
+}
+
+// holdBack applies a closed verdict to the row. false with no error means
+// either the verdict was open or the row had stopped being claimable.
+func holdBack(ctx context.Context, db ExecQueryRower, v *Voyage, verdict GateVerdict) (bool, error) {
+	switch {
+	case verdict.NoStart:
+		total := scopeSize(v.TargetResolved)
+		summary, err := marshalSummary(&Summary{Total: total, Cancelled: total})
+		if err != nil {
+			return false, fmt.Errorf("voyage: marshal summary: %w", err)
+		}
+		var n int
+		if err := db.QueryRow(ctx, refuseByIDSQL, v.VoyageID, summary,
+			TargetErrorNoCommonWindow, verdict.Reason).Scan(&n); err != nil {
+			return false, fmt.Errorf("voyage: refuse %s: %w", v.VoyageID, err)
+		}
+		return n == 1, nil
+	case !verdict.DeferTo.IsZero():
+		tag, err := db.Exec(ctx, deferByIDSQL, v.VoyageID, verdict.DeferTo.UTC())
+		if err != nil {
+			return false, fmt.Errorf("voyage: defer %s: %w", v.VoyageID, err)
+		}
+		return tag.RowsAffected() == 1, nil
+	}
+	return false, nil
 }
 
 const renewLeaseSQL = `

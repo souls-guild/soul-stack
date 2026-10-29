@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -186,10 +187,11 @@ func voyageQueryFromArgs(args json.RawMessage) string {
 		return ""
 	}
 	var a struct {
-		Kind   string   `json:"kind,omitempty"`
-		Status []string `json:"status,omitempty"`
-		Offset *int     `json:"offset,omitempty"`
-		Limit  *int     `json:"limit,omitempty"`
+		Kind        string   `json:"kind,omitempty"`
+		Status      []string `json:"status,omitempty"`
+		Incarnation string   `json:"incarnation,omitempty"`
+		Offset      *int     `json:"offset,omitempty"`
+		Limit       *int     `json:"limit,omitempty"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return ""
@@ -197,6 +199,9 @@ func voyageQueryFromArgs(args json.RawMessage) string {
 	var parts []string
 	if a.Kind != "" {
 		parts = append(parts, "kind="+a.Kind)
+	}
+	if a.Incarnation != "" {
+		parts = append(parts, "incarnation="+url.QueryEscape(a.Incarnation))
 	}
 	for _, s := range a.Status {
 		parts = append(parts, "status="+s)
@@ -267,6 +272,8 @@ func (h *Handler) toolFromVoyageProblem(id json.RawMessage, toolName string, rec
 		code = mcpCodeNotFound
 	case status == http.StatusConflict && p.Type == problem.TypeIncarnationLocked:
 		code = mcpCodeIncarnationLocked
+	case status == http.StatusConflict && p.Type == problem.TypeFreezeActive:
+		code = mcpCodeFreezeActive
 	case status == http.StatusConflict:
 		code = mcpCodeErrandNotCancellable
 	case status == http.StatusUnprocessableEntity:

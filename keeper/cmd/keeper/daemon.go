@@ -5843,6 +5843,7 @@ func (d *daemon) setupVoyageWorker(ctx context.Context) error {
 			ScenarioAwaiter: incarnationAwaiter,
 			CommandSpawner:  commandSpawner,
 			OrphanReleaser:  orphanReleaser,
+			Gate:            voyage.MaintenanceGate{},
 			Audit:           d.auditWriter,
 		}
 		wg.Add(1)

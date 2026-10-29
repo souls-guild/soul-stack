@@ -44,6 +44,11 @@ const (
 	TargetErrorAsyncEscalation  = "async_escalation"
 	TargetErrorUnknownStatus    = "unknown_status"
 
+	// A scenario Voyage the start gate failed before it started: its targets'
+	// maintenance windows never meet, or cannot be read or evaluated
+	// (ADR-0093 §3). Every target carries it.
+	TargetErrorNoCommonWindow = "no_common_window"
+
 	// Either kind.
 	TargetErrorInputDecode          = "input_decode_error"
 	TargetErrorOwnershipCheckFailed = "ownership_check_failed"
@@ -71,6 +76,7 @@ var TargetErrorCodes = []string{
 	TargetErrorAwaitTimeout,
 	TargetErrorAsyncEscalation,
 	TargetErrorUnknownStatus,
+	TargetErrorNoCommonWindow,
 	TargetErrorInputDecode,
 	TargetErrorOwnershipCheckFailed,
 	TargetErrorSpawn,

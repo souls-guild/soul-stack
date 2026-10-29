@@ -533,7 +533,10 @@ func TestWorker_DispatchScenarioKind(t *testing.T) {
 	var claimedOnce atomic.Bool
 	fdb := &fakeDB{}
 	fdb.queryRowFn = func(sql string, _ []any) pgx.Row {
-		if claimContains(sql) && claimedOnce.CompareAndSwap(false, true) {
+		switch {
+		case peekContains(sql) && !claimedOnce.Load():
+			return peekRow(scenarioClaimRow())
+		case claimContains(sql) && claimedOnce.CompareAndSwap(false, true):
 			return scenarioClaimRow()
 		}
 		return errRow{err: pgx.ErrNoRows}
@@ -541,7 +544,7 @@ func TestWorker_DispatchScenarioKind(t *testing.T) {
 	sp := &fakeSpawner{}
 	w := &VoyageWorker{
 		KID: "k", Pool: fdb, LeaseTTL: time.Minute, RenewInterval: time.Hour,
-		PollInterval: 5 * time.Millisecond, Logger: quietLogger(),
+		PollInterval: 5 * time.Millisecond, Logger: quietLogger(), Gate: openGate{},
 		ScenarioSpawner: sp, ScenarioAwaiter: &fakeAwaiter{},
 	}
 

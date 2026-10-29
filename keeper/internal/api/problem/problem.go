@@ -73,11 +73,19 @@ const (
 	// "the input of a failed run is lost → unlock + manual run" from "status is not
 	// error_locked → unlock" (the latter stays on [TypeIncarnationLocked]).
 	TypeRerunInputUnavailable = "https://soul-stack.com/errors/rerun-input-unavailable"
-	TypeSoulExists            = "https://soul-stack.com/errors/soul-already-exists"
-	TypeBootstrapTokenActive  = "https://soul-stack.com/errors/bootstrap-token-active"
-	TypeRoleNotFound          = "https://soul-stack.com/errors/role-not-found"
-	TypeRoleExists            = "https://soul-stack.com/errors/role-already-exists"
-	TypeRoleBuiltin           = "https://soul-stack.com/errors/role-builtin"
+	// TypeFreezeActive — the run (or rerun-last, the upgrade, the destroy) would
+	// start inside a freeze of an incarnation, and the request did not carry
+	// `confirm_freeze: true` (ADR-0093 §5). 409: resending with consent succeeds;
+	// a run or a Voyage may instead wait the freeze out with
+	// `in_maintenance_window: true`, and `detail` offers that only to them.
+	// `detail` names the frozen incarnations with their freeze's end and
+	// comment, which is what the operator has to be shown before consenting.
+	TypeFreezeActive         = "https://soul-stack.com/errors/freeze-active"
+	TypeSoulExists           = "https://soul-stack.com/errors/soul-already-exists"
+	TypeBootstrapTokenActive = "https://soul-stack.com/errors/bootstrap-token-active"
+	TypeRoleNotFound         = "https://soul-stack.com/errors/role-not-found"
+	TypeRoleExists           = "https://soul-stack.com/errors/role-already-exists"
+	TypeRoleBuiltin          = "https://soul-stack.com/errors/role-builtin"
 	// TypeRoleHasChildren — deleting a role is blocked by roles derived from it
 	// (self-FK rbac_roles_parent_role_fk ON DELETE RESTRICT, migration 102,
 	// ADR-078(g)). 409 Conflict, the same shape as TypeProviderHasProfiles: the
@@ -249,6 +257,7 @@ var titles = map[string]string{
 	TypeIncarnationExists:          "Incarnation already exists",
 	TypeIncarnationLocked:          "Incarnation is locked",
 	TypeRerunInputUnavailable:      "Rerun input unavailable",
+	TypeFreezeActive:               "A freeze is active",
 	TypeSoulExists:                 "Soul already exists",
 	TypeBootstrapTokenActive:       "Bootstrap token already active",
 	TypeRoleNotFound:               "Role not found",
@@ -350,6 +359,7 @@ var statuses = map[string]int{
 	TypeIncarnationExists:          http.StatusConflict,
 	TypeIncarnationLocked:          http.StatusConflict,
 	TypeRerunInputUnavailable:      http.StatusConflict,
+	TypeFreezeActive:               http.StatusConflict,
 	TypeSoulExists:                 http.StatusConflict,
 	TypeBootstrapTokenActive:       http.StatusConflict,
 	TypeRoleNotFound:               http.StatusNotFound,

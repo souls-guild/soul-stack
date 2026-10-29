@@ -363,8 +363,9 @@ func toSoulListInput(in *soulListInput, page sharedapi.Page, cursor *sharedapi.K
 // bounds are checked by the route before this runs (CheckPageBounds → 400).
 func toVoyageListInput(in *voyageListInput) handlers.VoyageListInput {
 	return handlers.VoyageListInput{
-		Kind:     in.Kind,
-		Statuses: in.Statuses,
-		Page:     sharedapi.Page{Offset: int(in.Offset), Limit: int(in.Limit)},
+		Kind:        in.Kind,
+		Statuses:    in.Statuses,
+		Incarnation: in.Incarnation,
+		Page:        sharedapi.Page{Offset: int(in.Offset), Limit: int(in.Limit)},
 	}
 }

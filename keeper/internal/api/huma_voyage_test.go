@@ -136,8 +136,8 @@ type voyageCancelRow struct {
 }
 
 func (r voyageCancelRow) Scan(dest ...any) error {
-	if len(dest) != 31 {
-		return errStrict("voyageCancelRow: expected 31 dest, got scanVoyage desync")
+	if len(dest) != 33 {
+		return errStrict("voyageCancelRow: expected 33 dest, got scanVoyage desync")
 	}
 	kind := r.kind
 	if kind == "" {
@@ -174,6 +174,8 @@ func (r voyageCancelRow) Scan(dest ...any) error {
 	*dest[28].(**float64) = nil   // inter_unit_secs
 	*dest[29].(**bool) = nil      // require_alive
 	*dest[30].(**string) = nil    // cadence_id
+	*dest[31].(*bool) = false     // in_maintenance_window
+	*dest[32].(*[]string) = nil   // confirmed_freeze_ids
 	return nil
 }
 

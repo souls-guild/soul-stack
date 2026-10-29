@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
+	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
 // fakeDB stub for [voyage.ExecQueryRower] (parity errandrunorch::fakeDB).
@@ -249,7 +251,27 @@ func claimedVoyageRow(id, kind, status string) scanRow {
 		(*float64)(nil),   // 29 inter_unit_interval (epoch secs)
 		(*bool)(nil),      // 30 require_alive
 		(*string)(nil),    // 31 cadence_id (back-link ADR-046; manual run = NULL)
+		false,             // 32 in_maintenance_window
+		[]string(nil),     // 33 confirmed_freeze_ids
 	}}
+}
+
+// peekContains matches the claim's peek (voyage.peekClaimableSQL): the one
+// voyages SELECT that reads the database clock after the row.
+func peekContains(sql string) bool {
+	return strings.Contains(sql, ", NOW()\nFROM voyages") && !claimContains(sql)
+}
+
+// peekRow is r as the peek returns it: the row, then the database clock.
+func peekRow(r scanRow) scanRow {
+	return scanRow{values: append(slices.Clone(r.values), time.Now().UTC())}
+}
+
+// openGate is a voyage.StartGate that lets every row start.
+type openGate struct{}
+
+func (openGate) Decide(context.Context, voyage.ExecQueryRower, *voyage.Voyage, time.Time) (voyage.GateVerdict, error) {
+	return voyage.GateVerdict{}, nil
 }
 
 func quietLogger() *slog.Logger {
@@ -266,6 +288,7 @@ func TestWorker_Validate(t *testing.T) {
 			RenewInterval: 20 * time.Second,
 			PollInterval:  time.Second,
 			Logger:        quietLogger(),
+			Gate:          openGate{},
 		}
 	}
 	if err := base().validate(); err != nil {
@@ -282,6 +305,7 @@ func TestWorker_Validate(t *testing.T) {
 		{"bad renew", func(w *VoyageWorker) { w.RenewInterval = 0 }, "RenewInterval"},
 		{"bad poll", func(w *VoyageWorker) { w.PollInterval = 0 }, "PollInterval"},
 		{"no logger", func(w *VoyageWorker) { w.Logger = nil }, "Logger"},
+		{"no gate", func(w *VoyageWorker) { w.Gate = nil }, "Gate"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -304,10 +328,11 @@ func TestWorker_DispatchCommandKind(t *testing.T) {
 	var claimedOnce atomic.Bool
 	fdb := &fakeDB{}
 	fdb.queryRowFn = func(sql string, _ []any) pgx.Row {
-		if strings.Contains(sql, "FOR UPDATE SKIP LOCKED") {
-			if claimedOnce.CompareAndSwap(false, true) {
-				return commandClaimRow()
-			}
+		switch {
+		case peekContains(sql) && !claimedOnce.Load():
+			return peekRow(commandClaimRow())
+		case claimContains(sql) && claimedOnce.CompareAndSwap(false, true):
+			return commandClaimRow()
 		}
 		return errRow{err: pgx.ErrNoRows}
 	}
@@ -320,6 +345,7 @@ func TestWorker_DispatchCommandKind(t *testing.T) {
 		RenewInterval:  time.Hour, // does not tick during the test
 		PollInterval:   5 * time.Millisecond,
 		Logger:         quietLogger(),
+		Gate:           openGate{},
 		CommandSpawner: sp,
 	}
 
@@ -349,5 +375,85 @@ func TestWorker_DispatchCommandKind(t *testing.T) {
 	sp.mu.Unlock()
 	if calls != 2 {
 		t.Errorf("spawn calls = %d, want 2 (two hosts in target_resolved)", calls)
+	}
+}
+
+// byIDGate is a voyage.StartGate that fails the rows named in noStart and
+// opens every other.
+type byIDGate struct{ noStart map[string]bool }
+
+func (g byIDGate) Decide(_ context.Context, _ voyage.ExecQueryRower, v *voyage.Voyage, _ time.Time) (voyage.GateVerdict, error) {
+	if g.noStart[v.VoyageID] {
+		return voyage.GateVerdict{NoStart: true, Reason: "windows never meet"}, nil
+	}
+	return voyage.GateVerdict{}, nil
+}
+
+// TestWorker_HeldBackRowIsAuditedAndTheQueueIsAskedAgainAtOnce — a row the
+// start gate fails never reaches executeVoyage, so the worker writes its
+// terminal audit itself; and a claim that held rows back is followed by
+// another at once, not after PollInterval (an hour here), because the rows
+// behind them may start now.
+func TestWorker_HeldBackRowIsAuditedAndTheQueueIsAskedAgainAtOnce(t *testing.T) {
+	t.Parallel()
+	held := scenarioClaimRow()
+	held.values[0] = "01HELD"
+	var peeks atomic.Int64
+	var claimedOnce atomic.Bool
+	fdb := &fakeDB{}
+	fdb.queryRowFn = func(sql string, _ []any) pgx.Row {
+		switch {
+		case peekContains(sql):
+			switch peeks.Add(1) {
+			case 1:
+				return peekRow(held)
+			case 2:
+				return errRow{err: pgx.ErrNoRows}
+			}
+			if !claimedOnce.Load() {
+				return peekRow(commandClaimRow())
+			}
+		case strings.Contains(sql, "SELECT count(*) FROM v"):
+			return scanRow{values: []any{1}}
+		case claimContains(sql) && claimedOnce.CompareAndSwap(false, true):
+			return commandClaimRow()
+		}
+		return errRow{err: pgx.ErrNoRows}
+	}
+	cw := &capturingWriter{}
+	w := &VoyageWorker{
+		KID: "k", Pool: fdb, LeaseTTL: time.Minute, RenewInterval: time.Hour,
+		PollInterval: time.Hour, Logger: quietLogger(), Audit: cw,
+		Gate:           byIDGate{noStart: map[string]bool{"01HELD": true}},
+		CommandSpawner: &fakeCommandSpawner{},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+	deadline := time.After(2 * time.Second)
+	for fdb.finalCallCount.Load() == 0 {
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatal("the row behind the held one was not claimed: the worker slept after a claim that held rows back")
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+	var failed *audit.Event
+	for _, ev := range cw.events {
+		if ev.EventType == audit.EventScenarioRunFailed && ev.Payload["voyage_id"] == "01HELD" {
+			failed = ev
+		}
+	}
+	if failed == nil || failed.Payload["error_code"] != voyage.TargetErrorNoCommonWindow {
+		t.Fatalf("audit = %+v, want scenario_run.failed for 01HELD with error_code %s", cw.events, voyage.TargetErrorNoCommonWindow)
 	}
 }

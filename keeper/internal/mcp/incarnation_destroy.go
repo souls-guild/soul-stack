@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
@@ -18,8 +19,9 @@ import (
 // force↔allow_destroy): false — destroy via the `destroy` teardown scenario;
 // true — removal without teardown (force-DELETE).
 type incarnationDestroyArgs struct {
-	ID           string `json:"id"`
-	AllowDestroy *bool  `json:"allow_destroy"`
+	ID            string `json:"id"`
+	AllowDestroy  *bool  `json:"allow_destroy"`
+	ConfirmFreeze bool   `json:"confirm_freeze,omitempty"`
 }
 
 // incarnationDestroyOutput — output of keeper.incarnation.destroy
@@ -114,6 +116,16 @@ func (h *Handler) callIncarnationDestroy(ctx context.Context, claims *jwt.Claims
 	if err := h.checkIncarnationScope(claims, "destroy", inc.ID, inc.Service, inc.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.destroy")
+	}
+
+	// Freeze consent before anything commits, on the force path too (ADR-0093
+	// §4, NIM-1085; parity REST).
+	if err := handlers.CheckFreezeConsent(ctx, h.deps.IncarnationDB, a.ID, time.Now(), a.ConfirmFreeze, handlers.FreezeActDestroy); err != nil {
+		if resp, ok := h.runGateToolError(req.ID, toolName, err); ok {
+			return resp
+		}
+		h.deps.Logger.Error("mcp: incarnation.destroy freeze check failed", slog.String("name", a.ID), slog.Any("error", err))
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, "read freezes failed")
 	}
 
 	// S-D2a pre-check: resolve the snapshot (force=true — the scenario-missing

@@ -68,7 +68,7 @@ func TestIncarnation_Destroy_Teardown_202(t *testing.T) {
 	destroyer := &fakeDestroyer{}
 	aw := &fakeAuditWriter{}
 	h := newDestroyHandler(db, destroyer, aw, true)
-	view, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false)
+	view, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false, false)
 	if err != nil {
 		t.Fatalf("DestroyTyped err = %v", err)
 	}
@@ -134,7 +134,7 @@ func TestIncarnation_Destroy_AutoDestroyFalse_DirectDelete(t *testing.T) {
 	// the `destroy` scenario EXISTS, but auto_destroy=false → teardown is skipped.
 	h := newDestroyHandlerLifecycle(db, destroyer, aw, true, &config.LifecycleConfig{AutoDestroy: boolPtr(false)})
 	// allow_destroy=false — auto_destroy=false must take priority.
-	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false); err != nil {
+	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false, false); err != nil {
 		t.Fatalf("DestroyTyped err = %v", err)
 	}
 	if destroyer.calls != 0 {
@@ -153,7 +153,7 @@ func TestIncarnation_Destroy_AutoDestroyFalse_NoScenario_DirectDelete(t *testing
 	destroyer := &fakeDestroyer{}
 	aw := &fakeAuditWriter{}
 	h := newDestroyHandlerLifecycle(db, destroyer, aw, false, &config.LifecycleConfig{AutoDestroy: boolPtr(false)})
-	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false); err != nil {
+	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false, false); err != nil {
 		t.Fatalf("DestroyTyped err = %v (auto_destroy=false bypasses the scenario gate)", err)
 	}
 	if destroyer.calls != 0 {
@@ -172,7 +172,7 @@ func TestIncarnation_Destroy_AutoDestroyDefault_Teardown(t *testing.T) {
 	destroyer := &fakeDestroyer{}
 	aw := &fakeAuditWriter{}
 	h := newDestroyHandlerLifecycle(db, destroyer, aw, true, nil) // lifecycle nil
-	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false); err != nil {
+	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false, false); err != nil {
 		t.Fatalf("DestroyTyped err = %v", err)
 	}
 	if destroyer.calls != 1 {
@@ -190,7 +190,7 @@ func TestIncarnation_Destroy_NoScenario_NoForce_422(t *testing.T) {
 	destroyer := &fakeDestroyer{}
 	aw := &fakeAuditWriter{}
 	h := newDestroyHandler(db, destroyer, aw, false) // no scenario
-	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false)
+	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false, false)
 	wantProblem(t, err, problem.TypeValidationFailed)
 	// incarnation is NOT touched: no transition to destroying, no teardown.
 	if destroyer.calls != 0 {
@@ -211,7 +211,7 @@ func TestIncarnation_Destroy_Force_NoScenario_202_Delete(t *testing.T) {
 	destroyer := &fakeDestroyer{}
 	aw := &fakeAuditWriter{}
 	h := newDestroyHandler(db, destroyer, aw, false) // no scenario, but force=true
-	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", true); err != nil {
+	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", true, false); err != nil {
 		t.Fatalf("DestroyTyped err = %v", err)
 	}
 	// force path: teardown is skipped.
@@ -244,7 +244,7 @@ func TestIncarnation_Destroy_Force_WithScenario_SkipsTeardown(t *testing.T) {
 	destroyer := &fakeDestroyer{}
 	aw := &fakeAuditWriter{}
 	h := newDestroyHandler(db, destroyer, aw, true) // scenario present, but force=true
-	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", true); err != nil {
+	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", true, false); err != nil {
 		t.Fatalf("DestroyTyped err = %v", err)
 	}
 	if destroyer.calls != 0 {
@@ -261,7 +261,7 @@ func TestIncarnation_Destroy_AllowDestroyMapsToForce(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
 	aw := &fakeAuditWriter{}
 	h := newDestroyHandler(db, &fakeDestroyer{}, aw, false)
-	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", true); err != nil {
+	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", true, false); err != nil {
 		t.Fatalf("DestroyTyped err = %v", err)
 	}
 	// status_details.force=true is written in the UPDATE-Exec Destroy tx — we check
@@ -287,7 +287,7 @@ func TestIncarnation_Destroy_NotFound_404(t *testing.T) {
 		selectByNameRow: func(_ string) pgx.Row { return errRow{err: pgx.ErrNoRows} },
 	}
 	h := newDestroyHandler(db, &fakeDestroyer{}, &fakeAuditWriter{}, true)
-	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "ghost", false)
+	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "ghost", false, false)
 	wantProblem(t, err, problem.TypeNotFound)
 }
 
@@ -297,7 +297,7 @@ func TestIncarnation_Destroy_NotDestroyable_409(t *testing.T) {
 	db := destroyDB("redis-prod", "applying")
 	destroyer := &fakeDestroyer{}
 	h := newDestroyHandler(db, destroyer, &fakeAuditWriter{}, true)
-	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false)
+	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false, false)
 	wantProblem(t, err, problem.TypeIncarnationLocked)
 	if destroyer.calls != 0 {
 		t.Errorf("StartDestroy calls = %d, want 0 (applying does not trigger teardown)", destroyer.calls)
@@ -310,7 +310,7 @@ func TestIncarnation_Destroy_NotConfigured_500(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
 	// destroyer/services/loader nil → the endpoint is not configured.
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
-	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false)
+	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false, false)
 	wantProblem(t, err, problem.TypeInternalError)
 	if len(db.execCalls) != 0 {
 		t.Errorf("execCalls = %d, want 0 (not configured -> no mutations)", len(db.execCalls))
@@ -322,7 +322,7 @@ func TestIncarnation_Destroy_NotConfigured_500(t *testing.T) {
 func TestIncarnation_Destroy_InvalidName_422(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
 	h := newDestroyHandler(db, &fakeDestroyer{}, &fakeAuditWriter{}, true)
-	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "Bad_Name", false)
+	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "Bad_Name", false, false)
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 
@@ -334,7 +334,7 @@ func TestIncarnation_Destroy_Force_DeleteNoOp_202(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	h := newDestroyHandler(db, &fakeDestroyer{}, aw, false)
 	// no-op DELETE is not an error (idempotency S-D3): the handler returns 202.
-	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", true); err != nil {
+	if _, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", true, false); err != nil {
 		t.Fatalf("DestroyTyped err = %v (a no-op DELETE is not an error)", err)
 	}
 	// destroy_completed is NOT written on no-op (Deleted=false).

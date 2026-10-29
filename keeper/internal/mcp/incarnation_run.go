@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
@@ -16,18 +17,23 @@ import (
 // incarnationRunArgs — arguments for keeper.incarnation.run
 // (schemaIncarnationRunInput): name + scenario are required, input is optional.
 type incarnationRunArgs struct {
-	ID       string         `json:"id"`
-	Scenario string         `json:"scenario"`
-	Input    map[string]any `json:"input,omitempty"`
+	ID                  string         `json:"id"`
+	Scenario            string         `json:"scenario"`
+	Input               map[string]any `json:"input,omitempty"`
+	InMaintenanceWindow bool           `json:"in_maintenance_window,omitempty"`
+	ConfirmFreeze       bool           `json:"confirm_freeze,omitempty"`
 }
 
 // incarnationRunOutput — output of keeper.incarnation.run classic single-run
 // (schemaIncarnationRunOutput): apply_id + echoed incarnation / scenario.
-// Mirrors REST runScenarioResponse.
+// Mirrors REST runScenarioResponse: a run deferred to its maintenance window
+// carries voyage_id + schedule_at instead of _apply_id.
 type incarnationRunOutput struct {
-	ApplyID     string `json:"_apply_id"`
-	Incarnation string `json:"incarnation"`
-	Scenario    string `json:"scenario"`
+	ApplyID     string     `json:"_apply_id,omitempty"`
+	Incarnation string     `json:"incarnation"`
+	Scenario    string     `json:"scenario"`
+	VoyageID    string     `json:"voyage_id,omitempty"`
+	ScheduleAt  *time.Time `json:"schedule_at,omitempty"`
 }
 
 // callIncarnationRun — mutating async tool keeper.incarnation.run. Parity
@@ -138,6 +144,17 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 		}
 	}
 
+	// Start gate — parity with REST Run (ADR-0093 §4, §5).
+	gate := handlers.RunGate{InMaintenanceWindow: a.InMaintenanceWindow, ConfirmFreeze: a.ConfirmFreeze}
+	start, err := handlers.PlanRunStart(ctx, h.deps.IncarnationDB, []string{a.ID}, time.Now(), gate)
+	if err != nil {
+		if resp, ok := h.runGateToolError(req.ID, toolName, err); ok {
+			return resp
+		}
+		h.deps.Logger.Error("mcp: incarnation.run start gate failed", slog.String("name", a.ID), slog.Any("error", err))
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, "read maintenance windows failed")
+	}
+
 	// Pre-flight assert gate — parity with REST Run (ADR-009 amendment
 	// 2026-07-28, NIM-270): AFTER ValidateInput, BEFORE enqueue. On this path
 	// the incarnation exists and its roster is bound, so a topology assert can
@@ -165,6 +182,30 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 		}
 	}
 
+	// Deferred after the pre-flight assert (parity with REST).
+	if !start.DeferTo.IsZero() {
+		d, err := handlers.InsertDeferredRun(ctx, h.deps.IncarnationDB, a.ID, a.Scenario, a.Input, claims.Subject, start.DeferTo)
+		if err != nil {
+			h.deps.Logger.Error("mcp: incarnation.run defer failed",
+				slog.String("name", a.ID), slog.String("scenario", a.Scenario), slog.Any("error", err))
+			return h.toolError(req.ID, toolName, mcpCodeInternalError, "defer scenario "+a.Scenario+" failed")
+		}
+		payload := map[string]any{
+			"id":          a.ID,
+			"scenario":    a.Scenario,
+			"voyage_id":   d.VoyageID,
+			"schedule_at": d.ScheduleAt.Format(time.RFC3339),
+		}
+		gate.AuditPayload(payload)
+		h.writeAudit(ctx, audit.EventIncarnationScenarioStarted, claims.Subject, payload)
+		return h.toolResult(req.ID, incarnationRunOutput{
+			Incarnation: a.ID,
+			Scenario:    a.Scenario,
+			VoyageID:    d.VoyageID,
+			ScheduleAt:  &d.ScheduleAt,
+		})
+	}
+
 	applyID := audit.NewULID()
 	if err := h.deps.ScenarioRunner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
@@ -184,11 +225,13 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 			"start scenario "+a.Scenario+" failed")
 	}
 
-	h.writeAudit(ctx, audit.EventIncarnationScenarioStarted, claims.Subject, map[string]any{
+	payload := map[string]any{
 		"id":       a.ID,
 		"scenario": a.Scenario,
 		"apply_id": applyID,
-	})
+	}
+	gate.AuditPayload(payload)
+	h.writeAudit(ctx, audit.EventIncarnationScenarioStarted, claims.Subject, payload)
 
 	return h.toolResult(req.ID, incarnationRunOutput{
 		ApplyID:     applyID,

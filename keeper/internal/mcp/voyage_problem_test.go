@@ -17,6 +17,7 @@ func TestToolFromVoyageProblem_ConflictByType(t *testing.T) {
 		name, typ, want string
 	}{
 		{"incarnation locked", problem.TypeIncarnationLocked, mcpCodeIncarnationLocked},
+		{"freeze active", problem.TypeFreezeActive, mcpCodeFreezeActive},
 		{"cancel conflict", problem.TypeErrandNotCancellable, mcpCodeErrandNotCancellable},
 	}
 	for _, tc := range cases {

@@ -153,8 +153,8 @@ func TestVoyageList_UnrestrictedSeesEverything(t *testing.T) {
 		t.Errorf("an unrestricted operator must render TRUE per target, so no target is "+
 			"ever out of scope: %q", store.countSQL)
 	}
-	if got := len(store.countArgs); got != 4 {
-		t.Errorf("count bindings = %d (%#v), want the 4 fixed ones and nothing more", got, store.countArgs)
+	if got := len(store.countArgs); got != 5 {
+		t.Errorf("count bindings = %d (%#v), want the 5 fixed ones and nothing more", got, store.countArgs)
 	}
 }
 

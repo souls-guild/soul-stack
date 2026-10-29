@@ -27,10 +27,14 @@ type IncarnationCreateReply struct {
 }
 
 // IncarnationRunReply — native 202 body for POST .../scenarios/{scenario} (apply_id + echo).
+// A run deferred to the maintenance window (ADR-0093 §3) has no run yet: apply_id is
+// omitted and voyage_id + schedule_at name the scheduled Voyage that will start it.
 type IncarnationRunReply struct {
-	ApplyID     string `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`     // ULID (audit.NewULID)
-	Incarnation string `json:"incarnation" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.IDPattern
-	Scenario    string `json:"scenario"`
+	ApplyID     string     `json:"apply_id,omitempty" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$" doc:"the started run; omitted when the run was deferred to the maintenance window"` // ULID (audit.NewULID)
+	Incarnation string     `json:"incarnation" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"`                                                                                          // ← incarnation.IDPattern
+	Scenario    string     `json:"scenario"`
+	VoyageID    string     `json:"voyage_id,omitempty" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$" doc:"the scheduled Voyage of a run deferred to the maintenance window; cancel it to drop the run"`
+	ScheduleAt  *time.Time `json:"schedule_at,omitempty" doc:"when the deferred run is due to start; asked again then, and moved if a freeze was added or a window changed"`
 }
 
 // IncarnationUnlockReply — native 200 body for POST .../unlock. status/previous_status —
@@ -395,6 +399,9 @@ type IncarnationRunRequest struct {
 	ID       *string        `json:"id,omitempty" doc:"echo path-id (ignored)"`
 	Scenario *string        `json:"scenario,omitempty" doc:"echo path-scenario (ignored)"`
 	Input    map[string]any `json:"input,omitempty" doc:"scenario input"`
+	// ADR-0093 §4, §5.
+	InMaintenanceWindow bool `json:"in_maintenance_window,omitempty" doc:"start inside the incarnation's maintenance windows and outside every freeze: when closed now, the run becomes a scheduled Voyage (reply carries voyage_id + schedule_at)"`
+	ConfirmFreeze       bool `json:"confirm_freeze,omitempty" doc:"consent to start during an active freeze; without it such a run is refused with 409 freeze-active. Changes nothing outside a freeze"`
 }
 
 // IncarnationUnlockRequest — Go form of the POST .../unlock body. reason required; name echo
@@ -409,8 +416,9 @@ type IncarnationUnlockRequest struct {
 // echo is ignored. additionalProperties:false → unknown field → 400. The name = the contract
 // schema name (T4b).
 type IncarnationUpgradeRequest struct {
-	ID        *string `json:"id,omitempty" doc:"echo path-id (ignored)"`
-	ToVersion string  `json:"to_version" required:"true" doc:"target service version (git-ref)"`
+	ID            *string `json:"id,omitempty" doc:"echo path-id (ignored)"`
+	ToVersion     string  `json:"to_version" required:"true" doc:"target service version (git-ref)"`
+	ConfirmFreeze bool    `json:"confirm_freeze,omitempty" doc:"consent to start the upgrade scenario during an active freeze; without it 409 freeze-active, nothing committed"`
 }
 
 // IncarnationRerunLastRequest — Go form of the POST .../rerun-last body. reason
@@ -422,7 +430,8 @@ type IncarnationRerunLastRequest struct {
 	// recovery path, not an override: with a snapshot present, sending input is
 	// refused rather than silently ignored, because "rerun that" and "run this
 	// instead" are different requests and the second one has its own endpoint.
-	Input map[string]any `json:"input,omitempty" doc:"operator input, accepted only when the attempt cannot be replayed from history"`
+	Input         map[string]any `json:"input,omitempty" doc:"operator input, accepted only when the attempt cannot be replayed from history"`
+	ConfirmFreeze bool           `json:"confirm_freeze,omitempty" doc:"consent to rerun during an active freeze; without it 409 freeze-active and the incarnation stays error_locked"`
 }
 
 // IncarnationSetTraitsRequest — Go form of the PUT .../traits body. traits — a full

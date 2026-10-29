@@ -59,30 +59,33 @@ type VoyageTargetEntry struct {
 // date-time — nanosecond wire precision (the handler assigns a bare time.Time WITHOUT .UTC()/Truncate).
 // The struct name = the contract schema name.
 type Voyage struct {
-	Attempt           int              `json:"attempt"`
-	BatchMode         *VoyageBatchMode `json:"batch_mode,omitempty"`
-	BatchPercent      *int             `json:"batch_percent,omitempty"`
-	BatchSize         *int             `json:"batch_size,omitempty"`
-	Concurrency       *int             `json:"concurrency,omitempty"`
-	CreatedAt         time.Time        `json:"created_at"`
-	CurrentBatchIndex int              `json:"current_batch_index"`
-	DryRun            bool             `json:"dry_run"`
-	FailThreshold     *int             `json:"fail_threshold,omitempty"`
-	FinishedAt        *time.Time       `json:"finished_at,omitempty"`
-	Kind              VoyageKind       `json:"kind"`
-	Module            *string          `json:"module,omitempty"`
-	OnFailure         *VoyageOnFailure `json:"on_failure,omitempty"`
-	RequireAlive      *bool            `json:"require_alive,omitempty"`
-	ScenarioName      *string          `json:"scenario_name,omitempty"`
-	ScheduleAt        *time.Time       `json:"schedule_at,omitempty"`
-	ScopeSize         int              `json:"scope_size"`
-	StartedAt         *time.Time       `json:"started_at,omitempty"`
-	StartedByAID      string           `json:"started_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
-	Status            VoyageStatus     `json:"status"`
-	Summary           *VoyageSummary   `json:"summary,omitempty"`
-	Target            *VoyageTarget    `json:"target,omitempty"`
-	TotalBatches      int              `json:"total_batches"`
-	VoyageID          string           `json:"voyage_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
+	Attempt      int              `json:"attempt"`
+	BatchMode    *VoyageBatchMode `json:"batch_mode,omitempty"`
+	BatchPercent *int             `json:"batch_percent,omitempty"`
+	BatchSize    *int             `json:"batch_size,omitempty"`
+	Concurrency  *int             `json:"concurrency,omitempty"`
+	// ADR-0093 §3, §5: the start gate the claim asks.
+	ConfirmedFreezeIDs  []string         `json:"confirmed_freeze_ids,omitempty" doc:"freezes the operator consented to at request time; any other freeze covering the start defers the run"`
+	CreatedAt           time.Time        `json:"created_at"`
+	CurrentBatchIndex   int              `json:"current_batch_index"`
+	DryRun              bool             `json:"dry_run"`
+	FailThreshold       *int             `json:"fail_threshold,omitempty"`
+	FinishedAt          *time.Time       `json:"finished_at,omitempty"`
+	InMaintenanceWindow bool             `json:"in_maintenance_window,omitempty" doc:"the run starts only inside its incarnations' maintenance windows and outside every freeze; while scheduled, schedule_at is when it is next asked"`
+	Kind                VoyageKind       `json:"kind"`
+	Module              *string          `json:"module,omitempty"`
+	OnFailure           *VoyageOnFailure `json:"on_failure,omitempty"`
+	RequireAlive        *bool            `json:"require_alive,omitempty"`
+	ScenarioName        *string          `json:"scenario_name,omitempty"`
+	ScheduleAt          *time.Time       `json:"schedule_at,omitempty"`
+	ScopeSize           int              `json:"scope_size"`
+	StartedAt           *time.Time       `json:"started_at,omitempty"`
+	StartedByAID        string           `json:"started_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
+	Status              VoyageStatus     `json:"status"`
+	Summary             *VoyageSummary   `json:"summary,omitempty"`
+	Target              *VoyageTarget    `json:"target,omitempty"`
+	TotalBatches        int              `json:"total_batches"`
+	VoyageID            string           `json:"voyage_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
 }
 
 // VoyageListReply — native 200 envelope for GET /v1/voyages (1:1 shape with VoyageListReply,
@@ -167,6 +170,10 @@ type VoyageCreateRequest struct {
 	FailThreshold *int    `json:"fail_threshold,omitempty" minimum:"1"`
 	RequireAlive  *bool   `json:"require_alive,omitempty"`
 	OnFailure     string  `json:"on_failure,omitempty" doc:"abort | continue (default)"`
+
+	// ADR-0093 §4, §5 — kind=scenario only.
+	InMaintenanceWindow bool `json:"in_maintenance_window,omitempty" doc:"kind=scenario: start at the first moment every target is inside its maintenance windows and outside every freeze (at or after schedule_at); freezes are waited out, windows that never meet (no common moment within 366 days after the last freeze) -> 422. kind=command -> 422"`
+	ConfirmFreeze       bool `json:"confirm_freeze,omitempty" doc:"kind=scenario: consent to start while a freeze covers a target at the start (now or schedule_at); without it 409 freeze-active naming every frozen target. Changes nothing outside a freeze"`
 
 	Notify []VoyageNotify `json:"notify,omitempty" doc:"one-time subscriptions for THIS run (ephemeral)"`
 }

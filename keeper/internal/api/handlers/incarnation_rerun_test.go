@@ -41,7 +41,7 @@ func TestRerunLast_202_FromErrorLocked(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	h := newRerunHandler(db, starter, aw)
 
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun bootstrap verified", nil)
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun bootstrap verified", nil, false)
 	if err != nil {
 		t.Fatalf("RerunLastTyped err = %v", err)
 	}
@@ -112,7 +112,7 @@ func TestRerunLast_ReusesStoredInput_202(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-cluster-prod", "rerun cluster bootstrap", nil)
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-cluster-prod", "rerun cluster bootstrap", nil, false)
 	if err != nil {
 		t.Fatalf("RerunLastTyped err = %v", err)
 	}
@@ -154,7 +154,7 @@ func TestRerunLast_NoStoredInput_NilInput_202(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun no-input bootstrap", nil)
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun no-input bootstrap", nil, false)
 	if err != nil {
 		t.Fatalf("RerunLastTyped err = %v", err)
 	}
@@ -186,7 +186,7 @@ func TestRerunLast_Advanced_ReusesRecipeInput_202(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	h := newRerunHandler(db, starter, aw)
 
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun add_user verified", nil)
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun add_user verified", nil, false)
 	if err != nil {
 		t.Fatalf("RerunLastTyped advanced err = %v", err)
 	}
@@ -241,7 +241,7 @@ func TestRerunLast_Advanced_FromUpgradeRecipe_202(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	h := newRerunHandler(db, starter, aw)
 
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun upgrade verified", nil)
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun upgrade verified", nil, false)
 	if err != nil {
 		t.Fatalf("RerunLastTyped advanced upgrade err = %v", err)
 	}
@@ -274,7 +274,7 @@ func TestRerunLast_Advanced_BareIncarnation_202(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-bare", "rerun bare advanced", nil)
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-bare", "rerun bare advanced", nil, false)
 	if err != nil {
 		t.Fatalf("RerunLastTyped bare advanced err = %v", err)
 	}
@@ -306,7 +306,7 @@ func TestRerunLast_SnapshotUnavailable_409(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun add_user", nil)
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun add_user", nil, false)
 	wantProblem(t, err, problem.TypeRerunInputUnavailable)
 	if starter.calls != 0 {
 		t.Errorf("scenario start calls = %d, want 0 (fail-closed, no replayable snapshot)", starter.calls)
@@ -335,7 +335,7 @@ func TestRerunLast_ReplaysTheRefTheAttemptUsed(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	if _, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun the pre-upgrade failure", nil); err != nil {
+	if _, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun the pre-upgrade failure", nil, false); err != nil {
 		t.Fatalf("RerunLastTyped err = %v", err)
 	}
 	if starter.calls != 1 {
@@ -366,7 +366,7 @@ func TestRerunLast_FallsBackToTheCurrentPin(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	if _, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun without a pinned ref", nil); err != nil {
+	if _, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun without a pinned ref", nil, false); err != nil {
 		t.Fatalf("RerunLastTyped err = %v", err)
 	}
 	if starter.gotSpec.ServiceRef.Ref == "v1.0.0" {
@@ -398,7 +398,7 @@ func TestRerunLast_UnreplayableAttemptAcceptsSuppliedInput(t *testing.T) {
 	// Without an input the refusal stands — the run must not start on defaults.
 	starter := &fakeStarter{}
 	h := newRerunHandler(newDB(), starter, &fakeAuditWriter{})
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun", nil)
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun", nil, false)
 	wantProblem(t, err, problem.TypeRerunInputUnavailable)
 	if starter.calls != 0 {
 		t.Fatalf("scenario start calls = %d, want 0 without an input", starter.calls)
@@ -408,7 +408,7 @@ func TestRerunLast_UnreplayableAttemptAcceptsSuppliedInput(t *testing.T) {
 	starter = &fakeStarter{}
 	h = newRerunHandler(newDB(), starter, &fakeAuditWriter{})
 	if _, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun",
-		map[string]any{"user": "carol"}); err != nil {
+		map[string]any{"user": "carol"}, false); err != nil {
 		t.Fatalf("RerunLastTyped with a supplied input: %v", err)
 	}
 	if starter.calls != 1 {
@@ -437,7 +437,7 @@ func TestRerunLast_SuppliedInputOnAReplayableAttemptIsRefused(t *testing.T) {
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
 	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun",
-		map[string]any{"user": "mallory"})
+		map[string]any{"user": "mallory"}, false)
 	wantProblem(t, err, problem.TypeValidationFailed)
 	if starter.calls != 0 {
 		t.Errorf("scenario start calls = %d, want 0 — the refusal must leave the incarnation as it was", starter.calls)
@@ -453,7 +453,7 @@ func TestRerunLast_RejectNonErrorLocked(t *testing.T) {
 			starter := &fakeStarter{}
 			h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-			_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "x", nil)
+			_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "x", nil, false)
 			wantProblem(t, err, problem.TypeIncarnationLocked)
 			if starter.calls != 0 {
 				t.Errorf("status=%s: scenario start calls = %d, want 0", status, starter.calls)
@@ -470,7 +470,7 @@ func TestRerunLast_NotFound_404(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "ghost", "x", nil)
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "ghost", "x", nil, false)
 	wantProblem(t, err, problem.TypeNotFound)
 	if starter.calls != 0 {
 		t.Errorf("scenario start calls = %d, want 0", starter.calls)
@@ -483,7 +483,7 @@ func TestRerunLast_EmptyReason_422(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "", nil)
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "", nil, false)
 	wantProblem(t, err, problem.TypeValidationFailed)
 	if starter.calls != 0 {
 		t.Errorf("scenario start calls = %d, want 0 (rejected before start)", starter.calls)
@@ -493,7 +493,7 @@ func TestRerunLast_EmptyReason_422(t *testing.T) {
 // TestRerunLast_InvalidName_422 — invalid name in path → 422.
 func TestRerunLast_InvalidName_422(t *testing.T) {
 	h := newRerunHandler(rerunDB("error_locked"), &fakeStarter{}, &fakeAuditWriter{})
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "Bad_Name", "x", nil)
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "Bad_Name", "x", nil, false)
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 
@@ -505,7 +505,7 @@ func TestRerunLast_ReasonAtMax_202(t *testing.T) {
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
 	reason := strings.Repeat("a", incarnation.ReasonMaxLen)
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason, nil)
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason, nil, false)
 	if err != nil {
 		t.Fatalf("RerunLastTyped err = %v (reason exactly %d is allowed)", err, incarnation.ReasonMaxLen)
 	}
@@ -525,7 +525,7 @@ func TestRerunLast_ReasonOverMax_422(t *testing.T) {
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
 	reason := strings.Repeat("a", incarnation.ReasonMaxLen+1)
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason, nil)
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason, nil, false)
 	wantProblem(t, err, problem.TypeValidationFailed)
 	if starter.calls != 0 {
 		t.Errorf("scenario start calls = %d, want 0 (reason over max -> rejected before start)", starter.calls)
@@ -546,7 +546,7 @@ func TestRerunLast_ReasonMultibyteAtMax_202(t *testing.T) {
 		t.Fatalf("test precondition violated: %d bytes does not exceed limit %d - case does not distinguish bytes/runes",
 			len(reason), incarnation.ReasonMaxLen)
 	}
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason, nil)
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason, nil, false)
 	if err != nil {
 		t.Fatalf("RerunLastTyped err = %v (ReasonMaxLen runes in Cyrillic is allowed - we count runes, not bytes)", err)
 	}
@@ -566,7 +566,7 @@ func TestRerunLast_ReasonMultibyteOverMax_422(t *testing.T) {
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
 	reason := strings.Repeat("я", incarnation.ReasonMaxLen+1)
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason, nil)
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason, nil, false)
 	wantProblem(t, err, problem.TypeValidationFailed)
 	if starter.calls != 0 {
 		t.Errorf("scenario start calls = %d, want 0 (reason over max in runes -> rejected before start)", starter.calls)

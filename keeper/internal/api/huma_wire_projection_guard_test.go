@@ -555,6 +555,16 @@ var wireProjections = []wireProjection{
 		renames: map[string]string{"Offset": "Page.Offset", "Limit": "Page.Limit"},
 		shaped:  map[string]fieldTransform{"Offset": widenInt32, "Limit": widenInt32},
 	},
+	{
+		fn:      "toRunGate",
+		wire:    IncarnationRunRequest{},
+		project: func(b any) any { return toRunGate(b.(IncarnationRunRequest)) },
+		unmapped: map[string]string{
+			"ID":       "an echo of the path id, ignored: the path is authoritative",
+			"Scenario": "an echo of the path scenario, ignored: the path is authoritative",
+			"Input":    "passed to RunTyped as its own argument, beside the gate",
+		},
+	},
 }
 
 // optionalNullHasNoFieldOfItsOwn — an [Optional]'s `Null` bit, on each of the three

@@ -278,8 +278,12 @@ func TestInsert_HappyPath_Scenario(t *testing.T) {
 	if !strings.Contains(fdb.queryRowSQL, "INSERT INTO voyages") {
 		t.Errorf("unexpected SQL: %.200s", fdb.queryRowSQL)
 	}
-	if got := len(fdb.queryRowArgs); got != 22 {
-		t.Errorf("queryRowArgs len = %d, want 22", got)
+	if got := len(fdb.queryRowArgs); got != 24 {
+		t.Errorf("queryRowArgs len = %d, want 24", got)
+	}
+	// A nil consent set binds as an empty array: the column is NOT NULL.
+	if ids, ok := fdb.queryRowArgs[23].([]string); !ok || ids == nil {
+		t.Errorf("confirmed_freeze_ids arg = %#v, want a non-nil []string", fdb.queryRowArgs[23])
 	}
 }
 
@@ -637,8 +641,8 @@ type voyageRow struct {
 func newVoyageRow() *voyageRow { return &voyageRow{} }
 
 func (r *voyageRow) Scan(dest ...any) error {
-	if len(dest) != 31 {
-		return errors.New("voyageRow: expected 31 dest")
+	if len(dest) != 33 {
+		return errors.New("voyageRow: expected 33 dest")
 	}
 	*dest[0].(*string) = "01H"                             // voyage_id
 	*dest[1].(*string) = string(KindScenario)              // kind
@@ -671,6 +675,8 @@ func (r *voyageRow) Scan(dest ...any) error {
 	*dest[28].(**float64) = nil                            // inter_unit_interval (epoch)
 	*dest[29].(**bool) = nil                               // require_alive
 	*dest[30].(**string) = r.cadenceID                     // cadence_id
+	*dest[31].(*bool) = false                              // in_maintenance_window
+	*dest[32].(*[]string) = nil                            // confirmed_freeze_ids
 	return nil
 }
 
@@ -692,7 +698,7 @@ var voyageScanColumns = []string{
 	"claimed_by_kid", "last_renewed_at", "claim_expires_at", "attempt",
 	"started_by_aid", "created_at", "started_at", "finished_at", "summary",
 	"batch_percent", "fail_threshold", "inter_unit_interval", "require_alive",
-	"cadence_id",
+	"cadence_id", "in_maintenance_window", "confirmed_freeze_ids",
 }
 
 // TestColumnsMatchScanOrder — guard against a desync in the ORDER of positional columns.

@@ -75,16 +75,23 @@ func registerHumaIncarnationRun(humaAPI huma.API, incH *handlers.IncarnationHand
 			return nil, incMissingClaims()
 		}
 		var input map[string]any
+		var gate handlers.RunGate
 		if in.Body != nil {
 			input = in.Body.Input
+			gate = toRunGate(*in.Body)
 		}
-		reply, err := incH.RunTyped(ctx, claims, in.ID, in.Scenario, input)
+		reply, err := incH.RunTyped(ctx, claims, in.ID, in.Scenario, input, gate)
 		if err != nil {
 			return nil, incProblem(err)
 		}
 		apimiddleware.SetHumaAuditPayload(ctx, reply.AuditPayload)
 		return &incRunOutput{Status: http.StatusAccepted, Body: newIncarnationRunReply(reply.Body)}, nil
 	})
+}
+
+// toRunGate projects the run body's start-gate fields (ADR-0093 §4, §5).
+func toRunGate(b IncarnationRunRequest) handlers.RunGate {
+	return handlers.RunGate{InMaintenanceWindow: b.InMaintenanceWindow, ConfirmFreeze: b.ConfirmFreeze}
 }
 
 // registerHumaIncarnationUnlock mounts POST /v1/incarnations/{id}/unlock
@@ -118,7 +125,7 @@ func registerHumaIncarnationUpgrade(humaAPI huma.API, incH *handlers.Incarnation
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		reply, err := incH.UpgradeTyped(ctx, claims, in.ID, in.Body.ToVersion)
+		reply, err := incH.UpgradeTyped(ctx, claims, in.ID, in.Body.ToVersion, in.Body.ConfirmFreeze)
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -141,7 +148,7 @@ func registerHumaIncarnationRerunLast(humaAPI huma.API, incH *handlers.Incarnati
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		body, err := incH.RerunLastTyped(ctx, claims, in.ID, in.Body.Reason, in.Body.Input)
+		body, err := incH.RerunLastTyped(ctx, claims, in.ID, in.Body.Reason, in.Body.Input, in.Body.ConfirmFreeze)
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -162,7 +169,7 @@ func registerHumaIncarnationDestroy(humaAPI huma.API, incH *handlers.Incarnation
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		body, err := incH.DestroyTyped(ctx, claims, in.ID, in.AllowDestroy)
+		body, err := incH.DestroyTyped(ctx, claims, in.ID, in.AllowDestroy, in.ConfirmFreeze)
 		if err != nil {
 			return nil, incProblem(err)
 		}

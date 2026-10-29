@@ -1806,6 +1806,9 @@ components:
     IncarnationRerunLastRequest:
       additionalProperties: false
       properties:
+        confirm_freeze:
+          description: consent to rerun during an active freeze; without it 409 freeze-active and the incarnation stays error_locked
+          type: boolean
         input:
           additionalProperties: {}
           description: operator input, accepted only when the attempt cannot be replayed from history
@@ -1949,6 +1952,7 @@ components:
       additionalProperties: false
       properties:
         apply_id:
+          description: the started run; omitted when the run was deferred to the maintenance window
           pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
           type: string
         incarnation:
@@ -1956,17 +1960,30 @@ components:
           type: string
         scenario:
           type: string
+        schedule_at:
+          description: when the deferred run is due to start; asked again then, and moved if a freeze was added or a window changed
+          format: date-time
+          type: string
+        voyage_id:
+          description: the scheduled Voyage of a run deferred to the maintenance window; cancel it to drop the run
+          pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          type: string
       required:
-        - apply_id
         - incarnation
         - scenario
       type: object
     IncarnationRunRequest:
       additionalProperties: false
       properties:
+        confirm_freeze:
+          description: consent to start during an active freeze; without it such a run is refused with 409 freeze-active. Changes nothing outside a freeze
+          type: boolean
         id:
           description: echo path-id (ignored)
           type: string
+        in_maintenance_window:
+          description: "start inside the incarnation's maintenance windows and outside every freeze: when closed now, the run becomes a scheduled Voyage (reply carries voyage_id + schedule_at)"
+          type: boolean
         input:
           additionalProperties: {}
           description: scenario input
@@ -2113,6 +2130,9 @@ components:
     IncarnationUpgradeRequest:
       additionalProperties: false
       properties:
+        confirm_freeze:
+          description: consent to start the upgrade scenario during an active freeze; without it 409 freeze-active, nothing committed
+          type: boolean
         id:
           description: echo path-id (ignored)
           type: string
@@ -6105,6 +6125,13 @@ components:
         concurrency:
           format: int64
           type: integer
+        confirmed_freeze_ids:
+          description: freezes the operator consented to at request time; any other freeze covering the start defers the run
+          items:
+            type: string
+          type:
+            - array
+            - "null"
         created_at:
           format: date-time
           type: string
@@ -6119,6 +6146,9 @@ components:
         finished_at:
           format: date-time
           type: string
+        in_maintenance_window:
+          description: the run starts only inside its incarnations' maintenance windows and outside every freeze; while scheduled, schedule_at is when it is next asked
+          type: boolean
         kind:
           type: string
         module:
@@ -6222,6 +6252,9 @@ components:
           maximum: 500
           minimum: 1
           type: integer
+        confirm_freeze:
+          description: "kind=scenario: consent to start while a freeze covers a target at the start (now or schedule_at); without it 409 freeze-active naming every frozen target. Changes nothing outside a freeze"
+          type: boolean
         dry_run:
           description: for kind=command - each per-host Errand asks the module for a Plan instead of Apply; a verb-shell module (core.cmd.shell / core.exec.run) has no pure-read Plan on any host -> 400
           type: boolean
@@ -6229,6 +6262,9 @@ components:
           format: int64
           minimum: 1
           type: integer
+        in_maintenance_window:
+          description: "kind=scenario: start at the first moment every target is inside its maintenance windows and outside every freeze (at or after schedule_at); freezes are waited out, windows that never meet (no common moment within 366 days after the last freeze) -> 422. kind=command -> 422"
+          type: boolean
         input:
           additionalProperties: {}
           description: recipe parameters
@@ -8943,6 +8979,13 @@ paths:
           required: true
           schema:
             description: "confirmation-flag: true -> destroy without teardown"
+            type: boolean
+        - description: consent to destroy during an active freeze of the incarnation; without it 409 freeze-active, nothing committed (ADR-0093 §4)
+          explode: false
+          in: query
+          name: confirm_freeze
+          schema:
+            description: consent to destroy during an active freeze of the incarnation; without it 409 freeze-active, nothing committed (ADR-0093 §4)
             type: boolean
       responses:
         "202":
@@ -16283,6 +16326,13 @@ paths:
             type:
               - array
               - "null"
+        - description: kind=scenario Voyages naming this incarnation among their targets; malformed id -> 422
+          explode: false
+          in: query
+          name: incarnation
+          schema:
+            description: kind=scenario Voyages naming this incarnation among their targets; malformed id -> 422
+            type: string
         - description: offset from start of set, ≥0 (out-of-range → 400)
           explode: false
           in: query

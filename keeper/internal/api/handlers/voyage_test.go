@@ -291,6 +291,12 @@ func (r voyageFullRow) Scan(dest ...any) error {
 				f := v.(float64)
 				*p = &f
 			}
+		case *[]string:
+			if v == nil {
+				*p = nil
+			} else {
+				*p = v.([]string)
+			}
 		}
 	}
 	return nil
@@ -343,6 +349,8 @@ func voyageRowVals(id string, kind voyage.Kind, status voyage.Status) []any {
 		nil,              // inter_unit_interval **float64
 		nil,              // require_alive **bool
 		nil,              // cadence_id **string (back-link ADR-046; manual run = NULL)
+		false,            // in_maintenance_window
+		nil,              // confirmed_freeze_ids *[]string
 	}
 }
 

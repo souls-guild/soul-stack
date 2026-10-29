@@ -398,8 +398,9 @@ func incRerunOperation() huma.Operation {
 // — required boolean query (confirmation-flag). huma binds bool in a typed way: missing/
 // non-boolean → 400 (parity strict required-param + legacy ParseBool).
 type incDestroyInput struct {
-	ID           string `path:"id" doc:"incarnation id"`
-	AllowDestroy bool   `query:"allow_destroy" required:"true" doc:"confirmation-flag: true -> destroy without teardown"`
+	ID            string `path:"id" doc:"incarnation id"`
+	AllowDestroy  bool   `query:"allow_destroy" required:"true" doc:"confirmation-flag: true -> destroy without teardown"`
+	ConfirmFreeze bool   `query:"confirm_freeze" doc:"consent to destroy during an active freeze of the incarnation; without it 409 freeze-active, nothing committed (ADR-0093 §4)"`
 }
 
 // incDestroyOutput — huma-output DELETE /v1/incarnations/{id} (FULL-TYPED). Status=202;

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"time"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
@@ -21,7 +23,8 @@ type incarnationRerunLastArgs struct {
 	// Input — operator input for the restart, used ONLY when the failed attempt
 	// carries no replayable snapshot (NIM-408). Parity with REST: a recovery path,
 	// not an override.
-	Input map[string]any `json:"input,omitempty"`
+	Input         map[string]any `json:"input,omitempty"`
+	ConfirmFreeze bool           `json:"confirm_freeze,omitempty"`
 }
 
 // incarnationRerunLastOutput — output of keeper.incarnation.rerun-last
@@ -100,6 +103,15 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 	}
 	serviceRef.Ref = inc.ServiceVersion
 
+	// Freeze consent before the unlock commits (ADR-0093 §4, parity REST).
+	if err := handlers.CheckFreezeConsent(ctx, h.deps.IncarnationDB, a.ID, time.Now(), a.ConfirmFreeze, handlers.FreezeActRerun); err != nil {
+		if resp, ok := h.runGateToolError(req.ID, toolName, err); ok {
+			return resp
+		}
+		h.deps.Logger.Error("mcp: incarnation.rerun-last freeze check failed", slog.String("name", a.ID), slog.Any("error", err))
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, "read freezes failed")
+	}
+
 	// applyID is shared: the unlock-transition state_history snapshot and the restarted run.
 	applyID := audit.NewULID()
 
@@ -157,6 +169,7 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 		"scenario":        res.Scenario,
 		"previous_status": string(res.PreviousStatus),
 		"apply_id":        applyID,
+		"confirm_freeze":  a.ConfirmFreeze,
 	})
 
 	return h.toolResult(req.ID, incarnationRerunLastOutput{

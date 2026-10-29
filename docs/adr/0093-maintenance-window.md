@@ -27,7 +27,7 @@ Nothing holds work back during a change freeze either: a holiday, a sale, an inc
 One piece already exists. A Voyage can start later: a `schedule_at` in the future puts the row in
 status `scheduled` (`keeper/internal/voyage/voyage.go:60`, set in `crud.go` `Insert`), and the
 worker claims a `scheduled` row only once `schedule_at <= NOW()`
-(`keeper/internal/voyage/claim.go`, `claimNextSQL`).
+(`keeper/internal/voyage/claim.go`, `ClaimNext`).
 
 ### Decision
 
@@ -77,12 +77,39 @@ worker claims a `scheduled` row only once `schedule_at <= NOW()`
   `schedule_at`. A freeze added after the row was created is caught here. So the row carries
   `in_maintenance_window` and the consent of §5 — which freezes it covers, not a bare flag — and
   the claim honours them as §4 says.
-- **The gate is decided before the row leaves `pending` or `scheduled`.** Today `claimNextSQL` sets
-  `running`, stamps `started_at` and spends an `attempt` in one UPDATE (`keeper/internal/voyage/claim.go`).
-  A row put back to `scheduled` after that would keep a false start time and a spent attempt. Either
-  the check sits inside the claim, or putting the row back resets both; NIM-1074 chooses.
+- **The gate is decided before the row leaves `pending` or `scheduled`** (NIM-1074). The claim
+  (`voyage.ClaimNext`) peeks at the next claimable row together with the database clock, asks the
+  gate at that instant, and only then claims that row by id with a CAS on the same predicate. A
+  row the gate holds back is put back to `scheduled` at the gate's time with `started_at` still
+  NULL and `attempt` untouched, and the next row is tried. The database clock is the gate's "now"
+  because it is the clock the claimable predicate uses: a Keeper running behind it would otherwise
+  find a due row still closed and defer it to the moment it already is.
+- A row whose `started_at` is set is a reclaim after a lost lease, not a start, and the gate is not
+  asked again: a run that started runs to its end (§2).
+- The row records the request in two columns (migration 134): `in_maintenance_window` and
+  `confirmed_freeze_ids`, the ids of the freezes that covered the start when consent was given.
+- **One start for the whole Voyage** (user, 2026-10-28: the simplest; the per-target deferral is
+  left to a later epic that reworks this functionality). The start of a Voyage over several
+  incarnations is the first moment at which every target's gate is open at once
+  (`maintenance.CommonStart`). A target with neither windows nor freezes never holds the others.
+  A single target, and targets without windows, always have a start: a freeze of any length is
+  waited out. Only slots can fail to meet: when the targets' windows leave no common moment within
+  366 days after the last of their freezes ends (or after the latest of their single starts, when
+  that is later), the request is refused with 422; when the
+  windows are edited afterwards so that they stop meeting, the claim fails the row before it starts
+  and every target carries `no_common_window`, since waiting would never end. The same failure
+  covers a row whose targets cannot be read or whose windows the Keeper can no longer evaluate,
+  because an error there would hold every Voyage queued behind it. The operator splits such a run
+  into separate requests.
+- A claim-time deferral is logged, not audited; the Voyage's moved `schedule_at` is what the
+  operator sees (an audit event for it is NIM-1112). `POST /v1/voyages/preview` refuses in the same
+  places as the create.
 - A deferred run is visible in the runs list with its time, and it can be cancelled like any
-  `scheduled` Voyage (NIM-1074, NIM-1076).
+  `scheduled` Voyage (NIM-1074, NIM-1076). The list of an incarnation's Voyages, its deferred runs
+  among them, is `GET /v1/voyages?incarnation=<id>`: the incarnation's own runs list reads
+  `apply_runs`, and a deferred run has no row there until it starts.
+- A deferred `POST /v1/incarnations/{id}/scenarios/{scenario}` answers 202 without `apply_id`, with
+  `voyage_id` and `schedule_at` of the scheduled Voyage (user, 2026-10-28).
 
 **4. Who asks for the window.** The gate concerns runs of an incarnation: scenario runs and
 `kind: scenario` Voyages and Cadences. A `kind: command` Voyage or Cadence addresses hosts, and a
@@ -93,18 +120,19 @@ host has no window of its own (Not in v1).
 | An operator's immediate run (REST, MCP, the UI's Run dialog, `POST /v1/voyages`) without `in_maintenance_window` | Not asked; starts now | Needs consent (§5) |
 | An operator's run with `in_maintenance_window: true` | Deferred to `NextStart` | Deferred past it; no consent needed, because the run does not start inside the freeze |
 | An operator's Voyage with its own `schedule_at`, without `in_maintenance_window` | Not asked; starts at `schedule_at` | Consent is checked against `schedule_at` at request time; at the claim, a freeze the consent does not cover defers the row past it |
-| Rerun-last and the upgrade's scenario | Not asked | Needs consent, checked before the request commits anything; deferral is an open point (below) |
+| Rerun-last and the upgrade's scenario | Not asked; never deferred, so `in_maintenance_window` is not accepted on them | Needs consent, checked before the request commits anything (user, 2026-10-28: consent only) |
 | A Cadence spawn with `in_maintenance_window` | Deferred to `NextStart` | Deferred past it |
 | A Cadence spawn without `in_maintenance_window` | Not asked; starts at its tick | Deferred to the first moment no freeze covers; there is no consent for a Cadence |
-| The Reaper's cert rotation (takes effect with epic NIM-1070) | Per the certificate's `rotate.action` (NIM-1081) | Never starts inside a freeze |
+| The Reaper's cert rotation (takes effect with epic NIM-1070) | Per the certificate's `rotate.action` (NIM-1081); the claim re-checks the window only once the row carries `in_maintenance_window` (NIM-1106) | Never starts inside a freeze |
 | An incarnation's destroy (`DELETE /v1/incarnations/{id}`, MCP `keeper.incarnation.destroy`) | Not asked | Needs consent, checked before the destroy commits anything (NIM-1085) |
 | A Decree reaction (Oracle) | Not asked | **Not held back** — a reaction is a repair (NIM-1085) |
 
 - **An operator's run is never refused because of a window.** A window holds back only the runs
   that ask for it. The user decided a forced RUN is always allowed; the Run dialog's checkbox is how
   an operator asks for the window.
-- **An automatic run never starts during a freeze** (user, 2026-10-27): a Cadence spawn and, with
-  epic NIM-1070, the Reaper's cert rotation.
+- **An automatic run never starts during a freeze** (user, 2026-10-27): a Cadence spawn and the
+  Reaper's cert rotation. Until epic NIM-1070 that holds for the rotation's Voyage, not for its
+  signing (the `commitRotation` bullet below).
 - **A Decree reaction is the one exception** (user, 2026-10-27, NIM-1085). A reaction is usually a
   repair — a service went down and the Decree restarts it — and holding a repair until the freeze
   ends is worse than running it. It reaches the work queue through
@@ -119,6 +147,11 @@ host has no window of its own (Not in v1).
   window has passed, so the certificate would expire inside it. Under NIM-1081 the signing happens
   inside the rotation run, so deferring the run defers the signing with it; the registry never
   records a certificate the hosts do not have.
+- **Until epic NIM-1070, the Reaper's rotation is `commitRotation`.** It signs and records the new
+  certificate on the tick, then inserts a scenario Voyage that carries neither
+  `in_maintenance_window` nor consent. The claim asks the gate for that row like any other (§3):
+  a window does not hold it, and a freeze defers it past its end. While it waits, the registry holds
+  a certificate the hosts do not have yet; NIM-1081 closes that gap.
 - "The first moment no freeze covers" is not `NextStart` when the incarnation has windows: it is the
   end of the active freeze, taken again while another freeze covers that end (`ActiveFreeze`).
 - The field is the same name everywhere it appears: on the run request, on `POST /v1/voyages`, and
@@ -131,8 +164,10 @@ host has no window of its own (Not in v1).
   during the freeze is mandatory, and the run button stays disabled until it is ticked.
 - In the API and MCP the same consent is `confirm_freeze: true`. Without it, a run whose start
   falls inside a freeze is refused with **409**, problem type **`freeze-active`**, and the answer
-  names the freeze and its comment. Without this refusal, MCP clients and scripts would start work
-  in a freeze silently.
+  names the frozen incarnations with the end and comment of their freeze (the covering one that
+  ends last). Without this refusal, MCP clients and scripts would start work in a freeze silently.
+  Only a run or a Voyage is offered `in_maintenance_window` as the alternative; rerun-last, the
+  upgrade and the destroy are offered consent alone.
 - Consent is checked against the moment the run would start: now for an immediate run,
   `schedule_at` for a scheduled one.
 - **Consent covers the freezes it was given for, not freezes in general.** The run records which
@@ -144,9 +179,11 @@ host has no window of its own (Not in v1).
   before those transactions and refuses the whole request, so a 409 never leaves the incarnation in
   `applying` or with an upgraded schema and no run.
 - **A Voyage over several incarnations is one request and gets one answer.** Without consent, any
-  target inside a freeze refuses the whole request with 409 naming every such target — the same
-  shape as the refusal of an `error_locked` target (`keeper/internal/api/handlers/voyage.go`, the
-  `locked` list in the scope resolution). With consent, it covers every target.
+  target inside a freeze refuses the whole request with 409 — the same shape as the refusal of an
+  `error_locked` target (`keeper/internal/api/handlers/voyage.go`, the `locked` list in the scope
+  resolution). The answer groups the frozen targets by freeze and caps what it names, ten
+  incarnations per freeze and ten freezes, then counts, because a target can be the whole fleet.
+  With consent, it covers every target.
 - `confirm_freeze` outside a freeze changes nothing, so a client that always sends it is not
   refused.
 - The run's audit payload records both fields, so a run started in a freeze is findable afterwards.
@@ -166,8 +203,11 @@ host has no window of its own (Not in v1).
 |---|---|
 | REST | `/v1/incarnations/{id}/maintenance-windows`, `/v1/incarnations/{id}/maintenance-windows/{window_id}`, `/v1/incarnations/{id}/freezes`, `/v1/incarnations/{id}/freezes/{freeze_id}` |
 | Audit | `maintenance_window.created` / `.updated` / `.deleted`, `freeze.created` / `.updated` / `.deleted` |
-| Request fields | `in_maintenance_window: bool`, `confirm_freeze: bool` |
-| Problem type | `freeze-active` (409) |
+| Request fields | `in_maintenance_window: bool`, `confirm_freeze: bool` (`confirm_freeze` as a query parameter on `DELETE /v1/incarnations/{id}`) |
+| Problem type | `freeze-active` (409); MCP code `freeze-active` |
+| Voyage columns | `voyages.in_maintenance_window`, `voyages.confirmed_freeze_ids` (migration 134; the user named the second, 2026-10-28) |
+| Target error code | `no_common_window` |
+| List filter | `GET /v1/voyages?incarnation=<id>` |
 | CEL | `incarnation.maintenance_window.text`, `incarnation.maintenance_window.next_start`, function `in_maintenance_window()` |
 | Go package | `keeper/internal/maintenance` |
 
@@ -193,23 +233,11 @@ whether CEL passes that through or gives `""` is NIM-1073's.
 
 ### Open points
 
-- **The per-target deferral of a multi-incarnation Voyage.** A Voyage has one `schedule_at`, and
-  the incarnations in it have different windows. Either each target gets its own not-before time
-  (`voyage_targets`), or the run is split into one Voyage per distinct next start. The same choice
-  answers a freeze that covers one target at the claim, on a row with no consent for it or on a
-  Cadence row. NIM-1074 owns the choice and settles it with the user.
 - **`overlap_policy` and a deferred child.** The overlap check counts every non-terminal child
   (`docs/adr/0046-cadence.md` §5), a `scheduled` one included. So `skip` and `queue` hold back
   while a child waits for its window, but `parallel` spawns one deferred Voyage per tick, and they
   are all released together at `NextStart`. NIM-1075 decides how `parallel` treats a deferred
   child.
-- **Deferring rerun-last and the upgrade's scenario.** Both start through the runner with
-  `FromLocked` (`keeper/internal/api/handlers/incarnation_typed.go`, `RerunLastTyped` and the
-  upgrade path): rerun-last runs an `error_locked` incarnation, and the upgrade reserves `applying`
-  in its own transaction. A scenario Voyage refuses an `error_locked` target at create, and its
-  spawner carries neither `FromLocked` nor `FromUpgrade`. Either the two take consent only and are
-  never deferred, or a Voyage learns to carry them and the unlock moves to the claim. NIM-1074
-  settles it with the user; until then they take consent only.
 - **Determinism of `in_maintenance_window()`.** It is the first time-dependent function in render
   CEL: `now()` is refused as unsupported (`shared/cel/functions.go`, `Engine.guardUnsupported`).
   A render result that is cached, memoised or re-rendered on a retry must not outlive the moment
@@ -222,6 +250,16 @@ whether CEL passes that through or gives `""` is NIM-1073's.
   `kind: command` Voyage or Cadence, an Errand and a console session address hosts, and a host has
   no window of its own. A command run on a host of a frozen incarnation is not held back.
 - No shared named windows and no window on a service or a Coven (§1).
+
+### Settled points
+
+- **The deferral of a Voyage over several incarnations** (user, 2026-10-28) — one start for the
+  whole Voyage (§3). Rejected for v1: a not-before time per target, which needs the orchestrator to
+  resume a Voyage between parts, and one Voyage per distinct next start, which turns one request
+  into several runs whose batch and failure settings no longer span the whole. The same answer
+  covers a freeze on one target at the claim: the whole row is deferred past it.
+- **Deferring rerun-last and the upgrade's scenario** (user, 2026-10-28) — consent only, never
+  deferred. Both start through the runner with `FromLocked`, which a scenario Voyage cannot carry.
 
 ### Rejected
 

@@ -338,10 +338,15 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 
 // IncarnationRunView — FLAT domain projection of the 202 body of POST .../scenarios/{scenario}
 // (handler-native). Package api projects it into native IncarnationRunReply.
+//
+// A run deferred to its maintenance window has no run yet: ApplyID is empty and
+// VoyageID/ScheduleAt name the scheduled Voyage that will start it (ADR-0093 §3).
 type IncarnationRunView struct {
 	ApplyID     string
 	Incarnation string
 	Scenario    string
+	VoyageID    string
+	ScheduleAt  *time.Time
 }
 
 // IncarnationRunReply — typed reply of RunTyped. Body is the flat domain projection of the
@@ -353,9 +358,15 @@ type IncarnationRunReply struct {
 
 // RunTyped — extracted domain function POST /v1/incarnations/{id}/scenarios/
 // {scenario} (MIDDLEWARE-AUDIT). Parity with (w,r)-Run: resolve incarnation → secondary
-// error_locked probe → resolve service-ref + sync input-validation → runner.Start →
-// 202 + apply_id. name/scenarioName arrive as arguments (path-bind on the huma layer).
-func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, name, scenarioName string, input map[string]any) (IncarnationRunReply, error) {
+// error_locked probe → resolve service-ref + sync input-validation → start gate →
+// runner.Start → 202 + apply_id. name/scenarioName arrive as arguments (path-bind on
+// the huma layer).
+//
+// The start gate (ADR-0093 §4, §5): with g.InMaintenanceWindow and the incarnation
+// closed, the run becomes a scheduled Voyage and the reply carries voyage_id and
+// schedule_at instead of apply_id; without it, a freeze covering now refuses the run
+// with 409 freeze-active unless g.ConfirmFreeze.
+func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, name, scenarioName string, input map[string]any, g RunGate) (IncarnationRunReply, error) {
 	var zero IncarnationRunReply
 
 	if !incarnation.ValidID(name) {
@@ -406,6 +417,15 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 		}
 	}
 
+	start, err := PlanRunStart(ctx, h.db, []string{name}, time.Now(), g)
+	if err != nil {
+		if p, ok := runGateProblem(err); ok {
+			return zero, p
+		}
+		h.logger.Error("incarnation.run: start gate failed", slog.String("name", name), slog.Any("error", err))
+		return zero, incProblem(problem.TypeInternalError, "read maintenance windows failed")
+	}
+
 	// Pre-flight assert gate (ADR-009 amendment 2026-07-28, NIM-270): AFTER
 	// ValidateInput and BEFORE runner.Start, mirroring where it sits on the
 	// create path. THIS is the path where a topology assert can actually be
@@ -437,6 +457,29 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 		}
 	}
 
+	// Deferred after the pre-flight assert, so a failing assert is the same 422
+	// whether the window is open now or not.
+	if !start.DeferTo.IsZero() {
+		d, err := InsertDeferredRun(ctx, h.db, name, scenarioName, input, claims.Subject, start.DeferTo)
+		if err != nil {
+			h.logger.Error("incarnation.run: defer failed", slog.String("name", name),
+				slog.String("scenario", scenarioName), slog.Any("error", err))
+			return zero, incProblem(problem.TypeInternalError, "defer scenario "+scenarioName+" failed")
+		}
+		payload := apimiddleware.AuditPayload{
+			"id":          name,
+			"scenario":    scenarioName,
+			"voyage_id":   d.VoyageID,
+			"schedule_at": d.ScheduleAt.Format(time.RFC3339),
+		}
+		g.AuditPayload(payload)
+		return IncarnationRunReply{
+			Body: IncarnationRunView{Incarnation: name, Scenario: scenarioName,
+				VoyageID: d.VoyageID, ScheduleAt: &d.ScheduleAt},
+			AuditPayload: payload,
+		}, nil
+	}
+
 	applyID := audit.NewULID()
 	if err := h.runner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
@@ -452,13 +495,15 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 		return zero, incProblem(problem.TypeInternalError, "start scenario "+scenarioName+" failed")
 	}
 
+	payload := apimiddleware.AuditPayload{
+		"id":       name,
+		"scenario": scenarioName,
+		"apply_id": applyID,
+	}
+	g.AuditPayload(payload)
 	return IncarnationRunReply{
-		Body: IncarnationRunView{ApplyID: applyID, Incarnation: name, Scenario: scenarioName},
-		AuditPayload: apimiddleware.AuditPayload{
-			"id":       name,
-			"scenario": scenarioName,
-			"apply_id": applyID,
-		},
+		Body:         IncarnationRunView{ApplyID: applyID, Incarnation: name, Scenario: scenarioName},
+		AuditPayload: payload,
 	}, nil
 }
 
@@ -555,7 +600,11 @@ type IncarnationUpgradeReply struct {
 // UpgradeTyped — extracted domain function POST /v1/incarnations/{id}/upgrade
 // (MIDDLEWARE-AUDIT). Parity with (w,r)-Upgrade: SelectByName → PrepareUpgrade →
 // UpgradeStateSchema (sync under 202) → 202 + apply_id.
-func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claims, name, toVersion string) (IncarnationUpgradeReply, error) {
+//
+// An upgrade that starts its upgrade scenario needs confirmFreeze during a freeze
+// (ADR-0093 §4), checked before UpgradeStateSchema commits the new schema: a 409
+// leaves the incarnation as it was. It is never deferred to a window.
+func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claims, name, toVersion string, confirmFreeze bool) (IncarnationUpgradeReply, error) {
 	var zero IncarnationUpgradeReply
 
 	if !incarnation.ValidID(name) {
@@ -607,6 +656,13 @@ func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claim
 	if upIn.UpgradeSlug != "" {
 		if h.runner == nil {
 			return zero, incProblem(problem.TypeInternalError, "scenario runner is not configured")
+		}
+		if err := CheckFreezeConsent(ctx, h.db, name, time.Now(), confirmFreeze, FreezeActUpgrade); err != nil {
+			if p, ok := runGateProblem(err); ok {
+				return zero, p
+			}
+			h.logger.Error("incarnation.upgrade: freeze check failed", slog.String("name", name), slog.Any("error", err))
+			return zero, incProblem(problem.TypeInternalError, "read freezes failed")
 		}
 		runApplyID = audit.NewULID()
 		upIn.RunApplyID = runApplyID
@@ -669,9 +725,10 @@ func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claim
 
 	view := IncarnationUpgradeView{ApplyID: applyID}
 	auditPayload := apimiddleware.AuditPayload{
-		"id":         name,
-		"to_version": toVersion,
-		"apply_id":   applyID,
+		"id":             name,
+		"to_version":     toVersion,
+		"apply_id":       applyID,
+		"confirm_freeze": confirmFreeze,
 	}
 	if runApplyID != "" {
 		view.RunApplyID = &runApplyID
@@ -697,7 +754,11 @@ type IncarnationRerunLastView struct {
 // the previous_status/scenario payload is known only after UnlockForRerun). Parity with
 // (w,r)-RerunLast. source is ScenarioInvocationSource(ctx) (api / mcp). 202 +
 // apply_id + scenario.
-func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Claims, name, reason string, fallbackInput map[string]any) (IncarnationRerunLastView, error) {
+//
+// During a freeze it needs confirmFreeze (ADR-0093 §4), checked before
+// UnlockForRerunWithInput commits the unlock: a 409 leaves the incarnation
+// error_locked. It is never deferred to a window.
+func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Claims, name, reason string, fallbackInput map[string]any, confirmFreeze bool) (IncarnationRerunLastView, error) {
 	var zero IncarnationRerunLastView
 
 	if !incarnation.ValidID(name) {
@@ -731,6 +792,14 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 			"service "+inc.Service+" is not registered (manage via service.* API, ADR-029)")
 	}
 	serviceRef.Ref = inc.ServiceVersion
+
+	if err := CheckFreezeConsent(ctx, h.db, name, time.Now(), confirmFreeze, FreezeActRerun); err != nil {
+		if p, ok := runGateProblem(err); ok {
+			return zero, p
+		}
+		h.logger.Error("incarnation.rerun-last: freeze check failed", slog.String("name", name), slog.Any("error", err))
+		return zero, incProblem(problem.TypeInternalError, "read freezes failed")
+	}
 
 	applyID := audit.NewULID()
 	// The input is handed down unconditionally; UnlockForRerunWithInput decides
@@ -798,6 +867,7 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 				"scenario":        res.Scenario,
 				"previous_status": string(res.PreviousStatus),
 				"apply_id":        applyID,
+				"confirm_freeze":  confirmFreeze,
 			},
 		})
 	}
@@ -823,7 +893,10 @@ type IncarnationDestroyView struct {
 // (SELF-AUDIT: destroy_started is written by [incarnation.Destroy] / destroy_completed by
 // [DeleteAfterTeardown]; audit middleware is NOT wired). Parity with (w,r)-Destroy: force is
 // allow_destroy (path-bind on the huma layer). 202 + apply_id.
-func (h *IncarnationHandler) DestroyTyped(ctx context.Context, claims *jwt.Claims, name string, force bool) (IncarnationDestroyView, error) {
+//
+// During a freeze a destroy needs confirmFreeze, on the force path too (ADR-0093
+// §4, NIM-1085), checked before anything commits. A destroy is never deferred.
+func (h *IncarnationHandler) DestroyTyped(ctx context.Context, claims *jwt.Claims, name string, force, confirmFreeze bool) (IncarnationDestroyView, error) {
 	var zero IncarnationDestroyView
 
 	if !incarnation.ValidID(name) {
@@ -840,6 +913,14 @@ func (h *IncarnationHandler) DestroyTyped(ctx context.Context, claims *jwt.Claim
 		}
 		h.logger.Error("incarnation.destroy: select failed", slog.String("name", name), slog.Any("error", err))
 		return zero, incProblem(problem.TypeInternalError, "select incarnation failed")
+	}
+
+	if err := CheckFreezeConsent(ctx, h.db, name, time.Now(), confirmFreeze, FreezeActDestroy); err != nil {
+		if p, ok := runGateProblem(err); ok {
+			return zero, p
+		}
+		h.logger.Error("incarnation.destroy: freeze check failed", slog.String("name", name), slog.Any("error", err))
+		return zero, incProblem(problem.TypeInternalError, "read freezes failed")
 	}
 
 	art, err := incarnation.PrepareDestroy(ctx, h.services, h.loader, inc, true)

@@ -221,6 +221,11 @@ type voyageCreateRequest struct {
 	RequireAlive  *bool   `json:"require_alive,omitempty"`
 	OnFailure     string  `json:"on_failure,omitempty"`
 
+	// InMaintenanceWindow / ConfirmFreeze — the start gate (ADR-0093 §4, §5),
+	// kind=scenario only.
+	InMaintenanceWindow bool `json:"in_maintenance_window,omitempty"`
+	ConfirmFreeze       bool `json:"confirm_freeze,omitempty"`
+
 	// Notify — one-shot subscriptions to THIS run (ADR-052(g) amendment N2). keeper
 	// materializes each element into an ephemeral Tiding (ephemeral=true, voyage_id=
 	// <new voyage_id>) in the SAME transaction that creates the Voyage. Atomicity gives
@@ -420,6 +425,12 @@ func (h *VoyageHandler) validateVoyageRequest(req *voyageCreateRequest) (voyageR
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"field 'target' is required")}
 	}
+	// A command Voyage addresses hosts, and a host has no window (ADR-0093 §4).
+	// confirm_freeze is accepted there because it changes nothing outside a freeze.
+	if kind == voyage.KindCommand && req.InMaintenanceWindow {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+			"field 'in_maintenance_window' applies to kind=scenario only: a host has no maintenance window")}
+	}
 
 	onFailure, ofErr := normalizeVoyageOnFailure(req.OnFailure)
 	if ofErr != "" {
@@ -570,6 +581,9 @@ func (h *VoyageHandler) PreviewTyped(ctx context.Context, claims *jwt.Claims, re
 	switch vc.kind {
 	case voyage.KindScenario:
 		resolved, err = h.resolveScenarioScopeErr(ctx, claims, req)
+		if err == nil {
+			_, err = h.scenarioStartErr(ctx, req, resolved)
+		}
 	default: // voyage.KindCommand
 		resolved, err = h.resolveCommandScopeErr(ctx, claims, req)
 	}
@@ -704,6 +718,27 @@ func (h *VoyageHandler) resolveScenarioScopeErr(ctx context.Context, claims *jwt
 	return resolved, nil
 }
 
+// scenarioStartErr applies the start gate to a scenario Voyage request at its
+// start — schedule_at when it lies ahead, else now (ADR-0093 §4, §5). Called
+// after every scope gate, so a forbidden, oversized or locked target is the
+// answer that comes first; shared by Create and Preview, which refuse alike.
+func (h *VoyageHandler) scenarioStartErr(ctx context.Context, req *voyageCreateRequest, resolved []string) (RunStart, error) {
+	at := time.Now()
+	if req.ScheduleAt != nil && req.ScheduleAt.After(at) {
+		at = *req.ScheduleAt
+	}
+	start, err := PlanRunStart(ctx, h.store, resolved, at,
+		RunGate{InMaintenanceWindow: req.InMaintenanceWindow, ConfirmFreeze: req.ConfirmFreeze})
+	if err != nil {
+		if p, ok := runGateProblem(err); ok {
+			return RunStart{}, p
+		}
+		h.logger.Error("voyage: start gate failed", slog.Any("error", err))
+		return RunStart{}, &problemError{problem.New(problem.TypeInternalError, "", "read maintenance windows failed")}
+	}
+	return start, nil
+}
+
 // createScenarioTyped — the kind=scenario branch of Create (FULL-TYPED ADR-054 §Pattern,
 // batch-2f self-audit). Scope resolve + gates — resolveScenarioScopeErr; then
 // batch arithmetic, persist, self-audit scenario_run.started INSIDE the function, reply.
@@ -714,6 +749,10 @@ func (h *VoyageHandler) createScenarioTyped(
 ) (voyageCreateReply, error) {
 	var zero voyageCreateReply
 	resolved, err := h.resolveScenarioScopeErr(ctx, claims, req)
+	if err != nil {
+		return zero, err
+	}
+	start, err := h.scenarioStartErr(ctx, req, resolved)
 	if err != nil {
 		return zero, err
 	}
@@ -751,12 +790,19 @@ func (h *VoyageHandler) createScenarioTyped(
 	}
 
 	row := h.buildVoyageRow(voyage.KindScenario, req, claims.Subject, &req.ScenarioName, nil, resolved, onFailure, concurrency, batchMode, effBatchSize)
+	row.InMaintenanceWindow = req.InMaintenanceWindow
+	row.ConfirmedFreezeIDs = start.ConfirmedFreezeIDs
+	if !start.DeferTo.IsZero() {
+		at := start.DeferTo.UTC()
+		row.ScheduleAt = &at
+	}
 	stampEphemeralTidings(notifyTidings, row.VoyageID)
 	if err := h.persistErr(ctx, row, targets, notifyTidings); err != nil {
 		return zero, err
 	}
 
-	h.emitCreated(claims.Subject, middleware.ScenarioInvocationSource(ctx), audit.EventScenarioRunStarted, row, req.Target, len(resolved))
+	h.emitCreated(claims.Subject, middleware.ScenarioInvocationSource(ctx), audit.EventScenarioRunStarted, row, req.Target, len(resolved),
+		RunGate{InMaintenanceWindow: req.InMaintenanceWindow, ConfirmFreeze: req.ConfirmFreeze})
 	return h.newCreateReply(row, len(resolved)), nil
 }
 
@@ -992,7 +1038,7 @@ func (h *VoyageHandler) createCommandTyped(
 		return zero, err
 	}
 
-	h.emitCreated(claims.Subject, middleware.ScenarioInvocationSource(ctx), audit.EventCommandRunInvoked, row, req.Target, len(resolved))
+	h.emitCreated(claims.Subject, middleware.ScenarioInvocationSource(ctx), audit.EventCommandRunInvoked, row, req.Target, len(resolved), RunGate{})
 	return h.newCreateReply(row, len(resolved)), nil
 }
 
@@ -1240,30 +1286,35 @@ func (h *VoyageHandler) allowedAnyContext(aid, resource, action string, contexts
 // Serialized directly (MCP/cadence-runs writeJSON), projected into api.Voyage
 // (huma schema). Conversion from a row — [toVoyageDTO].
 type voyageDTO struct {
-	Attempt           int               `json:"attempt"`
-	BatchMode         *string           `json:"batch_mode,omitempty"`
-	BatchPercent      *int              `json:"batch_percent,omitempty"`
-	BatchSize         *int              `json:"batch_size,omitempty"`
-	Concurrency       *int              `json:"concurrency,omitempty"`
-	CreatedAt         time.Time         `json:"created_at"`
-	CurrentBatchIndex int               `json:"current_batch_index"`
-	DryRun            bool              `json:"dry_run"`
-	FailThreshold     *int              `json:"fail_threshold,omitempty"`
-	FinishedAt        *time.Time        `json:"finished_at,omitempty"`
-	Kind              string            `json:"kind"`
-	Module            *string           `json:"module,omitempty"`
-	OnFailure         *string           `json:"on_failure,omitempty"`
-	RequireAlive      *bool             `json:"require_alive,omitempty"`
-	ScenarioName      *string           `json:"scenario_name,omitempty"`
-	ScheduleAt        *time.Time        `json:"schedule_at,omitempty"`
-	ScopeSize         int               `json:"scope_size"`
-	StartedAt         *time.Time        `json:"started_at,omitempty"`
-	StartedByAID      string            `json:"started_by_aid"`
-	Status            string            `json:"status"`
-	Summary           *voyageSummaryDTO `json:"summary,omitempty"`
-	Target            *voyageTargetDTO  `json:"target,omitempty"`
-	TotalBatches      int               `json:"total_batches"`
-	VoyageID          string            `json:"voyage_id"`
+	Attempt      int     `json:"attempt"`
+	BatchMode    *string `json:"batch_mode,omitempty"`
+	BatchPercent *int    `json:"batch_percent,omitempty"`
+	BatchSize    *int    `json:"batch_size,omitempty"`
+	Concurrency  *int    `json:"concurrency,omitempty"`
+	// ConfirmedFreezeIDs / InMaintenanceWindow — the start gate the claim asks
+	// (ADR-0093 §3, §5). A scheduled Voyage with InMaintenanceWindow is a run
+	// waiting for its window: its schedule_at is when it is next asked.
+	ConfirmedFreezeIDs  []string          `json:"confirmed_freeze_ids,omitempty"`
+	CreatedAt           time.Time         `json:"created_at"`
+	CurrentBatchIndex   int               `json:"current_batch_index"`
+	DryRun              bool              `json:"dry_run"`
+	FailThreshold       *int              `json:"fail_threshold,omitempty"`
+	FinishedAt          *time.Time        `json:"finished_at,omitempty"`
+	InMaintenanceWindow bool              `json:"in_maintenance_window,omitempty"`
+	Kind                string            `json:"kind"`
+	Module              *string           `json:"module,omitempty"`
+	OnFailure           *string           `json:"on_failure,omitempty"`
+	RequireAlive        *bool             `json:"require_alive,omitempty"`
+	ScenarioName        *string           `json:"scenario_name,omitempty"`
+	ScheduleAt          *time.Time        `json:"schedule_at,omitempty"`
+	ScopeSize           int               `json:"scope_size"`
+	StartedAt           *time.Time        `json:"started_at,omitempty"`
+	StartedByAID        string            `json:"started_by_aid"`
+	Status              string            `json:"status"`
+	Summary             *voyageSummaryDTO `json:"summary,omitempty"`
+	Target              *voyageTargetDTO  `json:"target,omitempty"`
+	TotalBatches        int               `json:"total_batches"`
+	VoyageID            string            `json:"voyage_id"`
 }
 
 // voyageTargetDTO — the native declarative-target reply shape (origin, handler-native
@@ -1347,6 +1398,11 @@ func toVoyageDTO(v *voyage.Voyage) voyageDTO {
 		CreatedAt:         v.CreatedAt,
 		StartedAt:         v.StartedAt,
 		FinishedAt:        v.FinishedAt,
+
+		InMaintenanceWindow: v.InMaintenanceWindow,
+	}
+	if len(v.ConfirmedFreezeIDs) > 0 {
+		dto.ConfirmedFreezeIDs = v.ConfirmedFreezeIDs
 	}
 	if v.BatchMode != nil {
 		bm := string(*v.BatchMode)
@@ -1404,9 +1460,10 @@ func (h *VoyageHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	reply, perr := h.ListTyped(r.Context(), claims, VoyageListInput{
-		Kind:     q.Get("kind"),
-		Statuses: q["status"],
-		Page:     page,
+		Kind:        q.Get("kind"),
+		Statuses:    q["status"],
+		Incarnation: q.Get("incarnation"),
+		Page:        page,
 	})
 	if perr != nil {
 		writeProblemError(w, r, perr)
@@ -1422,7 +1479,11 @@ func (h *VoyageHandler) List(w http.ResponseWriter, r *http.Request) {
 type VoyageListInput struct {
 	Kind     string
 	Statuses []string
-	Page     sharedapi.Page
+	// Incarnation — scenario Voyages naming this incarnation among their
+	// targets: an incarnation's deferred runs are scheduled Voyages, not
+	// apply_runs, so its runs list reads them here.
+	Incarnation string
+	Page        sharedapi.Page
 }
 
 // VoyageListReply — the native typed output of list (handler-native T5d). A flat shape 1:1
@@ -1468,6 +1529,13 @@ func (h *VoyageHandler) ListTyped(ctx context.Context, claims *jwt.Claims, in Vo
 			}
 			filter.Statuses = append(filter.Statuses, st)
 		}
+	}
+	if in.Incarnation != "" {
+		if !incarnation.ValidID(in.Incarnation) {
+			return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+				"invalid 'incarnation' filter (must match "+incarnation.IDPattern+")")}
+		}
+		filter.Incarnation = in.Incarnation
 	}
 	filter.HostScope = h.voyageHostScope(claims)
 	items, total, err := voyage.List(ctx, h.store, filter, in.Page.Offset, in.Page.Limit)
@@ -1800,7 +1868,7 @@ func voyageNotFound(id string) error {
 // emitCreated writes scenario_run.started / command_run.invoked (source=api/mcp,
 // archon_aid=JWT.sub). Background ctx — the HTTP server may have canceled r.Context()
 // after the write response. `input` is NOT included (invariant A ADR-027).
-func (h *VoyageHandler) emitCreated(aid string, source audit.Source, eventType audit.EventType, row *voyage.Voyage, target *voyageTargetRequest, scopeSize int) {
+func (h *VoyageHandler) emitCreated(aid string, source audit.Source, eventType audit.EventType, row *voyage.Voyage, target *voyageTargetRequest, scopeSize int, gate RunGate) {
 	if h.auditW == nil {
 		return
 	}
@@ -1823,6 +1891,15 @@ func (h *VoyageHandler) emitCreated(aid string, source audit.Source, eventType a
 	}
 	if t := targetAuditPayload(target); len(t) > 0 {
 		payload["target"] = t
+	}
+	if row.Kind == voyage.KindScenario {
+		gate.AuditPayload(payload)
+		if len(row.ConfirmedFreezeIDs) > 0 {
+			payload["confirmed_freeze_ids"] = row.ConfirmedFreezeIDs
+		}
+		if row.ScheduleAt != nil {
+			payload["schedule_at"] = row.ScheduleAt.UTC().Format(time.RFC3339)
+		}
 	}
 	ev := &audit.Event{
 		EventType:     eventType,

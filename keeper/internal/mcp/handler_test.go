@@ -18,6 +18,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/maintenance"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
@@ -94,6 +95,16 @@ type fakePool struct {
 	// (destroy force path, DeleteAfterTeardown). zero-value → "DELETE 1".
 	deleteTag pgconn.CommandTag
 
+	// windows / freezes — backing for the start gate's reads of
+	// incarnation_maintenance_windows / incarnation_freezes (ADR-0093). nil →
+	// the incarnation is open at any time.
+	windows []maintenance.Window
+	freezes []maintenance.Freeze
+	// voyageInsertArgs / voyageTargets — what a run deferred to its window
+	// wrote: the INSERT INTO voyages arguments and the COPYed target count.
+	voyageInsertArgs []any
+	voyageTargets    int
+
 	beginErr error
 }
 
@@ -150,6 +161,10 @@ func (f *fakePool) Exec(_ context.Context, sql string, args ...any) (pgconn.Comm
 }
 
 func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	if contains(sql, "INSERT INTO voyages") {
+		f.voyageInsertArgs = args
+		return staticRow{values: []any{time.Now().UTC()}}
+	}
 	// Gate (b) canonicalization probe — soul.CanonicalTraitPayload's `SELECT
 	// $1::jsonb`, reached by handlers.ScreenTraitPairsInScope for every operator
 	// that is not Unrestricted. The fake ECHOES the bytes it was handed and
@@ -330,6 +345,13 @@ func (f *fakePool) Query(_ context.Context, sql string, args ...any) (pgx.Rows, 
 	// "FROM incarnation_membership", so the list branch would answer this
 	// plausibly (scanning a name into the sid) instead of admitting it does not
 	// understand the query.
+	// The start gate's reads, before the incarnation branch for the same reason.
+	if contains(sql, "FROM incarnation_maintenance_windows") {
+		return maintenanceRows(f.windows, nil), nil
+	}
+	if contains(sql, "FROM incarnation_freezes") {
+		return maintenanceRows(nil, f.freezes), nil
+	}
 	if contains(sql, "FROM incarnation_membership") {
 		rows := make([]staticRow, 0, len(f.memberSIDs))
 		for _, sid := range f.memberSIDs {
@@ -397,8 +419,14 @@ func (t *fakeTx) Begin(ctx context.Context) (pgx.Tx, error) {
 func (t *fakeTx) BeginFunc(_ context.Context, fn func(pgx.Tx) error) error { return fn(t) }
 func (t *fakeTx) Commit(_ context.Context) error                           { return nil }
 func (t *fakeTx) Rollback(_ context.Context) error                         { return nil }
-func (t *fakeTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, _ pgx.CopyFromSource) (int64, error) {
-	panic("fakeTx.CopyFrom: unexpected")
+func (t *fakeTx) CopyFrom(_ context.Context, table pgx.Identifier, _ []string, src pgx.CopyFromSource) (int64, error) {
+	if len(table) != 1 || table[0] != "voyage_targets" {
+		panic("fakeTx.CopyFrom: unexpected")
+	}
+	for src.Next() {
+		t.pool.voyageTargets++
+	}
+	return int64(t.pool.voyageTargets), nil
 }
 func (t *fakeTx) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults {
 	panic("fakeTx.SendBatch: unexpected")

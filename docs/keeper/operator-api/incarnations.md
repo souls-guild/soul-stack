@@ -116,6 +116,8 @@ Runs scenario `<scenario>` against an existing incarnation. Asynchronous operati
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `input` | `object` | optional | Input scenario, validated against `scenario/<scenario>/input:`. Default is `{}`. |
+| `in_maintenance_window` | `bool` | optional | Start inside the incarnation's maintenance window; closed now → deferred as a scheduled Voyage. See [§ Starting a run](#starting-a-run-the-window-and-the-freeze). |
+| `confirm_freeze` | `bool` | optional | Consent to start during an active freeze; without it `409 freeze-active`. |
 
 > **Batch / invocation-time chunking - to `/v1/voyages`.** Former invocation-time fields `target` / `wave` / `concurrency` (Tide, [ADR-040](../../adr/0040-tide.md#adr-040-tide--invocation-time-scope-chunking--target-override)) **removed in Wave 5**. This endpoint is only a single-incarnation scenario-run (without a batch). Batch N incarnations - `POST /v1/voyages` with `kind=scenario` + `batch_size` / `concurrency` ([ADR-043](../../adr/0043-voyage.md), see [operator-api/voyages.md](voyages.md)).
 
@@ -128,9 +130,10 @@ Runs scenario `<scenario>` against an existing incarnation. Asynchronous operati
 
 **Response `202 Accepted`:**
 - Classic single-run (without `wave`): `{"apply_id": "<ULID>", "incarnation": "redis-prod", "scenario": "add-user"}`.
+- Deferred to the maintenance window: `{"incarnation": "redis-prod", "scenario": "add-user", "voyage_id": "<ULID>", "schedule_at": "<RFC3339>"}`, no `apply_id`.
 - Batch (several incarnations) - separate endpoint `POST /v1/voyages` (`kind=scenario`): per-incarnation `apply_id` are linked to Voyage via `voyage_targets.apply_id` (back-link lives in the orchestrator table, not in `apply_runs`). Progress - `GET /v1/voyages/{voyage_id}` ([ADR-043](../../adr/0043-voyage.md)).
 
-**Errors:** `403 forbidden`, `404 not-found` (incarnation does not exist), `409 incarnation-locked`, `409 migration-failed`, `422 validation-failed` (scenario name did not pass `ScenarioNamePattern`). A non-existent-but-valid scenario is a **not** error for this endpoint: `202` → `error_locked` (see async contract above).
+**Errors:** `403 forbidden`, `404 not-found` (incarnation does not exist), `409 incarnation-locked`, `409 migration-failed`, `409 freeze-active` (a freeze covers now and `confirm_freeze` is not set), `422 validation-failed` (scenario name did not pass `ScenarioNamePattern`). A non-existent-but-valid scenario is a **not** error for this endpoint: `202` → `error_locked` (see async contract above).
 
 #### `GET /v1/incarnations/{id}` - read spec + state + status
 
@@ -717,7 +720,7 @@ Removes the host from the roster — it stops being a target of **every future r
 
 [ADR-0093](../../adr/0093-maintenance-window.md), epic NIM-1069, NIM-1072. Each incarnation has its own **maintenance windows** and **freezes**; there is no shared named window. A window is the time a run may **start**: a run already started is never cut off when the slot ends. A run that may not start now is meant to wait for the next open moment outside every freeze. During a **freeze** no automatic run is meant to start, with or without windows. **No windows at all means any time** (outside a freeze).
 
-The answer to "may a run start now, and if not, when" comes from one calculator, `keeper/internal/maintenance`. ⚠ **These routes only store the windows and freezes and report that answer.** Nothing starts or defers a run by them yet: a freeze created today does not stop a Cadence or the Reaper. The consumers come in the same release: scenario CEL (NIM-1073), the run and Voyage fields `in_maintenance_window` / `confirm_freeze` (NIM-1074), Cadence (NIM-1075) and the UI (NIM-1076); cert rotation (NIM-1081) joins with epic NIM-1070.
+The answer to "may a run start now, and if not, when" comes from one calculator, `keeper/internal/maintenance`. These routes store the windows and freezes and report that answer; how runs obey them is [§ Starting a run: the window and the freeze](#starting-a-run-the-window-and-the-freeze) (NIM-1074). The other consumers in the same release: scenario CEL (NIM-1073), Cadence (NIM-1075) and the UI (NIM-1076); cert rotation (NIM-1081) joins with epic NIM-1070.
 
 **How a window is read.**
 
@@ -777,3 +780,21 @@ Permissions: reads ride on `incarnation.get`, writes need `incarnation.maintenan
 **Errors:** `400 malformed-request`; `403 forbidden`; `404 not-found` (no such incarnation, or no window/freeze with that id **on this incarnation**: the incarnation in the path is part of the address); `422 validation-failed` (a refused field, a malformed path id, or the incarnation is at its limit); `500 internal-error`.
 
 **Audit:** `maintenance_window.created` / `.updated` / `.deleted` and `freeze.created` / `.updated` / `.deleted` (`source: api` / `mcp`). The payload is `{incarnation_id, id, …fields}`. The fields are as they are after the change, or as they were before a delete. `.updated` also carries `previous`, the fields before the change, read from the same statement. The handler writes these events itself.
+
+#### Starting a run: the window and the freeze
+
+[ADR-0093](../../adr/0093-maintenance-window.md) §3–§5, NIM-1074. Two request fields decide how a run treats the incarnation's windows and freezes:
+
+| Field | Where | Meaning |
+|---|---|---|
+| `in_maintenance_window` | `POST …/scenarios/{scenario}` body, `POST /v1/voyages` (kind=scenario) | Start only when the incarnation is inside a window and outside every freeze. Open now → the run starts now as usual. Closed → it becomes a `scheduled` Voyage due at the next open moment. A freeze needs no consent here: the run waits it out. |
+| `confirm_freeze` | the same two, `POST …/rerun-last` and `POST …/upgrade` bodies, `DELETE /v1/incarnations/{id}?confirm_freeze=true` | Consent to start while a freeze covers the start. Without it such a request is refused with `409 freeze-active` and nothing is committed. Outside a freeze it changes nothing, so a client may always send it. |
+
+- **A forced run is never refused because of a window.** Without `in_maintenance_window` the windows are not asked; only a freeze is.
+- **A deferred run** answers `202` without `apply_id`: `{"incarnation": "df-prod", "scenario": "restart", "voyage_id": "<ULID>", "schedule_at": "2026-11-02T23:00:00Z"}`. It is an ordinary Voyage: read it with `GET /v1/voyages/{voyage_id}`, list an incarnation's with `GET /v1/voyages?incarnation=df-prod&status=scheduled`, drop it with `DELETE /v1/voyages/{voyage_id}`.
+- **The start is decided when it comes, not when it is asked for.** At the claim Keeper asks again for every scenario Voyage that has not started — operator's, Cadence's or the Reaper's. A freeze added in the meantime, or a window that moved, defers the row again (`schedule_at` moves, the run is still `scheduled`, nothing started). Consent covers the freezes that covered the start at request time (`confirmed_freeze_ids` on the Voyage); a later freeze defers the row past it.
+- **A Voyage over several incarnations has one start**: the first moment every target is open at once. A freeze of any length is waited out; only windows that never meet — no common moment within 366 days after the last freeze ends — are `422 validation-failed`; split the run. If windows change later so that the targets never meet, the Voyage fails before it starts and every target carries `no_common_window` ([voyages.md → Target error codes](voyages.md#target-error-codes)).
+- **During a freeze without consent**, one frozen target refuses the whole request; `detail` names the frozen incarnations with their freeze's end and comment, one entry per freeze — at most ten incarnations per freeze and ten freezes, then counts.
+- **Not deferred, consent only:** rerun-last, the upgrade's scenario (checked only when the upgrade has one to start) and the destroy (on the `allow_destroy=true` path too). The check runs before the unlock, the schema change or the destroy commits anything.
+- **Not held back at all:** a Decree reaction (Oracle). It is a repair.
+- **Audit:** the run's event carries both fields (`incarnation.scenario_started`, `scenario_run.started`; for a deferred run also `voyage_id`, `schedule_at`); `incarnation.rerun_last` and `incarnation.upgrade_started` carry `confirm_freeze`.

@@ -174,6 +174,8 @@ func toVoyageCreateRequest(b VoyageCreateRequest) handlers.VoyageCreateRequest {
 		FailThreshold:        b.FailThreshold,
 		RequireAlive:         b.RequireAlive,
 		OnFailure:            b.OnFailure,
+		InMaintenanceWindow:  b.InMaintenanceWindow,
+		ConfirmFreeze:        b.ConfirmFreeze,
 		Notify:               toVoyageNotifyRequests(b.Notify),
 	}
 }

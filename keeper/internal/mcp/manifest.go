@@ -1569,14 +1569,18 @@ var (
 "properties":{
 "id":{"type":"string"},
 "scenario":{"type":"string"},
-"input":{"type":"object"}}}`)
+"input":{"type":"object"},
+"in_maintenance_window":{"type":"boolean","description":"Start inside the incarnation's maintenance windows and outside every freeze. Closed now -> the run becomes a scheduled Voyage: the result carries voyage_id + schedule_at instead of _apply_id (ADR-0093)."},
+"confirm_freeze":{"type":"boolean","description":"Consent to start during an active freeze; without it such a run fails with code=freeze-active. Changes nothing outside a freeze."}}}`)
 
 	schemaIncarnationRunOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["_apply_id","incarnation","scenario"],
-"properties":{"_apply_id":{"type":"string"},"incarnation":{"type":"string"},"scenario":{"type":"string"}}}`)
+"required":["incarnation","scenario"],
+"properties":{"_apply_id":{"type":"string","description":"The started run; absent when the run was deferred to the maintenance window."},"incarnation":{"type":"string"},"scenario":{"type":"string"},
+"voyage_id":{"type":"string","description":"The scheduled Voyage of a deferred run; keeper.voyage.cancel drops it."},
+"schedule_at":{"type":"string","format":"date-time","description":"When the deferred run is due; asked again then."}}}`)
 
 	schemaIncarnationGetInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1631,7 +1635,8 @@ var (
 "properties":{
 "id":{"type":"string"},
 "reason":{"type":"string","minLength":1,"maxLength":500,"description":"Free-form operator confirmation text; written to audit incarnation.rerun_last."},
-"input":{"type":"object","description":"Operator input for the restart. Used ONLY when the failed attempt carries no replayable snapshot in its history row (a terminal recorded without one, or a row predating NIM-408); with a snapshot present the snapshot wins. A recovery path, not an override."}}}`)
+"input":{"type":"object","description":"Operator input for the restart. Used ONLY when the failed attempt carries no replayable snapshot in its history row (a terminal recorded without one, or a row predating NIM-408); with a snapshot present the snapshot wins. A recovery path, not an override."},
+"confirm_freeze":{"type":"boolean","description":"Consent to rerun during an active freeze; without it code=freeze-active and the incarnation stays error_locked."}}}`)
 
 	schemaIncarnationRerunLastOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1662,7 +1667,8 @@ var (
 "required":["id","to_version"],
 "properties":{
 "id":{"type":"string"},
-"to_version":{"type":"string"}}}`)
+"to_version":{"type":"string"},
+"confirm_freeze":{"type":"boolean","description":"Consent to start the upgrade scenario during an active freeze; without it code=freeze-active and nothing is committed."}}}`)
 
 	schemaIncarnationDestroyInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1671,7 +1677,8 @@ var (
 "required":["id","allow_destroy"],
 "properties":{
 "id":{"type":"string"},
-"allow_destroy":{"type":"boolean"}}}`)
+"allow_destroy":{"type":"boolean"},
+"confirm_freeze":{"type":"boolean","description":"Consent to destroy during an active freeze; without it code=freeze-active and nothing is committed."}}}`)
 
 	// traits-set: wholesale replacement of incarnation.traits (ADR-060).
 	// 'traits' is the full key→(scalar|list of scalars) set; empty/omitted
@@ -2827,7 +2834,9 @@ var (
 "dry_run":{"type":"boolean"},
 "schedule_at":{"type":"string","format":"date-time","description":"Delayed start -> status scheduled."},
 "inter_batch_interval_ms":{"type":"integer","minimum":0,"description":"Pause between Legs (ms)."},
-"on_failure":{"type":"string","enum":["abort","continue"]}
+"on_failure":{"type":"string","enum":["abort","continue"]},
+"in_maintenance_window":{"type":"boolean","description":"kind=scenario: start at the first moment every target is inside its maintenance windows and outside every freeze (at or after schedule_at); freezes are waited out, windows that never meet -> validation-failed (ADR-0093)."},
+"confirm_freeze":{"type":"boolean","description":"kind=scenario: consent to start while a freeze covers a target at the start; without it code=freeze-active naming every frozen target."}
 }}`)
 
 	schemaVoyageStartOutput = json.RawMessage(`{
@@ -2857,6 +2866,7 @@ var (
 "properties":{
 "kind":{"type":"string","enum":["scenario","command"]},
 "status":{"type":"array","items":{"type":"string","enum":["scheduled","pending","running","succeeded","failed","partial_failed","cancelled"]}},
+"incarnation":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"kind=scenario Voyages naming this incarnation among their targets - its runs deferred to a maintenance window among them."},
 "offset":{"type":"integer","minimum":0},
 "limit":{"type":"integer","minimum":1,"maximum":1000}}}`)
 

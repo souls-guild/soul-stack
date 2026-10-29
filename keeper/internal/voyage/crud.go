@@ -51,7 +51,7 @@ INSERT INTO voyages (
     schedule_at, inter_batch_interval, on_failure,
     total_batches, status, started_by_aid,
     batch_percent, fail_threshold, inter_unit_interval, require_alive,
-    cadence_id
+    cadence_id, in_maintenance_window, confirmed_freeze_ids
 ) VALUES (
     $1, $2, $3, $4, $5,
     $6, $7,
@@ -59,7 +59,7 @@ INSERT INTO voyages (
     $12, $13::interval, $14,
     $15, $16, $17,
     $18, $19, $20::interval, $21,
-    $22
+    $22, $23, $24
 )
 RETURNING created_at
 `
@@ -217,11 +217,22 @@ func Insert(ctx context.Context, db ExecQueryRower, v *Voyage) error {
 		interUnitArg,
 		requireAliveArg,
 		cadenceIDArg,
+		v.InMaintenanceWindow,
+		confirmedFreezeIDsArg(v.ConfirmedFreezeIDs),
 	)
 	if err := row.Scan(&v.CreatedAt); err != nil {
 		return mapInsertError(err)
 	}
 	return nil
+}
+
+// confirmedFreezeIDsArg binds a nil set as an empty array: pgx writes a nil
+// slice as NULL, and the column is NOT NULL.
+func confirmedFreezeIDsArg(ids []string) []string {
+	if ids == nil {
+		return []string{}
+	}
+	return ids
 }
 
 func mapInsertError(err error) error {
@@ -249,7 +260,7 @@ const selectColumns = `
     claimed_by_kid, last_renewed_at, claim_expires_at, attempt,
     started_by_aid, created_at, started_at, finished_at, summary,
     batch_percent, fail_threshold, EXTRACT(EPOCH FROM inter_unit_interval)::float8, require_alive,
-    cadence_id
+    cadence_id, in_maintenance_window, confirmed_freeze_ids
 `
 
 const selectByIDSQL = `SELECT ` + selectColumns + `
@@ -299,7 +310,8 @@ func SelectByIDScoped(ctx context.Context, db ExecQueryRower, id string, hostSco
 // List (via rows.Next), and ClaimNext (RETURNING). Nullable columns are bound via
 // pointers; input/target_resolved/target_origin are jsonb bytes;
 // inter_batch_interval arrives as float seconds (EXTRACT EPOCH) → time.Duration.
-func scanVoyage(row pgx.Row) (*Voyage, error) {
+// extra receives the columns a statement selects after [selectColumns].
+func scanVoyage(row pgx.Row, extra ...any) (*Voyage, error) {
 	var (
 		v             Voyage
 		kindStr       string
@@ -325,7 +337,7 @@ func scanVoyage(row pgx.Row) (*Voyage, error) {
 		requireAlive  *bool
 		cadenceID     *string
 	)
-	if err := row.Scan(
+	dest := []any{
 		&v.VoyageID,
 		&kindStr,
 		&scenarioName,
@@ -357,7 +369,10 @@ func scanVoyage(row pgx.Row) (*Voyage, error) {
 		&interUnitSecs,
 		&requireAlive,
 		&cadenceID,
-	); err != nil {
+		&v.InMaintenanceWindow,
+		&v.ConfirmedFreezeIDs,
+	}
+	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return nil, err
 	}
 	v.Kind = Kind(kindStr)
@@ -413,6 +428,10 @@ type ListFilter struct {
 	Kind         Kind
 	CreatedAfter time.Time
 	CadenceID    string
+	// Incarnation — exact (empty string — no filter): scenario Voyages naming
+	// that incarnation among their targets, so an incarnation's page can list
+	// its runs deferred to a window (ADR-0093 §3).
+	Incarnation string
 
 	// HostScope renders the caller's purview over the hosts a Voyage NAMES,
 	// starting at placeholder $startIdx (NIM-842). Supply the per-target
@@ -492,6 +511,7 @@ WHERE ($1::text[] IS NULL OR cardinality($1::text[]) = 0 OR status = ANY($1::tex
   AND ($2::text IS NULL OR kind = $2)
   AND ($3::timestamptz IS NULL OR created_at > $3::timestamptz)
   AND ($6::text IS NULL OR cadence_id = $6)
+  AND ($7::text IS NULL OR (kind = 'scenario' AND target_resolved ? $7::text))
 ORDER BY created_at DESC
 LIMIT $4 OFFSET $5
 `
@@ -501,6 +521,7 @@ WHERE ($1::text[] IS NULL OR cardinality($1::text[]) = 0 OR status = ANY($1::tex
   AND ($2::text IS NULL OR kind = $2)
   AND ($3::timestamptz IS NULL OR created_at > $3::timestamptz)
   AND ($4::text IS NULL OR cadence_id = $4)
+  AND ($5::text IS NULL OR (kind = 'scenario' AND target_resolved ? $5::text))
 `
 
 // List returns a page of Voyages (parity with errandrun.SelectAll): filters by
@@ -529,14 +550,18 @@ func List(ctx context.Context, db ExecQueryRower, filter ListFilter, offset, lim
 	if filter.CadenceID != "" {
 		cadenceIDArg = filter.CadenceID
 	}
+	var incarnationArg any
+	if filter.Incarnation != "" {
+		incarnationArg = filter.Incarnation
+	}
 
 	// The scope predicate is ANDed LAST, after every user-supplied filter, so no
 	// filter can widen it. Its placeholders start after the fixed ones, which
-	// differ between the two statements ($1..$4 for the count, $1..$6 for the
+	// differ between the two statements ($1..$5 for the count, $1..$7 for the
 	// page), so each is rendered against its own starting index.
-	countArgs := []any{statusesArg, kindArg, createdAfterArg, cadenceIDArg}
+	countArgs := []any{statusesArg, kindArg, createdAfterArg, cadenceIDArg, incarnationArg}
 	countStmt := countSQL
-	listArgs := []any{statusesArg, kindArg, createdAfterArg, limit, offset, cadenceIDArg}
+	listArgs := []any{statusesArg, kindArg, createdAfterArg, limit, offset, cadenceIDArg, incarnationArg}
 	listStmt := listSQL
 	if filter.HostScope != nil {
 		sql, args, _ := filter.HostScope(len(countArgs) + 1)

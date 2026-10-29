@@ -93,8 +93,11 @@ func voyagePreviewOperation() huma.Operation {
 type voyageListInput struct {
 	Kind     string   `query:"kind" enum:"scenario,command" doc:"filter by kind; outside enum -> 422"`
 	Statuses []string `query:"status,explode" enum:"scheduled,pending,running,succeeded,failed,partial_failed,cancelled" doc:"multi-value ?status=X&status=Y OR; outside enum -> 422"`
-	Offset   int32    `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
-	Limit    int32    `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
+	// Incarnation lists an incarnation's runs that are Voyages — its deferred
+	// runs among them (ADR-0093 §3).
+	Incarnation string `query:"incarnation" doc:"kind=scenario Voyages naming this incarnation among their targets; malformed id -> 422"`
+	Offset      int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
+	Limit       int32  `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
 
 // voyageListOutput — huma output GET /v1/voyages (FULL-TYPED). Body — the huma-native envelope

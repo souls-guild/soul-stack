@@ -209,18 +209,25 @@ type Voyage struct {
 	RequireAlive       *bool          // presence-filter of alive on scope resolve. nil ⇒ false, ADR-043 amendment.
 	OnFailure          *OnFailure
 	CadenceID          *string // back-link to spawning Cadence (ADR-046 §2). nil ⇒ manual run; populated ⇒ spawn from Cadence (S2).
-	TotalBatches       int
-	CurrentBatchIndex  int
-	Status             Status
-	ClaimedByKID       *string
-	LastRenewedAt      *time.Time
-	ClaimExpiresAt     *time.Time
-	Attempt            int
-	StartedByAID       string
-	CreatedAt          time.Time
-	StartedAt          *time.Time
-	FinishedAt         *time.Time
-	Summary            *Summary
+	// InMaintenanceWindow — the run starts only when every target is inside its
+	// maintenance windows and outside every freeze (ADR-0093 §3); the claim
+	// defers it until then. ConfirmedFreezeIDs — the freezes an operator
+	// consented to at request time (§5); any other freeze covering the start
+	// defers the row at the claim. Both are read only for kind=scenario.
+	InMaintenanceWindow bool
+	ConfirmedFreezeIDs  []string
+	TotalBatches        int
+	CurrentBatchIndex   int
+	Status              Status
+	ClaimedByKID        *string
+	LastRenewedAt       *time.Time
+	ClaimExpiresAt      *time.Time
+	Attempt             int
+	StartedByAID        string
+	CreatedAt           time.Time
+	StartedAt           *time.Time
+	FinishedAt          *time.Time
+	Summary             *Summary
 }
 
 // VoyageTarget — runtime representation of `voyage_targets` row (run unit,

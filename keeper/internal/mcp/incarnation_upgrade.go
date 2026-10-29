@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"time"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/shared/audit"
@@ -14,8 +16,9 @@ import (
 // (schemaIncarnationUpgradeInput): name + to_version required. to_version is
 // the git-ref of the target service version (ADR-007).
 type incarnationUpgradeArgs struct {
-	ID        string `json:"id"`
-	ToVersion string `json:"to_version"`
+	ID            string `json:"id"`
+	ToVersion     string `json:"to_version"`
+	ConfirmFreeze bool   `json:"confirm_freeze,omitempty"`
 }
 
 // incarnationUpgradeOutput — output of keeper.incarnation.upgrade
@@ -109,6 +112,18 @@ func (h *Handler) callIncarnationUpgrade(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
+	// Freeze consent before the schema commits, when the upgrade has a scenario
+	// to start (ADR-0093 §4, parity REST).
+	if upIn.UpgradeSlug != "" {
+		if err := handlers.CheckFreezeConsent(ctx, h.deps.IncarnationDB, a.ID, time.Now(), a.ConfirmFreeze, handlers.FreezeActUpgrade); err != nil {
+			if resp, ok := h.runGateToolError(req.ID, toolName, err); ok {
+				return resp
+			}
+			h.deps.Logger.Error("mcp: incarnation.upgrade freeze check failed", slog.String("name", a.ID), slog.Any("error", err))
+			return h.toolError(req.ID, toolName, mcpCodeInternalError, "read freezes failed")
+		}
+	}
+
 	if _, err := incarnation.UpgradeStateSchema(ctx, h.deps.IncarnationDB, upIn); err != nil {
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
@@ -124,9 +139,10 @@ func (h *Handler) callIncarnationUpgrade(ctx context.Context, claims *jwt.Claims
 	}
 
 	h.writeAudit(ctx, audit.EventIncarnationUpgradeStarted, claims.Subject, map[string]any{
-		"id":         a.ID,
-		"to_version": a.ToVersion,
-		"apply_id":   applyID,
+		"id":             a.ID,
+		"to_version":     a.ToVersion,
+		"apply_id":       applyID,
+		"confirm_freeze": a.ConfirmFreeze,
 	})
 
 	return h.toolResult(req.ID, incarnationUpgradeOutput{ApplyID: applyID})

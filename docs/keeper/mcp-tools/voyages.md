@@ -27,6 +27,8 @@ Creates a Voyage - a unified batch run. `kind=scenario`: apply named scenario to
 | `schedule_at` | `string` (date-time) | optional | Delayed start → `status=scheduled`. |
 | `inter_batch_interval_ms` | `integer` (≥0) | optional | Pause between Legs (ms). |
 | `on_failure` | `string` (enum `abort`/`continue`) | optional | Behavior upon failure of Leg. |
+| `in_maintenance_window` | `bool` | optional | kind=scenario: start at the first moment every target is inside its windows and outside every freeze; freezes are waited out, windows that never meet → `validation-failed`; on kind=command → `validation-failed`. |
+| `confirm_freeze` | `bool` | optional | kind=scenario: consent to start while a freeze covers a target; without it `freeze-active` naming every frozen target. |
 
 **Output** (`required: voyage_id, kind, scope_size, status, location`):
 
@@ -35,10 +37,10 @@ Creates a Voyage - a unified batch run. `kind=scenario`: apply named scenario to
 | `voyage_id` | `string` (ULID) | ID Voyage. |
 | `kind` | `string` (enum) | Echo input. |
 | `scope_size` | `integer` | Number of resolved units. |
-| `status` | `string` (enum `pending`/`scheduled`) | `scheduled` when `schedule_at` is specified, otherwise `pending`. |
+| `status` | `string` (enum `pending`/`scheduled`) | `scheduled` when the start (`schedule_at`, or the window's next start with `in_maintenance_window`) lies ahead, otherwise `pending`. |
 | `location` | `string` | REST path for get/poll (`/v1/voyages/<id>`). |
 
-Errors (like REST): `forbidden` (RBAC-by-kind deny / explicit foreign host in command / incarnation outside scope in scenario), `not-found` (explicit incarnation does not exist, scenario), `incarnation-locked` (the resolved target holds an `error_locked` incarnation, scenario — the detail names the run that locked it and the unlock / rerun-last routes, [operator-api/voyages.md](../operator-api/voyages.md#kindscenario-an-error_locked-incarnation-in-the-target)), `validation-failed` (invalid `kind` / empty `scenario_name`/`module` by kind / no target / broken SID/coven/name / `where` > 4 KiB / empty resolve `voyage_empty_target` / scope > `voyage.max_scope` / batch-spec conflict), `tempo-exceeded` (rate-limit bucket `voyage_create`). See hybrid semantics command∩Purview - [operator-api/voyages.md](../operator-api/voyages.md).
+Errors (like REST): `freeze-active` (a freeze covers a target at the start, no `confirm_freeze`, scenario — [operator-api/voyages.md](../operator-api/voyages.md#kindscenario-maintenance-windows-and-freezes)), `forbidden` (RBAC-by-kind deny / explicit foreign host in command / incarnation outside scope in scenario), `not-found` (explicit incarnation does not exist, scenario), `incarnation-locked` (the resolved target holds an `error_locked` incarnation, scenario — the detail names the run that locked it and the unlock / rerun-last routes, [operator-api/voyages.md](../operator-api/voyages.md#kindscenario-an-error_locked-incarnation-in-the-target)), `validation-failed` (invalid `kind` / empty `scenario_name`/`module` by kind / no target / broken SID/coven/name / `where` > 4 KiB / empty resolve `voyage_empty_target` / scope > `voyage.max_scope` / batch-spec conflict), `tempo-exceeded` (rate-limit bucket `voyage_create`). See hybrid semantics command∩Purview - [operator-api/voyages.md](../operator-api/voyages.md).
 
 #### `keeper.voyage.get`
 
@@ -71,6 +73,7 @@ Enumeration of Voyage runs with filters `kind`/`status` (multi-value) and pagina
 |---|---|---|---|
 | `kind` | `string` (enum) | optional | Filter by type. |
 | `status` | `array<string>` (enum) | optional | Multi-value filter by status. |
+| `incarnation` | `string` | optional | kind=scenario Voyages naming this incarnation among their targets — its runs deferred to a window among them. |
 | `offset` | `integer` (≥0) | optional | Pagination. |
 | `limit` | `integer` (1..1000) | optional | Pagination. |
 

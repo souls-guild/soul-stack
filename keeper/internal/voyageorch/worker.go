@@ -60,6 +60,11 @@ type VoyageWorker struct {
 	// wire-up S5). kind=scenario (S2) does not use.
 	CommandSpawner CommandSpawner
 
+	// Gate is asked at the claim whether a scenario Voyage may start yet
+	// (ADR-0093 §3); production passes voyage.MaintenanceGate. Required: a
+	// worker without it would start runs during a freeze.
+	Gate voyage.StartGate
+
 	// Audit writer for finalize-audit family (ADR-043, A3): per-Leg
 	// (scenario_run.leg_*) + terminal (scenario_run/command_run.{completed|
 	// partial_failed|failed}) + lease_lost + voyage.reclaimed (written by Reaper
@@ -88,6 +93,9 @@ func (w *VoyageWorker) validate() error {
 	}
 	if w.Logger == nil {
 		return errors.New("voyageorch: Logger is required")
+	}
+	if w.Gate == nil {
+		return errors.New("voyageorch: Gate is required")
 	}
 	return nil
 }
@@ -118,7 +126,8 @@ func (w *VoyageWorker) Run(ctx context.Context) error {
 		default:
 		}
 
-		run, err := voyage.ClaimNext(ctx, w.Pool, w.KID, w.LeaseTTL)
+		run, held, err := voyage.ClaimNext(ctx, w.Pool, w.KID, w.LeaseTTL, w.Gate)
+		w.reportHeldBack(held)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return nil
@@ -133,6 +142,11 @@ func (w *VoyageWorker) Run(ctx context.Context) error {
 			continue
 		}
 		if run == nil {
+			// Rows were held back but none claimed: the hop bound ran out, and
+			// the queue behind them may hold a row that can start now.
+			if len(held) > 0 {
+				continue
+			}
 			if !w.sleep(ctx, w.PollInterval) {
 				return nil
 			}
@@ -140,6 +154,26 @@ func (w *VoyageWorker) Run(ctx context.Context) error {
 		}
 
 		w.executeVoyage(ctx, run)
+	}
+}
+
+// reportHeldBack logs each row the start gate held back at the claim, and
+// finalizes the audit of one it failed: that row never reaches executeVoyage.
+func (w *VoyageWorker) reportHeldBack(held []voyage.GateOutcome) {
+	for _, o := range held {
+		if o.Verdict.NoStart {
+			w.Logger.Warn("voyageorch: voyage failed before start — no common maintenance window",
+				slog.String("voyage_id", o.Voyage.VoyageID),
+				slog.String("reason", o.Verdict.Reason))
+			names, _ := parseIncarnationTargets(o.Voyage.TargetResolved)
+			total := len(names)
+			w.emitFinalized(o.Voyage, voyage.StatusFailed,
+				&voyage.Summary{Total: total, Cancelled: total}, voyage.TargetErrorNoCommonWindow)
+			continue
+		}
+		w.Logger.Info("voyageorch: voyage deferred by its maintenance windows or a freeze",
+			slog.String("voyage_id", o.Voyage.VoyageID),
+			slog.Time("schedule_at", o.Verdict.DeferTo))
 	}
 }
 

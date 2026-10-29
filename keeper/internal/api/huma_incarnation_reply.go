@@ -47,7 +47,8 @@ func newIncarnationCreateReply(v handlers.IncarnationCreateView) IncarnationCrea
 }
 
 func newIncarnationRunReply(v handlers.IncarnationRunView) IncarnationRunReply {
-	return IncarnationRunReply{ApplyID: v.ApplyID, Incarnation: v.Incarnation, Scenario: v.Scenario}
+	return IncarnationRunReply{ApplyID: v.ApplyID, Incarnation: v.Incarnation, Scenario: v.Scenario,
+		VoyageID: v.VoyageID, ScheduleAt: v.ScheduleAt}
 }
 
 func newIncarnationUnlockReply(v handlers.IncarnationUnlockView) IncarnationUnlockReply {

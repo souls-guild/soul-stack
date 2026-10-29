@@ -38,6 +38,7 @@ Under one `FOR UPDATE` removes the block (`state` DOES NOT touch - last known-go
 |---|---|---|---|
 | `id` | `string` | yes | Incarnation id (immutable — [ADR-0085](../../adr/0085-entity-id-and-label.md)). |
 | `reason` | `string` (1..500 characters) | yes | Free text for audit-trail (payload `incarnation.rerun_last`). |
+| `confirm_freeze` | `bool` | optional | Consent to rerun during an active freeze; without it `freeze-active` and the incarnation stays `error_locked` ([ADR-0093](../../adr/0093-maintenance-window.md)). |
 
 **Output:**
 
@@ -60,14 +61,20 @@ Run a custom script on an existing instance. Permission: `incarnation.run`. Endp
 | `id` | `string` | yes | Incarnation id (immutable — [ADR-0085](../../adr/0085-entity-id-and-label.md)). |
 | `scenario` | `string` | yes | Script name from `scenario/<name>/`. |
 | `input` | `object` | optional | Input script. |
+| `in_maintenance_window` | `bool` | optional | Start inside the incarnation's maintenance window; closed now → the run is deferred as a scheduled Voyage. |
+| `confirm_freeze` | `bool` | optional | Consent to start during an active freeze; without it `freeze-active`. |
 
 **Output:**
 
 | Field | Type | Meaning |
 |---|---|---|
-| `_apply_id` | `string` (ULID) | Launch ID. |
+| `_apply_id` | `string` (ULID) | Launch ID; absent when the run was deferred. |
 | `incarnation` | `string` | Name instance. |
 | `scenario` | `string` | Scenario name. |
+| `voyage_id` | `string` (ULID) | The scheduled Voyage of a deferred run; `keeper.voyage.cancel` drops it. |
+| `schedule_at` | `string` (RFC 3339) | When the deferred run is due; asked again then. |
+
+Semantics: [operator-api/incarnations.md → Starting a run](../operator-api/incarnations.md#starting-a-run-the-window-and-the-freeze).
 
 #### `keeper.incarnation.get`
 
@@ -151,6 +158,7 @@ Transfer to new `state_schema_version` + change `service_version`. Permission: `
 |---|---|---|---|
 | `id` | `string` | yes | Incarnation id (immutable — [ADR-0085](../../adr/0085-entity-id-and-label.md)). |
 | `to_version` | `string` (git-ref service) | yes | Target version of the service. |
+| `confirm_freeze` | `bool` | optional | Consent to start the upgrade scenario during an active freeze; without it `freeze-active`, nothing committed. |
 
 **Output:**
 
@@ -174,6 +182,7 @@ Demolition instance. Permission: `incarnation.destroy`. Endpoint: [`DELETE /v1/i
 |---|---|---|---|
 | `id` | `string` | yes | Incarnation id (immutable — [ADR-0085](../../adr/0085-entity-id-and-label.md)). |
 | `allow_destroy` | `boolean` | yes | Mandatory confirmation flag (mapped in internal `force`). `false` - destroy via teardown script `destroy`; there is no script `destroy` in the service snapshot → `validation-failed`. `true` - demolition without teardown (force, DELETE lines directly). |
+| `confirm_freeze` | `boolean` | optional | Consent to destroy during an active freeze, on both paths; without it `freeze-active`, nothing committed ([ADR-0093](../../adr/0093-maintenance-window.md), NIM-1085). |
 
 **Output:**
 
