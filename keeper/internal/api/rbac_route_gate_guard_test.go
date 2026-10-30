@@ -220,7 +220,7 @@ var rbacRouteGates = map[route]rbacGate{
 	{http.MethodGet, "/v1/incarnations/{id}/runs/{apply_id}/tasks"}:              {asks: []string{"holds:incarnation.history"}},
 	{http.MethodPost, "/v1/incarnations/{id}/scenarios/{scenario}"}:              {asks: []string{"check:incarnation.run"}},
 	{http.MethodPost, "/v1/incarnations/{id}/scenarios/{scenario}/form-prefill"}: {asks: []string{"holds:incarnation.get"}},
-	{http.MethodPost, "/v1/incarnations/{id}/secrets/reveal"}:                    {asks: []string{"check:incarnation.view-secrets"}},
+	{http.MethodPost, "/v1/incarnations/{id}/secrets/reveal"}:                    {asks: []string{"holds:incarnation.view-secrets"}},
 	{http.MethodGet, "/v1/incarnations/{id}/secrets/revealable"}:                 {asks: []string{"holds:incarnation.view-secrets"}},
 	{http.MethodGet, "/v1/incarnations/{id}/telemetry"}:                          {asks: []string{"holds:incarnation.get"}},
 	{http.MethodPut, "/v1/incarnations/{id}/traits"}:                             {asks: []string{"check:incarnation.traits-set"}},

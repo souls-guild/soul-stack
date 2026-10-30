@@ -1082,6 +1082,16 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   Bare and `*` roles were unaffected. The MCP tools for these operations checked the scope
   correctly all along; choirs and the secret reveal have no MCP tool. See the upgrade note.
 
+- **A trait-scoped `incarnation.view-secrets` reveals on the incarnations that carry the trait
+  (NIM-1146).** The reveal gate checked the scope against a context that holds the incarnation, its
+  service and covens but not its traits. A grant such as `incarnation.view-secrets on
+  service=dragonfly AND trait.created_via=sd-gateway` therefore got `403` even on its own
+  incarnation. Reveal now gates on the right alone, as `revealable` already did. The handler checks
+  the scope against the incarnation's row, traits included. The incarnation routes whose gate checks
+  the scope (run, destroy, traits, members, maintenance windows, choirs and others) keep that gate,
+  so a trait condition still gets `403` there ([rbac.md](docs/keeper/rbac.md)). See the upgrade
+  note.
+
 - **A Soul keeps reading its stream after a failback swap (NIM-949).** The swap waited for the
   retired stream's reader to exit while that reader waited to hand the session loop the stream's
   end, so the agent stayed connected — its host present — and read nothing on the new stream until
@@ -1353,6 +1363,19 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
   Before upgrading, review every scoped `incarnation.*`, `choir.*` and `incarnation.view-secrets`
   grant.
+
+- **Secret reveal answers `404` out of scope, and a trait-scoped `view-secrets` works** (NIM-1146).
+  `POST /v1/incarnations/{id}/secrets/reveal` by an operator who holds `incarnation.view-secrets`
+  but not for this incarnation now gets `404`, not `403`. The audit log gets an
+  `incarnation.secret_revealed` line with `result: denied`, `reason: out_of_scope`. This is the
+  answer `get` and `revealable` already give. An operator without the right at all still gets `403`
+  with no audit line. Two kinds of `view-secrets` grant now reveal where they got `403` before:
+  - one scoped by `trait.<key>=v`, on the incarnations that carry the pair;
+  - one that needs two covens at once, such as `coven=prod AND coven=eu`, on an incarnation tagged
+    with both. The gate checked the covens one at a time; the handler sees them all.
+
+  Before upgrading, review those grants, and any client that tells "forbidden" from "not found" on
+  reveal.
 
 - **Scenario runs are linear by default** (`NIM-952`, [ADR-0091](docs/adr/0091-scenario-linear-barrier.md)).
   What an existing scenario does differently:

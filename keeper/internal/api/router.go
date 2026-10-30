@@ -728,9 +728,13 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			// (NIM-74). WRITE-SELF-AUDIT: incarnation.secret_revealed is written by the handler itself
 			// inside RevealSecretTyped AFTER ReadKV (the value is NOT in the payload; audit-middleware
 			// is NOT wired, newHumaCadenceAPI). Permission incarnation.view-secrets (unmasking,
-			// more privileged than incarnation.get), scope incScope.
+			// more privileged than incarnation.get). Existence-gate RequireAction, as
+			// revealable below; per-{id} scope is in-handler (GetInScopeFor, action=
+			// view-secrets), out of scope → 404 + audit reason out_of_scope. Not incScope
+			// (NIM-1146): its flat gate context carries no traits, so a grant scoped by
+			// `trait.<key>=v` was refused here even on its own incarnation.
 			r.With(
-				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "view-secrets", incScope),
+				apimiddleware.RequireAction(enforcer, "incarnation", "view-secrets"),
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationRevealSecret(newHumaCadenceAPI(r), incH)
 			})

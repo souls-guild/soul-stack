@@ -20,6 +20,7 @@ package api
 import (
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -94,7 +95,7 @@ func TestIncarnationScope_EveryScopedRouteSeesItsIncarnation(t *testing.T) {
 	h := scopeGuardRouter(t, rec)
 	token := revokedGateToken(t, rbacGateAID)
 
-	probed := 0
+	probed := map[route]struct{}{}
 	for _, w := range walkGateRoutes(t, h) {
 		// Any parameter name, not `{id}`: a route declaring another name is exactly
 		// the mismatch this guard exists to catch, so filtering on `{id}` would skip it.
@@ -110,7 +111,7 @@ func TestIncarnationScope_EveryScopedRouteSeesItsIncarnation(t *testing.T) {
 		if len(ctxs) == 0 {
 			continue
 		}
-		probed++
+		probed[w.r] = struct{}{}
 
 		seen := false
 		for _, c := range ctxs {
@@ -128,12 +129,24 @@ func TestIncarnationScope_EveryScopedRouteSeesItsIncarnation(t *testing.T) {
 			t.Errorf("%s = %d (panicked=%v) for an Archon holding nothing, want 403", w.r, resp.Code, panicked)
 		}
 	}
-	// The routes under /v1/incarnations/{id} with a scoped gate number ~30
-	// (mutations, the roster, maintenance windows, choirs).
-	if probed < 25 {
-		t.Fatalf("probed only %d scoped incarnation routes — the walk lost a subtree and this guard is covering less than it claims", probed)
+	// The expected set comes from the route-gate table, which that guard holds to
+	// the router: a route moved to an existence gate (reveal, NIM-1146) changes its
+	// row there and leaves this set with it, where a fixed floor went red for it.
+	expected := 0
+	for r, g := range rbacRouteGates {
+		if !strings.HasPrefix(r.path, "/v1/incarnations/{") || !slices.ContainsFunc(g.asks, func(a string) bool { return strings.HasPrefix(a, "check:") }) {
+			continue
+		}
+		expected++
+		if _, ok := probed[r]; !ok {
+			t.Errorf("%s: the route-gate table says its gate is scope-aware (%v), but the request ran no scope-aware Check — the walk lost it, and this guard is covering less than it claims",
+				r, g.asks)
+		}
 	}
-	t.Logf("guard: %d scoped incarnation routes handed the gate the path's incarnation", probed)
+	if expected == 0 {
+		t.Fatal("no scope-aware incarnation route in rbacRouteGates — the selection above no longer matches the table")
+	}
+	t.Logf("guard: %d scoped incarnation routes handed the gate the path's incarnation", len(probed))
 }
 
 func TestIncarnationScope_ServiceScopedRolePassesOnlyItsOwnService(t *testing.T) {

@@ -187,10 +187,11 @@ var AllowedPermissions = map[string]struct{}{
 	// field with `type: secret` ([ADR-0083] §2; the `revealable_secrets`
 	// registry it replaced is gone): POST .../secrets/reveal + discovery
 	// GET .../secrets/revealable. Strictly more privileged than
-	// `incarnation.get` (unmasking, not reading under the mask). Same
-	// scope selector incarnation/coven/service by path-{id} as other
-	// incarnation mutations. Audited as `incarnation.secret_revealed` (no
-	// value logged).
+	// `incarnation.get` (unmasking, not reading under the mask). Both
+	// routes gate on the right alone; the handler checks the path-{id}
+	// incarnation's scope, traits included, which the scoped gate of the
+	// incarnation mutations cannot read (NIM-1146). Audited as
+	// `incarnation.secret_revealed` (no value logged).
 	"incarnation.view-secrets": {},
 
 	// soul.*

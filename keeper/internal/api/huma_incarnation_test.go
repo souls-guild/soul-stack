@@ -229,8 +229,9 @@ func humaIncarnationRouter(t *testing.T, enforcer incEnforcer, auditW audit.Writ
 			r.With(injectClaims, multi("destroy")).Group(func(r chi.Router) {
 				registerHumaIncarnationDestroy(newHumaCadenceAPI(r), incH)
 			})
-			// secret reveal (NIM-74): POST self-audit + GET read, both under view-secrets.
-			r.With(injectClaims, multi("view-secrets")).Group(func(r chi.Router) {
+			// secret reveal (NIM-74): POST self-audit + GET read, both existence-gated
+			// under view-secrets; the handler narrows by scope (NIM-1146).
+			r.With(injectClaims, apimiddleware.RequireAction(enforcer, "incarnation", "view-secrets")).Group(func(r chi.Router) {
 				registerHumaIncarnationRevealSecret(newHumaCadenceAPI(r), incH)
 			})
 			r.With(injectClaims, apimiddleware.RequireAction(enforcer, "incarnation", "view-secrets")).Group(func(r chi.Router) {
@@ -320,10 +321,13 @@ func TestHumaIncarnation_Create_RBACDeny_403_NoAudit(t *testing.T) {
 // TestHumaIncarnation_RevealSecret_RBACDeny_403 — the reveal endpoint without the
 // incarnation.view-secrets right is rejected with 403 by the middleware BEFORE the
 // handler (NIM-74). No audit is written on 403 (RBAC-deny never reaches the
-// self-audit in RevealSecretTyped).
+// self-audit in RevealSecretTyped). The capture is the handler's own audit writer:
+// reveal self-audits, so the router's middleware writer would see nothing either way.
 func TestHumaIncarnation_RevealSecret_RBACDeny_403(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
-	r := humaIncarnationRouter(t, incEnforcer{allow: false}, auditCap, incScopeAllow())
+	db := &incTestDB{selectByID: func(name string) pgx.Row { return incRow(name, "ready", "{}") }}
+	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, auditCap, incTestScoper{unrestricted: true}, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: false}, auditCap, incH)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/secrets/reveal",
 		strings.NewReader(`{"secret_id":"user_password","key":"alice"}`))

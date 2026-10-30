@@ -12,7 +12,7 @@ package handlers
 //
 // Security invariants (BLOCKER):
 //   - the secret value leaves the domain ONLY in the HTTP response body — never in
-//     log/audit/OTel/error text (self-audit writes {name,secret_id,key,path},
+//     log/audit/OTel/error text (self-audit writes {id,secret_id,key,path},
 //     WITHOUT the value — ADR-064 b);
 //   - `key` is validated as a Vault path segment AND must be ∈ the collection of the
 //     CURRENT state BEFORE it becomes a path segment (anti-forgery); the positive
