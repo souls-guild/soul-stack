@@ -85,7 +85,7 @@
   "excludeFromRun": "Исключить из этого запуска",
   "existingIncarnationLabel": "Существующая incarnation (фильтр по Service)",
   "formDefaultSection": "Прочее",
-  "freezeActiveRow": "{{name}}: фриз {{comment}} до {{until}}",
+  "freezeActiveRow": "{{name}}: фриз до {{until}}",
   "freezeActiveTitle": "На момент старта идёт фриз",
   "freezeConsentLabel": "Согласен проводить работы во время фриза",
   "freezeConsentNeeded": "Отметьте согласие или проведите запуск в тех окно.",
