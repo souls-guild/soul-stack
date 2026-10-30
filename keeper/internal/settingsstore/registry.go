@@ -13,7 +13,10 @@
 package settingsstore
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"slices"
 	"strconv"
@@ -32,8 +35,9 @@ const KeyPrefix = "cfg_"
 // cannot be stored at all.
 var KeyFormat = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// Kind is the value domain of a field. Scalars only in this phase
-// (ADR-0073(j.3)); structural values stay file-only.
+// Kind is the value domain of a field. Scalars, and one structure: the cluster
+// default maintenance windows (ADR-0073(j.3), amended by NIM-1138). Other
+// structural values stay file-only.
 type Kind string
 
 const (
@@ -42,6 +46,9 @@ const (
 	KindDuration Kind = "duration"
 	KindBool     Kind = "bool"
 	KindString   Kind = "string"
+	// KindWeeklyWindows is a list of weekly maintenance windows, written as a
+	// JSON array and held as its canonical text ([config.OverlayJSON]).
+	KindWeeklyWindows Kind = "weekly_windows"
 )
 
 // Field is one admitted overlay key. The key ↔ yaml-path mapping is explicit
@@ -294,6 +301,17 @@ var fields = []Field{
 		Description:  "Maintenance: how long a freeze stays after it ends before the Reaper deletes it. 0 keeps them.",
 		Read: func(c *config.KeeperConfig) any {
 			return formatDuration(maintenanceCfg(c).ResolvedFreezeRetention())
+		},
+	},
+	// Every reader of the windows takes it per read (NIM-1138).
+	{
+		Key:         "cfg_maintenance_default_windows",
+		YAMLPath:    "$.maintenance.default_windows",
+		Kind:        KindWeeklyWindows,
+		Default:     config.OverlayJSON("[]"),
+		Description: "Maintenance: the cluster default — the weekly windows in effect for an incarnation that has no weekly window of its own; its one-off windows add to them, and one weekly window of its own replaces them. A JSON array of {days, start_time, duration_minutes, timezone, comment}, each checked as an incarnation's weekly window. Empty: such an incarnation may start at any time outside a freeze.",
+		Read: func(c *config.KeeperConfig) any {
+			return canonicalWindows(maintenanceCfg(c).DefaultWindowList())
 		},
 	},
 
@@ -688,6 +706,8 @@ func (f Field) Parse(raw string) (any, error) {
 			return nil, fmt.Errorf("%s: %q is not one of %s", f.Key, raw, strings.Join(f.Allowed, ", "))
 		}
 		return raw, nil
+	case KindWeeklyWindows:
+		return parseWeeklyWindows(f.Key, raw)
 	default:
 		return nil, fmt.Errorf("%s: unsupported kind %q", f.Key, f.Kind)
 	}
@@ -721,6 +741,8 @@ func (f Field) Bounds() string {
 			return strings.Join(f.Allowed, " | ")
 		}
 		return "non-empty string"
+	case KindWeeklyWindows:
+		return fmt.Sprintf("JSON array of at most %d weekly windows", config.MaintenanceMaxWindows)
 	default:
 		open := "["
 		if f.MinExclusive {
@@ -728,6 +750,96 @@ func (f Field) Bounds() string {
 		}
 		return fmt.Sprintf("%s%s, %s]", open, trimFloat(f.Min), trimFloat(f.Max))
 	}
+}
+
+// parseWeeklyWindows reads a JSON array of weekly windows, checks each on the rules
+// an incarnation's weekly window is checked on, and returns the canonical text: no
+// insignificant whitespace, days in calendar order, an empty comment omitted. `[]`
+// is a value, no default windows, and writing it is not a delete: an instance
+// whose keeper.yml sets the key keeps the file's.
+func parseWeeklyWindows(key, raw string) (any, error) {
+	if err := checkWindowKeys(raw); err != nil {
+		return nil, fmt.Errorf("%s: %w", key, err)
+	}
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var list []config.KeeperMaintenanceWindow
+	if err := dec.Decode(&list); err != nil {
+		return nil, fmt.Errorf("%s: not a JSON array of weekly windows {days, start_time, duration_minutes, timezone, comment}: %v", key, err)
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%s: unexpected data after the JSON array", key)
+	}
+	if list == nil {
+		return nil, fmt.Errorf("%s: must be a JSON array ([] for no default windows)", key)
+	}
+	if len(list) > config.MaintenanceMaxWindows {
+		return nil, fmt.Errorf("%s: at most %d windows, got %d", key, config.MaintenanceMaxWindows, len(list))
+	}
+	for i, w := range list {
+		if _, err := config.NormalizeWeeklyMaintenanceWindow(w.Days, w.StartTime, w.DurationMinutes, w.Timezone, w.Comment); err != nil {
+			return nil, fmt.Errorf("%s: window %d: %w", key, i, err)
+		}
+	}
+	return canonicalWindows(list), nil
+}
+
+// windowKeys are the fields of a weekly window, spelled as keeper.yml spells them.
+var windowKeys = []string{"days", "start_time", "duration_minutes", "timezone", "comment"}
+
+// checkWindowKeys refuses, in each entry of an array of objects, a key that is not
+// a window field spelled exactly, or one given twice: encoding/json matches keys
+// without regard to case and lets the last of two win, and keeper.yml does
+// neither. Any other shape is left to the decode, which reports it.
+func checkWindowKeys(raw string) error {
+	dec := json.NewDecoder(strings.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('[') {
+		return nil
+	}
+	for i := 0; dec.More(); i++ {
+		if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+			return nil
+		}
+		seen := map[string]bool{}
+		for dec.More() {
+			tok, err := dec.Token()
+			if err != nil {
+				return nil
+			}
+			k, _ := tok.(string)
+			if !slices.Contains(windowKeys, k) {
+				return fmt.Errorf("window %d: unknown field %q (a window takes %s)", i, k, strings.Join(windowKeys, ", "))
+			}
+			if seen[k] {
+				return fmt.Errorf("window %d: field %q given twice", i, k)
+			}
+			seen[k] = true
+			var skip json.RawMessage
+			if err := dec.Decode(&skip); err != nil {
+				return nil
+			}
+		}
+		if _, err := dec.Token(); err != nil {
+			return nil
+		}
+	}
+	return nil
+}
+
+// canonicalWindows is the stored and compared form of a window list, the days of
+// each in calendar order.
+func canonicalWindows(list []config.KeeperMaintenanceWindow) config.OverlayJSON {
+	out := make([]config.KeeperMaintenanceWindow, len(list))
+	for i, w := range list {
+		w.Days = config.OrderedMaintenanceDays(w.Days)
+		out[i] = w
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		// Strings and ints only: json.Marshal cannot fail on them.
+		panic(fmt.Sprintf("settingsstore: marshal windows: %v", err))
+	}
+	return config.OverlayJSON(b)
 }
 
 func (f Field) checkRange(v float64) error {

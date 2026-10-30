@@ -33,19 +33,35 @@ type MaintenanceWindow struct {
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
-// MaintenanceStatus — what the window calculator says at the moment of the read.
+// MaintenanceDefaultWindow — one window of the cluster default
+// `maintenance.default_windows` (NIM-1138): a weekly window that is no row of the
+// incarnation's, so it has no id and no timestamps.
+type MaintenanceDefaultWindow struct {
+	Kind            string   `json:"kind" enum:"weekly" doc:"always weekly"`
+	Days            []string `json:"days" doc:"weekdays a slot starts on, in calendar order"`
+	StartTime       string   `json:"start_time" doc:"HH:MM in timezone"`
+	DurationMinutes int      `json:"duration_minutes" doc:"slot length in minutes"`
+	Timezone        string   `json:"timezone" doc:"IANA zone of start_time"`
+	Comment         string   `json:"comment"`
+}
+
+// MaintenanceStatus — what the window calculator says at the moment of the read,
+// over the windows in effect.
 type MaintenanceStatus struct {
-	OpenNow      bool      `json:"open_now" doc:"a run may start now: inside some window (or there are no windows, a once window that has ended being none) and outside every freeze"`
+	OpenNow      bool      `json:"open_now" doc:"a run may start now: inside a window in effect (or none is in effect, a once window that has ended counting as none) and outside every freeze"`
 	NextStart    time.Time `json:"next_start" doc:"the first instant at or after now at which a run may start; now itself when open_now"`
 	ActiveFreeze *Freeze   `json:"active_freeze,omitempty" doc:"the freeze in force now - the one that ends last when several overlap; absent when none"`
+	Source       string    `json:"source" enum:"own,default,none" doc:"where the windows in effect come from: own - the incarnation's (a weekly window, or with no cluster default a once window that has not ended); default - the cluster default in defaults, with the incarnation's own once windows added; none - nothing counts, a run may start at any time outside a freeze"`
 }
 
 // MaintenanceWindowListReply — the 200 body of GET /v1/incarnations/{id}/maintenance-windows:
 // every window, in creation order, once windows that have ended included until the
-// Reaper deletes them, and the status over windows and freezes together.
+// Reaper deletes them, the cluster default when it applies, and the status over the
+// windows in effect and the freezes together.
 type MaintenanceWindowListReply struct {
-	Items  []MaintenanceWindow `json:"items"`
-	Status MaintenanceStatus   `json:"status"`
+	Items    []MaintenanceWindow        `json:"items"`
+	Defaults []MaintenanceDefaultWindow `json:"defaults,omitempty" doc:"the cluster default (runtime setting maintenance.default_windows), present only when it applies: the incarnation has no weekly window of its own. Its own once windows add to it; one weekly window of its own replaces it"`
+	Status   MaintenanceStatus          `json:"status"`
 }
 
 // FreezeRequest — the body of POST /v1/incarnations/{id}/freezes and of

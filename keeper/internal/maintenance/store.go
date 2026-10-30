@@ -50,18 +50,15 @@ var windowCols = windowColumns("")
 
 const freezeCols = `id::text, incarnation_id, starts_at, ends_at, comment, created_at, updated_at`
 
-// Load reads an incarnation's windows and freezes and compiles them. The one
-// entry point for a consumer that only needs the answers.
-func Load(ctx context.Context, db DB, incarnationID string) (*Calculator, error) {
-	windows, err := ListWindows(ctx, db, incarnationID)
+// Load reads an incarnation's windows and freezes and compiles them with the
+// default ([Rules.Calculator]). The one entry point for a consumer that only
+// needs the answers.
+func Load(ctx context.Context, db DB, incarnationID string, defaults DefaultsSource) (*Calculator, error) {
+	r, err := LoadRulesOf(ctx, db, incarnationID, defaults)
 	if err != nil {
 		return nil, err
 	}
-	freezes, err := ListFreezes(ctx, db, incarnationID)
-	if err != nil {
-		return nil, err
-	}
-	return NewCalculator(windows, freezes)
+	return r.Calculator()
 }
 
 // ListWindows returns the incarnation's windows in creation order.

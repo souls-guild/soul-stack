@@ -312,3 +312,27 @@ func TestSettingsDelete_UnknownKeyIs404(t *testing.T) {
 		t.Errorf("a delete reached keeper_settings for an unregistered key")
 	}
 }
+
+// The cluster default windows (NIM-1138) are stored as their JSON text and
+// recorded in the trail as the list itself, the new value and the previous one.
+func TestSettingsPut_WeeklyWindowsAuditTheList(t *testing.T) {
+	prev := `[{"days":["sun"],"start_time":"03:00","duration_minutes":60,"timezone":"UTC"}]`
+	h, pool, _ := settingsFixture(t, settingsYML, map[string]any{"cfg_maintenance_default_windows": config.OverlayJSON(prev)})
+
+	reply, err := h.PutTyped(context.Background(), settingsClaims("archon-alice"), "cfg_maintenance_default_windows",
+		`[{"days":["tue","mon"],"start_time":"02:00","duration_minutes":120,"timezone":"Europe/Moscow","comment":"nightly"}]`)
+	if err != nil {
+		t.Fatalf("PutTyped: %v", err)
+	}
+	if want := `[{"days":["mon","tue"],"start_time":"02:00","duration_minutes":120,"timezone":"Europe/Moscow","comment":"nightly"}]`; pool.value != want {
+		t.Errorf("stored %s, want the canonical %s", pool.value, want)
+	}
+	p := reply.AuditPayload()
+	value, ok := p["value"].([]any)
+	if !ok || len(value) != 1 || value[0].(map[string]any)["comment"] != "nightly" {
+		t.Errorf("audit value = %#v, want the list", p["value"])
+	}
+	if previous, ok := p["previous"].([]any); !ok || len(previous) != 1 {
+		t.Errorf("audit previous = %#v, want the list", p["previous"])
+	}
+}

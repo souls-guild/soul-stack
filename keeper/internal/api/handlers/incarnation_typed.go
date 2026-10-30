@@ -417,7 +417,7 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 		}
 	}
 
-	start, err := PlanRunStart(ctx, h.db, []string{name}, time.Now(), g)
+	start, err := PlanRunStart(ctx, h.db, h.maintenanceDefaults, []string{name}, time.Now(), g)
 	if err != nil {
 		if p, ok := runGateProblem(err); ok {
 			return zero, p

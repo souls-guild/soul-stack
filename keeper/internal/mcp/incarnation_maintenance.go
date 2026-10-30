@@ -94,12 +94,25 @@ type maintenanceStatusEntry struct {
 	OpenNow      bool         `json:"open_now"`
 	NextStart    string       `json:"next_start"`
 	ActiveFreeze *freezeEntry `json:"active_freeze,omitempty"`
+	Source       string       `json:"source"`
+}
+
+// maintenanceDefaultEntry is one cluster default window (NIM-1138): a weekly
+// window without the row fields, since it is not a row.
+type maintenanceDefaultEntry struct {
+	Kind            string   `json:"kind"`
+	Days            []string `json:"days"`
+	StartTime       string   `json:"start_time"`
+	DurationMinutes int      `json:"duration_minutes"`
+	Timezone        string   `json:"timezone"`
+	Comment         string   `json:"comment"`
 }
 
 type maintenanceWindowListOutput struct {
-	Incarnation string                   `json:"incarnation"`
-	Items       []maintenanceWindowEntry `json:"items"`
-	Status      maintenanceStatusEntry   `json:"status"`
+	Incarnation string                    `json:"incarnation"`
+	Items       []maintenanceWindowEntry  `json:"items"`
+	Defaults    []maintenanceDefaultEntry `json:"defaults,omitempty"`
+	Status      maintenanceStatusEntry    `json:"status"`
 }
 
 type freezeListOutput struct {
@@ -156,26 +169,25 @@ func (h *Handler) callMaintenanceWindowList(ctx context.Context, claims *jwt.Cla
 	if resp, ok := h.authorizeMaintenance(ctx, claims, req, toolName, "get", a.ID); !ok {
 		return resp
 	}
-	windows, err := maintenance.ListWindows(ctx, h.deps.IncarnationDB, a.ID)
+	rules, err := maintenance.LoadRulesOf(ctx, h.deps.IncarnationDB, a.ID, h.deps.MaintenanceDefaults)
 	if err != nil {
 		return h.maintenanceToolError(req, toolName, a.ID, "", "", err)
 	}
-	freezes, err := maintenance.ListFreezes(ctx, h.deps.IncarnationDB, a.ID)
+	st, err := rules.Status(time.Now())
 	if err != nil {
 		return h.maintenanceToolError(req, toolName, a.ID, "", "", err)
 	}
-	calc, err := maintenance.NewCalculator(windows, freezes)
-	if err != nil {
-		return h.maintenanceToolError(req, toolName, a.ID, "", "", err)
-	}
-	st := calc.Status(time.Now())
 	out := maintenanceWindowListOutput{
 		Incarnation: a.ID,
-		Items:       make([]maintenanceWindowEntry, 0, len(windows)),
-		Status:      maintenanceStatusEntry{OpenNow: st.OpenNow, NextStart: rfc3339(st.NextStart)},
+		Items:       make([]maintenanceWindowEntry, 0, len(rules.Windows)),
+		Status:      maintenanceStatusEntry{OpenNow: st.OpenNow, NextStart: rfc3339(st.NextStart), Source: st.Source},
 	}
-	for _, w := range windows {
+	for _, w := range rules.Windows {
 		out.Items = append(out.Items, newMaintenanceWindowEntry(w))
+	}
+	for _, w := range rules.DefaultsInEffect() {
+		out.Defaults = append(out.Defaults, maintenanceDefaultEntry{Kind: maintenance.KindWeekly, Days: w.Days,
+			StartTime: w.StartTime, DurationMinutes: w.DurationMinutes, Timezone: w.Timezone, Comment: w.Comment})
 	}
 	if st.ActiveFreeze != nil {
 		f := newFreezeEntry(*st.ActiveFreeze)

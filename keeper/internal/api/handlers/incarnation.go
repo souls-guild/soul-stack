@@ -27,6 +27,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/maintenance"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
 	"github.com/souls-guild/soul-stack/keeper/internal/statemigrate"
@@ -171,6 +172,18 @@ type IncarnationHandler struct {
 	// mount `core.state.*` wrote to; "" means the default mount, resolved by
 	// [config.EffectiveVaultMount].
 	vaultMount string
+
+	// maintenanceDefaults — the cluster default windows (NIM-1138) the run gate
+	// and the windows status apply; late-binding via
+	// [IncarnationHandler.SetMaintenanceDefaults], nil → none.
+	maintenanceDefaults maintenance.DefaultsSource
+}
+
+// SetMaintenanceDefaults late-binds the cluster default windows (NIM-1138): the
+// run gate and GET .../maintenance-windows read them. Called once in `keeper
+// run` before the server starts.
+func (h *IncarnationHandler) SetMaintenanceDefaults(d maintenance.DefaultsSource) {
+	h.maintenanceDefaults = d
 }
 
 // VaultKVReader — narrow read surface of Vault KV for the reveal endpoint (NIM-74):

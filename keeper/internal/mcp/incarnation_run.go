@@ -146,7 +146,7 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 
 	// Start gate — parity with REST Run (ADR-0093 §4, §5).
 	gate := handlers.RunGate{InMaintenanceWindow: a.InMaintenanceWindow, ConfirmFreeze: a.ConfirmFreeze}
-	start, err := handlers.PlanRunStart(ctx, h.deps.IncarnationDB, []string{a.ID}, time.Now(), gate)
+	start, err := handlers.PlanRunStart(ctx, h.deps.IncarnationDB, h.deps.MaintenanceDefaults, []string{a.ID}, time.Now(), gate)
 	if err != nil {
 		if resp, ok := h.runGateToolError(req.ID, toolName, err); ok {
 			return resp

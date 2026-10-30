@@ -662,7 +662,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	renderIn.SoulEvaluatesWhen = steps == nil
 
 	atStep = 0
-	renderIn.Maintenance = maintenanceAt(ctx, r.deps.DB, spec.IncarnationName, log)
+	renderIn.Maintenance = maintenanceAt(ctx, r.deps.DB, r.deps.MaintenanceDefaults, spec.IncarnationName, log)
 	renderIn.MaintenanceByStep = map[int]*render.MaintenanceWindow{0: renderIn.Maintenance}
 	tasks, plans, err = r.deps.Render.Render(ctx, renderIn)
 	if err != nil {
@@ -992,7 +992,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				// could re-decide a group that sits before a passage that already ran: the
 				// deprecated model keeps the run's first answer.
 				if spec.executionModel == ExecutionLinear {
-					renderIn.Maintenance = maintenanceAt(ctx, r.deps.DB, spec.IncarnationName, log)
+					renderIn.Maintenance = maintenanceAt(ctx, r.deps.DB, r.deps.MaintenanceDefaults, spec.IncarnationName, log)
 				}
 				renderIn.MaintenanceByStep[p] = renderIn.Maintenance
 				pt, pp, rerr := r.deps.Render.Render(ctx, renderIn)

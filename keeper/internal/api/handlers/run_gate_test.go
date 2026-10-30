@@ -336,7 +336,7 @@ func TestPlanRunStart_RecordsEveryCoveringFreezeOnConsent(t *testing.T) {
 	incident.ID = "22222222-2222-4222-8222-222222222222"
 	incident.EndsAt = sale.EndsAt.Add(time.Hour)
 	db := gateDB(nil, []maintenance.Freeze{sale, incident})
-	start, err := PlanRunStart(context.Background(), db, []string{"redis-prod"}, time.Now(), RunGate{ConfirmFreeze: true})
+	start, err := PlanRunStart(context.Background(), db, nil, []string{"redis-prod"}, time.Now(), RunGate{ConfirmFreeze: true})
 	if err != nil {
 		t.Fatalf("PlanRunStart: %v", err)
 	}

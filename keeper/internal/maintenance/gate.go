@@ -8,32 +8,63 @@ import (
 	"time"
 )
 
-// Rules is one incarnation's windows and freezes as the start of a run reads
-// them. The zero value is an incarnation with neither: always open.
+// Rules is one incarnation's windows and freezes, and the cluster default, as a
+// read finds them. Every answer about when the incarnation may start goes
+// through [Rules.Effective]. The zero value is an incarnation with none of the
+// three: always open.
 type Rules struct {
 	Windows []Window
 	Freezes []Freeze
+	// Defaults is the cluster default at the read (NIM-1138); it counts only
+	// while Windows holds no weekly window.
+	Defaults []Window
 }
 
 // LoadRules reads the windows and freezes of every incarnation in ids, one
-// query per table however many ids there are: a Voyage may name thousands. An
-// incarnation with neither is absent from the map.
-func LoadRules(ctx context.Context, db DB, ids []string) (map[string]Rules, error) {
+// query per table however many ids there are: a Voyage may name thousands. Each
+// incarnation gets the default defaults supplies, read once for the whole call.
+// An incarnation with no rows is absent from the map while the default is empty,
+// and present with the default alone otherwise.
+func LoadRules(ctx context.Context, db DB, ids []string, defaults DefaultsSource) (map[string]Rules, error) {
 	out := make(map[string]Rules, len(ids))
 	if len(ids) == 0 {
 		return out, nil
 	}
+	if err := loadRows(ctx, db, ids, out); err != nil {
+		return nil, err
+	}
+	if d := defaults.windows(); len(d) > 0 {
+		for _, id := range ids {
+			r := out[id]
+			r.Defaults = d
+			out[id] = r
+		}
+	}
+	return out, nil
+}
+
+// LoadRulesOf is [LoadRules] for one incarnation: the zero Rules when it has
+// neither rows nor a default.
+func LoadRulesOf(ctx context.Context, db DB, id string, defaults DefaultsSource) (Rules, error) {
+	rules, err := LoadRules(ctx, db, []string{id}, defaults)
+	if err != nil {
+		return Rules{}, err
+	}
+	return rules[id], nil
+}
+
+func loadRows(ctx context.Context, db DB, ids []string, out map[string]Rules) error {
 	rows, err := db.Query(ctx, `SELECT `+windowCols+`
 		FROM incarnation_maintenance_windows WHERE incarnation_id = ANY($1::text[])
 		ORDER BY created_at, id`, ids)
 	if err != nil {
-		return nil, fmt.Errorf("maintenance: load windows: %w", err)
+		return fmt.Errorf("maintenance: load windows: %w", err)
 	}
 	for rows.Next() {
 		w, err := scanWindow(rows)
 		if err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("maintenance: load windows: %w", err)
+			return fmt.Errorf("maintenance: load windows: %w", err)
 		}
 		r := out[w.IncarnationID]
 		r.Windows = append(r.Windows, w)
@@ -41,39 +72,39 @@ func LoadRules(ctx context.Context, db DB, ids []string) (map[string]Rules, erro
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("maintenance: load windows: %w", err)
+		return fmt.Errorf("maintenance: load windows: %w", err)
 	}
 
 	rows, err = db.Query(ctx, `SELECT `+freezeCols+`
 		FROM incarnation_freezes WHERE incarnation_id = ANY($1::text[])
 		ORDER BY starts_at, id`, ids)
 	if err != nil {
-		return nil, fmt.Errorf("maintenance: load freezes: %w", err)
+		return fmt.Errorf("maintenance: load freezes: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		f, err := scanFreeze(rows)
 		if err != nil {
-			return nil, fmt.Errorf("maintenance: load freezes: %w", err)
+			return fmt.Errorf("maintenance: load freezes: %w", err)
 		}
 		r := out[f.IncarnationID]
 		r.Freezes = append(r.Freezes, f)
 		out[f.IncarnationID] = r
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("maintenance: load freezes: %w", err)
+		return fmt.Errorf("maintenance: load freezes: %w", err)
 	}
-	return out, nil
+	return nil
 }
 
 // Gate compiles the calculator the start of one run is held to (ADR-0093 §4,
-// §5). A run that asked for a window is held to the windows and to every
-// freeze: it waits them out, so it needs nobody's consent. A run that did not
+// §5). A run that asked for a window is held to the windows in effect
+// ([Rules.Effective]) and to every freeze: it waits them out, so it needs nobody's consent. A run that did not
 // ask is held to no window, and only to the freezes outside consented — the
 // ones its operator was never asked about.
 func (r Rules) Gate(inWindow bool, consented []string) (*Calculator, error) {
 	if inWindow {
-		return NewCalculator(r.Windows, r.Freezes)
+		return r.Calculator()
 	}
 	freezes := make([]Freeze, 0, len(r.Freezes))
 	for _, f := range r.Freezes {

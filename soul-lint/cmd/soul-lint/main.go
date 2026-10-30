@@ -69,6 +69,10 @@ import (
 	"io"
 	"os"
 	"strings"
+	// keeper.yml's maintenance.default_windows names IANA zones, and the Keeper
+	// resolves them from its embedded database; without the same one here a
+	// zone the Keeper accepts is refused on a host with no zoneinfo.
+	_ "time/tzdata"
 
 	"github.com/souls-guild/soul-stack/soul-lint/internal/plugininit"
 	"github.com/souls-guild/soul-stack/soul-lint/internal/secretpaths"

@@ -2311,6 +2311,41 @@ components:
         - aid
         - password
       type: object
+    MaintenanceDefaultWindow:
+      additionalProperties: false
+      properties:
+        comment:
+          type: string
+        days:
+          description: weekdays a slot starts on, in calendar order
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        duration_minutes:
+          description: slot length in minutes
+          format: int64
+          type: integer
+        kind:
+          description: always weekly
+          enum:
+            - weekly
+          type: string
+        start_time:
+          description: HH:MM in timezone
+          type: string
+        timezone:
+          description: IANA zone of start_time
+          type: string
+      required:
+        - kind
+        - days
+        - start_time
+        - duration_minutes
+        - timezone
+        - comment
+      type: object
     MaintenanceStatus:
       additionalProperties: false
       properties:
@@ -2322,11 +2357,19 @@ components:
           format: date-time
           type: string
         open_now:
-          description: "a run may start now: inside some window (or there are no windows, a once window that has ended being none) and outside every freeze"
+          description: "a run may start now: inside a window in effect (or none is in effect, a once window that has ended counting as none) and outside every freeze"
           type: boolean
+        source:
+          description: "where the windows in effect come from: own - the incarnation's (a weekly window, or with no cluster default a once window that has not ended); default - the cluster default in defaults, with the incarnation's own once windows added; none - nothing counts, a run may start at any time outside a freeze"
+          enum:
+            - own
+            - default
+            - none
+          type: string
       required:
         - open_now
         - next_start
+        - source
       type: object
     MaintenanceWindow:
       additionalProperties: false
@@ -2383,6 +2426,13 @@ components:
     MaintenanceWindowListReply:
       additionalProperties: false
       properties:
+        defaults:
+          description: "the cluster default (runtime setting maintenance.default_windows), present only when it applies: the incarnation has no weekly window of its own. Its own once windows add to it; one weekly window of its own replaces it"
+          items:
+            $ref: "#/components/schemas/MaintenanceDefaultWindow"
+          type:
+            - array
+            - "null"
         items:
           items:
             $ref: "#/components/schemas/MaintenanceWindow"
@@ -4639,6 +4689,7 @@ components:
             - duration
             - bool
             - string
+            - weekly_windows
           type: string
         value:
           description: effective value on this instance
@@ -4658,7 +4709,7 @@ components:
       additionalProperties: false
       properties:
         value:
-          description: new value in text form (e.g. "0.5"); parsed and range-checked by the field registry
+          description: new value in text form (e.g. "0.5"; a JSON array as text for a weekly_windows key); parsed and range-checked by the field registry
           type: string
       required:
         - value
@@ -9795,7 +9846,7 @@ paths:
         - incarnation
   /v1/incarnations/{id}/maintenance-windows:
     get:
-      description: "Every maintenance window of the incarnation in creation order, plus `status`: whether a run may start now (`open_now`), the first instant it may (`next_start`, now itself when open) and the freeze in force (`active_freeze`). The status is computed over the windows AND the freezes: no windows means any time, and a freeze closes everything while it lasts. A `once` window counts only until its `ends_at`; one that has ended is still listed until the Reaper deletes it after `maintenance.window_retention`, and an incarnation whose only windows have ended is open at any time. A window gates the start of a run; a started run is never cut off when the slot ends. Permission incarnation.get. Read-only, no audit."
+      description: "Every maintenance window of the incarnation in creation order, the cluster default `defaults` when it applies (the runtime setting maintenance.default_windows, for an incarnation with no weekly window of its own; its once windows add to it), plus `status`: whether a run may start now (`open_now`), the first instant it may (`next_start`, now itself when open), the freeze in force (`active_freeze`) and where the windows in effect come from (`source`: own, default or none). The status is computed over the windows in effect AND the freezes: no windows in effect means any time, and a freeze closes everything while it lasts. A `once` window counts only until its `ends_at`; one that has ended is still listed until the Reaper deletes it after `maintenance.window_retention`, and an incarnation whose only windows have ended is open at any time unless the default holds it. A window gates the start of a run; a started run is never cut off when the slot ends. Permission incarnation.get. Read-only, no audit."
       operationId: listIncarnationMaintenanceWindows
       parameters:
         - description: incarnation id
@@ -9892,7 +9943,7 @@ paths:
         - incarnation
   /v1/incarnations/{id}/maintenance-windows/{window_id}:
     delete:
-      description: "Deletes the window. Not idempotent: deleting it again is 404. Deleting the last window that counts makes the incarnation open at any time outside a freeze. Audit maintenance_window.deleted. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start."
+      description: "Deletes the window. Not idempotent: deleting it again is 404. Deleting the last window that counts makes the incarnation open at any time outside a freeze, or held to the cluster default when it is set. Audit maintenance_window.deleted. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start."
       operationId: deleteIncarnationMaintenanceWindow
       parameters:
         - description: incarnation id

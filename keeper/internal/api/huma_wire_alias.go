@@ -55,6 +55,7 @@ type (
 	IncarnationUpgradeReply           = wire.IncarnationUpgradeReply
 	IncarnationUpgradeRequest         = wire.IncarnationUpgradeRequest
 	LabelSetRequest                   = wire.LabelSetRequest
+	MaintenanceDefaultWindow          = wire.MaintenanceDefaultWindow
 	MaintenanceStatus                 = wire.MaintenanceStatus
 	MaintenanceWindow                 = wire.MaintenanceWindow
 	MaintenanceWindowListReply        = wire.MaintenanceWindowListReply

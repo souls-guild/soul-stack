@@ -60,6 +60,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/maintenance"
 	"github.com/souls-guild/soul-stack/keeper/internal/mcp"
 	"github.com/souls-guild/soul-stack/keeper/internal/migrate"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
@@ -542,6 +543,13 @@ type daemon struct {
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
+// maintenanceDefaults is the one source of the cluster default maintenance windows
+// (NIM-1138) every reader of the windows is wired with: the live config, which
+// the settings overlay swaps on each instance when the setting changes.
+func (d *daemon) maintenanceDefaults() maintenance.DefaultsSource {
+	return maintenance.ConfigDefaults(d.store.Get)
+}
+
 func (d *daemon) setupConfig(args []string) (exitCode int, ok bool) {
 	var (
 		configPath string
@@ -3295,16 +3303,17 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 	}
 
 	scenarioRunner := scenario.NewRunner(scenario.Deps{
-		Loader:        d.serviceLoader,
-		Topology:      d.topologyResolver,
-		ServiceVars:   d.serviceVarsResolver,
-		Render:        d.renderPipeline,
-		Outbound:      outbound,
-		PushApply:     pushApply,
-		PushRouter:    pushRouter,
-		PushRoutes:    pushRoutes,
-		Destiny:       d.destinySource,
-		KeeperModules: d.coreModules,
+		Loader:              d.serviceLoader,
+		MaintenanceDefaults: d.maintenanceDefaults(),
+		Topology:            d.topologyResolver,
+		ServiceVars:         d.serviceVarsResolver,
+		Render:              d.renderPipeline,
+		Outbound:            outbound,
+		PushApply:           pushApply,
+		PushRouter:          pushRouter,
+		PushRoutes:          pushRoutes,
+		Destiny:             d.destinySource,
+		KeeperModules:       d.coreModules,
 		// Keeper-side PLUGIN modules (NIM-758): the fallback for an address the
 		// core registry does not know, executed only when the module's own schema
 		// document declares `side: keeper`.
@@ -4678,6 +4687,7 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		OracleSvc:           d.oracleSvc,
 		OperatorDB:          d.pool,
 		IncarnationDB:       d.pool,
+		MaintenanceDefaults: d.maintenanceDefaults(),
 		SoulDB:              d.pool,
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
@@ -5177,11 +5187,12 @@ func (d *daemon) setupMCPServer(ctx context.Context) error {
 			Logger:      logger,
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.
-			IncarnationDB:     d.pool,
-			ScenarioRunner:    d.scenarioRunner,
-			ScenarioDestroyer: d.scenarioRunner,
-			ServiceRegistry:   d.serviceRegistry,
-			ServiceLoader:     d.serviceLoader,
+			IncarnationDB:       d.pool,
+			MaintenanceDefaults: d.maintenanceDefaults(),
+			ScenarioRunner:      d.scenarioRunner,
+			ScenarioDestroyer:   d.scenarioRunner,
+			ServiceRegistry:     d.serviceRegistry,
+			ServiceLoader:       d.serviceLoader,
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.
 			SoulDB: d.pool,
@@ -5342,12 +5353,13 @@ func (d *daemon) setupAcolyte(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	claimRunner := scenario.NewClaimRunner(scenario.ClaimDeps{
 		Deps: scenario.Deps{
-			Loader:      d.serviceLoader,
-			Topology:    d.topologyResolver,
-			ServiceVars: d.serviceVarsResolver,
-			Render:      d.renderPipeline,
-			Outbound:    d.outbound,
-			Destiny:     d.destinySource,
+			Loader:              d.serviceLoader,
+			MaintenanceDefaults: d.maintenanceDefaults(),
+			Topology:            d.topologyResolver,
+			ServiceVars:         d.serviceVarsResolver,
+			Render:              d.renderPipeline,
+			Outbound:            d.outbound,
+			Destiny:             d.destinySource,
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.
@@ -5843,7 +5855,7 @@ func (d *daemon) setupVoyageWorker(ctx context.Context) error {
 			ScenarioAwaiter: incarnationAwaiter,
 			CommandSpawner:  commandSpawner,
 			OrphanReleaser:  orphanReleaser,
-			Gate:            voyage.MaintenanceGate{},
+			Gate:            voyage.MaintenanceGate{Defaults: d.maintenanceDefaults()},
 			Audit:           d.auditWriter,
 		}
 		wg.Add(1)
@@ -6709,6 +6721,7 @@ func (d *daemon) setupConductor(ctx context.Context) error {
 		d.shellGate,
 		logger,
 	)
+	spawner.SetMaintenanceDefaults(d.maintenanceDefaults())
 
 	sch, err := conductor.New(conductor.Config{
 		Holder:  cfg.KID,

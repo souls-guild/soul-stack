@@ -165,10 +165,15 @@ func newMaintenanceWindowListReply(v handlers.MaintenanceWindowsView) Maintenanc
 	for _, w := range v.Windows {
 		items = append(items, newMaintenanceWindowReply(w))
 	}
-	status := MaintenanceStatus{OpenNow: v.Status.OpenNow, NextStart: v.Status.NextStart.UTC()}
+	var defaults []MaintenanceDefaultWindow
+	for _, w := range v.Defaults {
+		defaults = append(defaults, MaintenanceDefaultWindow{Kind: maintenance.KindWeekly, Days: w.Days,
+			StartTime: w.StartTime, DurationMinutes: w.DurationMinutes, Timezone: w.Timezone, Comment: w.Comment})
+	}
+	status := MaintenanceStatus{OpenNow: v.Status.OpenNow, NextStart: v.Status.NextStart.UTC(), Source: v.Status.Source}
 	if v.Status.ActiveFreeze != nil {
 		f := newFreezeReply(*v.Status.ActiveFreeze)
 		status.ActiveFreeze = &f
 	}
-	return MaintenanceWindowListReply{Items: items, Status: status}
+	return MaintenanceWindowListReply{Items: items, Defaults: defaults, Status: status}
 }

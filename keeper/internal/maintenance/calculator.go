@@ -50,6 +50,9 @@ type Status struct {
 	OpenNow      bool
 	NextStart    time.Time
 	ActiveFreeze *Freeze
+	// Source is one of SourceOwn, SourceDefault, SourceNone; only
+	// [Rules.Status] knows it, and [Calculator.Status] leaves it empty.
+	Source string
 }
 
 // NewCalculator compiles windows and freezes. It fails only on a row that would

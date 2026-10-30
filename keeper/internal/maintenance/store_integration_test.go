@@ -261,7 +261,7 @@ func TestIntegration_LoadCompilesTheStoredRows(t *testing.T) {
 	if _, err := InsertFreeze(ctx, integrationPool, "redis-prod", FreezeSpec{StartsAt: freezeStart, EndsAt: freezeStart.Add(3 * time.Hour)}); err != nil {
 		t.Fatalf("InsertFreeze: %v", err)
 	}
-	c, err := Load(ctx, integrationPool, "redis-prod")
+	c, err := Load(ctx, integrationPool, "redis-prod", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestIntegration_OnceWindowRoundTrip(t *testing.T) {
 		t.Fatalf("UpdateWindow weekly -> once = %+v, %v", back, err)
 	}
 
-	c, err := Load(ctx, integrationPool, "redis-prod")
+	c, err := Load(ctx, integrationPool, "redis-prod", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

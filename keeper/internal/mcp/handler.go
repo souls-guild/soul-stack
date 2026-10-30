@@ -16,6 +16,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/maintenance"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushorch"
@@ -125,6 +126,10 @@ type HandlerDeps struct {
 	ScenarioRunner  handlers.ScenarioStarter
 	ServiceRegistry handlers.ServiceResolver
 	ServiceLoader   handlers.ServiceSnapshotLoader
+
+	// MaintenanceDefaults — the cluster default windows (NIM-1138) the run gate
+	// and the windows list apply, as REST does. nil → none.
+	MaintenanceDefaults maintenance.DefaultsSource
 
 	// ScenarioDestroyer — narrow scenario.Runner surface for the destroy-tool
 	// (async-teardown scenario `destroy` in TerminalDestroy, S-D4). Separate

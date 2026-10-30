@@ -683,12 +683,19 @@ How long an incarnation's past one-off maintenance windows and freezes are kept 
 maintenance:
   window_retention: 72h   # past once windows; 0 keeps them for ever
   freeze_retention: 72h   # past freezes; 0 keeps them for ever
+  default_windows:        # the cluster default for incarnations without a weekly window
+    - days: [mon, tue, wed, thu, fri]
+      start_time: "02:00"
+      duration_minutes: 180
+      timezone: Europe/Moscow
+      comment: nightly
 ```
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `maintenance.window_retention` | `duration` | `72h` | Age after `ends_at` at which a `once` window is deleted. `0` — never. Negative → `value_out_of_range` at load. **Runtime setting** `cfg_maintenance_window_retention` (`PUT /v1/settings/cfg_maintenance_window_retention`, no restart; the next Reaper pass uses it). |
 | `maintenance.freeze_retention` | `duration` | `72h` | The same for a freeze, `cfg_maintenance_freeze_retention`. |
+| `maintenance.default_windows` | list of weekly windows | `[]` | The cluster default (NIM-1138): the weekly windows in effect for an incarnation that has **no weekly window of its own**. One weekly window of its own replaces them entirely; its `once` windows add to them; freezes are unchanged. Each entry is `days`, `start_time`, `duration_minutes`, `timezone`, `comment` and is checked exactly as an incarnation's weekly window (a refused one → `maintenance_window_invalid` at load, naming the entry and the field); at most 50 (`value_out_of_range`). Empty — an incarnation without windows may start at any time outside a freeze, as before. Every reader of the windows reads it per read. **Runtime setting** `cfg_maintenance_default_windows`, type `weekly_windows`: `PUT /v1/settings/cfg_maintenance_default_windows` with the list as JSON text in `value`, no restart. |
 
 Both rules run on every pass of an enabled Reaper (`reaper.enabled`), honour `reaper.dry_run`, and are not `reaper.rules` entries: the retention is their switch.
 
@@ -1261,6 +1268,7 @@ Admitted so far (the set grows as `keeper.yml` shrinks toward the bootstrap floo
 | `cfg_reaper_dry_run` | `reaper.dry_run` | bool | `true \| false` | `false` |
 | `cfg_maintenance_window_retention` | `maintenance.window_retention` | duration | `[0s, 8760h]`, `0` = never delete | `72h` |
 | `cfg_maintenance_freeze_retention` | `maintenance.freeze_retention` | duration | `[0s, 8760h]`, `0` = never delete | `72h` |
+| `cfg_maintenance_default_windows` | `maintenance.default_windows` | weekly_windows | JSON array of at most 50 weekly windows, each checked as an incarnation's | `[]` |
 | `cfg_cadence_scheduler_poll_floor` | `cadence_scheduler.poll_floor` | duration | `[30s, 1h]` | `30s` |
 | `cfg_cadence_scheduler_poll_ceiling` | `cadence_scheduler.poll_ceiling` | duration | `[30s, 1h]` | `1m` |
 | `cfg_cadence_scheduler_poll_idle` | `cadence_scheduler.poll_idle` | duration | `[30s, 24h]` | `2m` |

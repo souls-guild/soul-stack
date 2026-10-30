@@ -55,7 +55,7 @@ The windows and freezes are the target incarnations' own ([ADR-0093](../../adr/0
 
 | Recipe | At the tick | The spawned Voyage |
 |---|---|---|
-| `in_maintenance_window: true` | the first moment every target incarnation is open (inside a window, outside a freeze); an incarnation with no windows is open whenever no freeze covers it | `scheduled` with that `schedule_at`, or `pending` when it is now |
+| `in_maintenance_window: true` | the first moment every target incarnation is open (inside a window, outside a freeze); an incarnation with no windows in effect is open whenever no freeze covers it, and one with no weekly window of its own is held to the cluster default `maintenance.default_windows` when it is set | `scheduled` with that `schedule_at`, or `pending` when it is now |
 | `in_maintenance_window` absent | the first moment no freeze of any target covers — the end of the freeze, taken again while another one covers that end; the windows are not asked | `scheduled` until then, else `pending` at the tick |
 
 - **A Cadence never starts during a freeze, and there is no consent for it.** `confirm_freeze` is an operator's answer to a request; a schedule has no request to answer, so a freeze always defers it.

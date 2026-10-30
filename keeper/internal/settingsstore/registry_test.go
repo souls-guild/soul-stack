@@ -102,6 +102,10 @@ func TestRegistry_KeyContract(t *testing.T) {
 			} else if len(f.Allowed) > 0 && !slices.Contains(f.Allowed, def) {
 				t.Errorf("key %q: default %q is outside its own enum %v", f.Key, def, f.Allowed)
 			}
+		case KindWeeklyWindows:
+			if _, ok := f.Default.(config.OverlayJSON); !ok {
+				t.Errorf("key %q: weekly_windows field with a %T default", f.Key, f.Default)
+			}
 		default:
 			t.Errorf("key %q: unknown kind %q", f.Key, f.Kind)
 		}
@@ -266,6 +270,8 @@ func probeValue(t *testing.T, f Field, cur any) any {
 			t.Fatalf("%s: no probe sample — add one to stringProbes", f.Key)
 		}
 		raw = sample
+	case KindWeeklyWindows:
+		raw = `[{"days":["sun","mon"],"start_time":"02:00","duration_minutes":90,"timezone":"Europe/Moscow"}]`
 	}
 	probe, err := f.Parse(raw)
 	if err != nil {
@@ -471,5 +477,44 @@ func appendYAML(t *testing.T, path, extra string) {
 	}
 	if err := os.WriteFile(path, append(data, []byte(extra)...), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
+	}
+}
+
+// The cluster default windows (NIM-1138) are written as JSON text and checked on
+// the weekly window rules: what is refused names the window, and what is
+// accepted is stored in one canonical form.
+func TestField_WeeklyWindows(t *testing.T) {
+	f := mustLookup(t, "cfg_maintenance_default_windows")
+	ok := `{"days":["mon"],"start_time":"02:00","duration_minutes":60,"timezone":"UTC"}`
+	many := "[" + strings.TrimSuffix(strings.Repeat(ok+",", config.MaintenanceMaxWindows+1), ",") + "]"
+	for name, tc := range map[string]struct{ raw, want string }{
+		"null":                  {`null`, "must be a JSON array"},
+		"an object":             {ok, "not a JSON array"},
+		"trailing data":         {"[" + ok + "] []", "unexpected data"},
+		"too many":              {many, "at most 50"},
+		"an unknown field":      {`[{"days":["mon"],"start_time":"02:00","duration_minutes":60,"timezone":"UTC","kind":"once"}]`, `unknown field "kind"`},
+		"another case":          {`[{"Days":["mon"],"start_time":"02:00","duration_minutes":60,"timezone":"UTC"}]`, `unknown field "Days"`},
+		"a field twice":         {`[{"days":["mon"],"days":["tue"],"start_time":"02:00","duration_minutes":60,"timezone":"UTC"}]`, `"days" given twice`},
+		"a refused window":      {`[` + ok + `,{"days":["mon"],"start_time":"2:00","duration_minutes":60,"timezone":"UTC"}]`, "window 1: field 'start_time'"},
+		"a host-bound zone":     {`[{"days":["mon"],"start_time":"02:00","duration_minutes":60,"timezone":"Local"}]`, "window 0: field 'timezone'"},
+		"an escaped other case": {`[{"\u0044ays":["mon"],"start_time":"02:00","duration_minutes":60,"timezone":"UTC"}]`, `unknown field "Days"`},
+		"an escaped duplicate":  {`[{"days":["mon"],"\u0064ays":["tue"],"start_time":"02:00","duration_minutes":60,"timezone":"UTC"}]`, `"days" given twice`},
+		"an empty window":       {`[{}]`, "window 0: field 'days'"},
+		"a non-object entry":    {`[1]`, "not a JSON array"},
+	} {
+		if _, err := f.Parse(tc.raw); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want one naming %q", name, err, tc.want)
+		}
+	}
+
+	got, err := f.Parse(` [ {"timezone":"Europe/Moscow","days":["sun","mon"],"duration_minutes":90,"start_time":"02:00","comment":""} ] `)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := config.OverlayJSON(`[{"days":["mon","sun"],"start_time":"02:00","duration_minutes":90,"timezone":"Europe/Moscow"}]`); got != want {
+		t.Errorf("canonical form = %s, want %s", got, want)
+	}
+	if got, err := f.Parse(`[]`); err != nil || got != config.OverlayJSON(`[]`) {
+		t.Errorf("[] = %v, %v; want the empty list", got, err)
 	}
 }

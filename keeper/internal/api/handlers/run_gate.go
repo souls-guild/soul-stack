@@ -79,13 +79,15 @@ func (e *NoCommonWindowError) Error() string {
 
 // PlanRunStart applies the start gate to a run request over ids, starting at
 // `at` (now, or the request's own schedule_at), before anything is written.
+// defaults is the cluster default windows (NIM-1138), which hold a target with
+// no weekly window of its own.
 //
 // A window run is deferred to the first moment all targets are open, and needs
 // no consent: it waits every freeze out. Any other run starts at `at`; when a
 // freeze covers `at` on any target it needs confirm_freeze, else the whole
 // request is refused naming every frozen target.
-func PlanRunStart(ctx context.Context, db maintenance.DB, ids []string, at time.Time, g RunGate) (RunStart, error) {
-	rules, err := maintenance.LoadRules(ctx, db, ids)
+func PlanRunStart(ctx context.Context, db maintenance.DB, defaults maintenance.DefaultsSource, ids []string, at time.Time, g RunGate) (RunStart, error) {
+	rules, err := maintenance.LoadRules(ctx, db, ids, defaults)
 	if err != nil {
 		return RunStart{}, err
 	}
@@ -145,7 +147,9 @@ func CheckFreezeConsent(ctx context.Context, db maintenance.DB, id string, now t
 	if confirm {
 		return nil
 	}
-	rules, err := maintenance.LoadRules(ctx, db, []string{id})
+	// Freezes alone: these acts are never held to a window, so no default
+	// enters the answer.
+	rules, err := maintenance.LoadRules(ctx, db, []string{id}, nil)
 	if err != nil {
 		return err
 	}

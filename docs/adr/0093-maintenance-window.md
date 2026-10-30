@@ -3,7 +3,7 @@
 **Status:** accepted 2026-10-27; number 0093 stamped at its squash-merge into `release/NIM-1069`, shipped without the service-TLS epic NIM-1070 by release NIM-1133
 **Amends:** [ADR-043](0043-voyage.md) (a `scheduled` Voyage becomes the carrier of a run deferred to a window, and the claim asks the gate; the create request gains `in_maintenance_window` and `confirm_freeze`), [ADR-046](0046-cadence.md) (the run recipe gains `in_maintenance_window`; a spawn during a freeze is deferred, never confirmed), [ADR-010](0010-templating.md) (render CEL gains its first time-dependent function; NIM-1073 records the function and its contexts), [ADR-017](0017-keeper-side-core.md) (the Reaper's cert rotation never starts during a freeze; recorded in NIM-1077's amendment of that ADR, which takes effect with epic NIM-1070)
 **Leaves unchanged:** [ADR-0091](0091-scenario-linear-barrier.md) — a run that has started is not cut off, and nothing here reaches inside it; [ADR-028](0028-rbac-storage.md) — one name joins the closed permission catalog, the model does not move
-**Implemented by:** NIM-1072 (calculator, tables, REST, RBAC, audit, MCP), NIM-1073 (CEL), NIM-1074 (run and Voyage fields, deferral, freeze consent), NIM-1075 (Cadence), NIM-1076 (UI) — epic NIM-1069; NIM-1137 (one-off windows, the cleanup of past ones; [amendment 2026-10-30](#amendment-2026-10-30-nim-1137-one-off-windows-and-the-cleanup-of-past-ones)); NIM-1081 (cert rotation in a window) takes effect with epic NIM-1070; this ADR is NIM-1071
+**Implemented by:** NIM-1072 (calculator, tables, REST, RBAC, audit, MCP), NIM-1073 (CEL), NIM-1074 (run and Voyage fields, deferral, freeze consent), NIM-1075 (Cadence), NIM-1076 (UI) — epic NIM-1069; NIM-1137 (one-off windows, the cleanup of past ones; [amendment 2026-10-30](#amendment-2026-10-30-nim-1137-one-off-windows-and-the-cleanup-of-past-ones)); NIM-1138 (the cluster default for incarnations without windows; [amendment 2026-10-30](#amendment-2026-10-30-nim-1138-the-cluster-default-for-incarnations-without-windows)); NIM-1081 (cert rotation in a window) takes effect with epic NIM-1070; this ADR is NIM-1071
 
 ### Problem
 
@@ -59,7 +59,9 @@ worker claims a `scheduled` row only once `schedule_at <= NOW()`
 - A run that started inside a window runs to its end, even when the window closes first. v1 has no
   "stop at the end of the window" mode.
 - A run that asked for a window and could not start in one is deferred to `NextStart`.
-- An incarnation with no windows may start a run at any time outside a freeze.
+- An incarnation with no windows may start a run at any time outside a freeze. A non-empty cluster
+  default changes that: such an incarnation is held to the default's windows
+  ([amendment 2026-10-30, NIM-1138](#amendment-2026-10-30-nim-1138-the-cluster-default-for-incarnations-without-windows)).
 - The gate is decided **when the run starts, not when it is asked for**. A deferred run is told a
   time, and that time is a forecast. When it comes, the gate is asked again; if a freeze was added
   or a window changed in the meantime, the run is deferred again instead of starting.
@@ -390,3 +392,60 @@ adds a window for that one occasion and schedules the work into it.
   NIM-1136): it copies the weekly windows and the `once` ones that have not ended, not past ones.
   Core has no copy endpoint; until NIM-1136, the UI of NIM-1076 copies every listed window as a
   weekly one, and a `once` window among them is refused with 422.
+
+### Amendment 2026-10-30 (NIM-1138): the cluster default for incarnations without windows
+
+Decided by the user at the demo of release NIM-1133 (2026-10-30), variant A1, "as simple as
+possible"; built by NIM-1138 (`keeper/internal/maintenance/defaults.go`, the settings key in
+`keeper/internal/settingsstore/registry.go`). The question from the demo: can the policy for an
+incarnation with no windows be changed, as one default for all of them.
+
+- **One cluster-wide list of weekly windows, `maintenance.default_windows`**, a runtime setting of
+  [ADR-0073](0073-keeper-runtime-config-pg.md) (`PUT /v1/settings/cfg_maintenance_default_windows`,
+  no restart). Each entry has the shape of §1's weekly window (`days`, `start_time`,
+  `duration_minutes`, `timezone`, `comment`) and is checked by the rules an incarnation's weekly
+  window is checked by, in one implementation for both (`config.NormalizeWeeklyMaintenanceWindow`);
+  at most 50, the cap of one incarnation. Empty by default. It is the one structural value the
+  overlay holds (ADR-0073, amendment of (j.3)).
+- **It applies to an incarnation that has no weekly window of its own.** One weekly window of its
+  own replaces the default entirely; the two are never unioned. One-off windows add to whichever
+  weekly set is in effect, the incarnation's own or the default, and a one-off window, ended or not,
+  does not switch the default off. Freezes are unchanged. An incarnation that must not be held to the
+  default sets its own window every day at `00:00` for 1440 minutes in `UTC`; in a zone with
+  daylight saving a 24-hour slot leaves an hour uncovered on the night the clock goes back.
+- **One function decides which windows count, `Rules.Effective`, and every calculator a reader
+  asks is compiled from it**: a run request and a Voyage request (`PlanRunStart`), the claim
+  (`voyage.MaintenanceGate`), the Cadence tick (`cadence.skipped_no_window` included), the scenario
+  CEL (`in_maintenance_window()`, `incarnation.maintenance_window.*`, and the create path's
+  pre-flight, where the incarnation has no row yet and so the default alone), the status block and
+  MCP. A reader reads the setting at each read, from the live config the overlay swaps on every
+  instance when the setting changes (ADR-0073(g)). A run deferred before a change is asked again at
+  its claim (§2).
+- **The list says where the windows come from.** `GET /v1/incarnations/{id}/maintenance-windows`
+  and `keeper.incarnation.maintenance-window.list` gain `defaults`, the default's windows, present
+  only when they apply, and `status.source`: `own` (a weekly window of its own, or with no default a
+  one-off window that has not ended), `default` (the default's windows, with the incarnation's
+  one-off windows added) or `none` (nothing counts: any time outside a freeze). `items` stays the
+  incarnation's own rows. A forced run is still held to no window (§4).
+- **What it supersedes, for a non-empty default.** With the default empty every line below reads as
+  before, answer for answer.
+  - §2: "open" reads "no windows **in effect**", and "an incarnation with no windows may start a run
+    at any time outside a freeze" holds only for one the default does not reach.
+  - §3: "a target with neither windows nor freezes never holds the others" — the default holds it.
+  - §8: "with no windows and no active freeze the function is true and `next_start` is now" — the
+    default's windows are its windows, rendered as its own would be.
+  - The NIM-1137 amendment's "an incarnation with no weekly window" means one the default does not
+    reach either: under the default, an incarnation whose `once` windows have ended is held to the
+    default, not open at any time.
+  - §1 and *Rejected* refused a shared window because "an edit to one window must not move the
+    schedule of incarnations nobody looked at". The default does exactly that, by the user's choice:
+    one edit moves every incarnation without a weekly window of its own. It is not a named window
+    incarnations refer to; an incarnation leaves it by having a weekly window.
+  - §6: the default is edited under `setting.update` (ADR-0073), cluster-wide and with no
+    incarnation scope, and audited `setting.updated`, not `maintenance_window.*`; the windows of an
+    incarnation stay under `incarnation.maintenance-set`.
+  - The NIM-1075 amendment's "the tick and the claim cannot disagree" assumes one default on every
+    instance. A `keeper.yml` that sets `maintenance.default_windows` wins on its instance
+    (ADR-0073(b)), so the key belongs in the cluster setting, or in the same form in every file.
+- **Not in this amendment:** a default per service or per Coven (§1 stands), and the ticket's
+  variant B, a switch "no windows means closed", which the user did not choose.

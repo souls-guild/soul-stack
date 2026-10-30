@@ -41,8 +41,17 @@ func scopeSize(raw []byte) int {
 // MaintenanceGate is the production [StartGate]: one start for the whole
 // Voyage, the first moment every target's gate is open
 // ([maintenance.CommonStart]). A target with neither windows nor freezes never
-// holds the others.
-type MaintenanceGate struct{}
+// holds the others, unless the cluster default holds it.
+type MaintenanceGate struct {
+	// Defaults supplies the cluster default windows (NIM-1138); nil, none.
+	Defaults maintenance.DefaultsSource
+}
+
+// LoadRules reads the rules of ids with the gate's default, for a caller that
+// decides with [MaintenanceGate.DecideRules].
+func (g MaintenanceGate) LoadRules(ctx context.Context, db maintenance.DB, ids []string) (map[string]maintenance.Rules, error) {
+	return maintenance.LoadRules(ctx, db, ids, g.Defaults)
+}
 
 // Decide implements [StartGate].
 func (g MaintenanceGate) Decide(ctx context.Context, db ExecQueryRower, v *Voyage, now time.Time) (GateVerdict, error) {
@@ -50,7 +59,7 @@ func (g MaintenanceGate) Decide(ctx context.Context, db ExecQueryRower, v *Voyag
 	if err := json.Unmarshal(v.TargetResolved, &ids); err != nil {
 		return GateVerdict{NoStart: true, Reason: "the run's targets cannot be read"}, nil
 	}
-	rules, err := maintenance.LoadRules(ctx, db, ids)
+	rules, err := g.LoadRules(ctx, db, ids)
 	if err != nil {
 		return GateVerdict{}, fmt.Errorf("voyage: start gate: %w", err)
 	}

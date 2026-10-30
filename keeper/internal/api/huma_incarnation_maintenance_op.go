@@ -35,7 +35,7 @@ func maintenanceWindowListOperation() huma.Operation {
 		Method:      http.MethodGet,
 		Path:        "/{id}/maintenance-windows",
 		Summary:     "List the incarnation's maintenance windows",
-		Description: "Every maintenance window of the incarnation in creation order, plus `status`: whether a run may start now (`open_now`), the first instant it may (`next_start`, now itself when open) and the freeze in force (`active_freeze`). The status is computed over the windows AND the freezes: no windows means any time, and a freeze closes everything while it lasts. A `once` window counts only until its `ends_at`; one that has ended is still listed until the Reaper deletes it after `maintenance.window_retention`, and an incarnation whose only windows have ended is open at any time. A window gates the start of a run; a started run is never cut off when the slot ends. Permission incarnation.get. Read-only, no audit.",
+		Description: "Every maintenance window of the incarnation in creation order, the cluster default `defaults` when it applies (the runtime setting maintenance.default_windows, for an incarnation with no weekly window of its own; its once windows add to it), plus `status`: whether a run may start now (`open_now`), the first instant it may (`next_start`, now itself when open), the freeze in force (`active_freeze`) and where the windows in effect come from (`source`: own, default or none). The status is computed over the windows in effect AND the freezes: no windows in effect means any time, and a freeze closes everything while it lasts. A `once` window counts only until its `ends_at`; one that has ended is still listed until the Reaper deletes it after `maintenance.window_retention`, and an incarnation whose only windows have ended is open at any time unless the default holds it. A window gates the start of a run; a started run is never cut off when the slot ends. Permission incarnation.get. Read-only, no audit.",
 		Tags:        []string{"incarnation"},
 		Errors:      []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
@@ -102,7 +102,7 @@ func maintenanceWindowDeleteOperation() huma.Operation {
 		Method:        http.MethodDelete,
 		Path:          "/{id}/maintenance-windows/{window_id}",
 		Summary:       "Delete a maintenance window",
-		Description:   "Deletes the window. Not idempotent: deleting it again is 404. Deleting the last window that counts makes the incarnation open at any time outside a freeze. Audit maintenance_window.deleted." + maintenanceSetNote,
+		Description:   "Deletes the window. Not idempotent: deleting it again is 404. Deleting the last window that counts makes the incarnation open at any time outside a freeze, or held to the cluster default when it is set. Audit maintenance_window.deleted." + maintenanceSetNote,
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        maintenanceWriteErrors,

@@ -19,6 +19,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/maintenance"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
@@ -114,6 +115,17 @@ type VoyageHandler struct {
 	// Resolved from cfg.Voyage.ResolvedMaxBatchSize() in the constructor.
 	maxBatchSize int
 	logger       *slog.Logger
+	// maintenanceDefaults — the cluster default windows a scenario Voyage's
+	// start gate holds targets to (NIM-1138); late-binding via
+	// [VoyageHandler.SetMaintenanceDefaults], nil → none.
+	maintenanceDefaults maintenance.DefaultsSource
+}
+
+// SetMaintenanceDefaults late-binds the cluster default windows (NIM-1138) the
+// start gate of a scenario Voyage applies. Called once in `keeper run` before
+// the server starts.
+func (h *VoyageHandler) SetMaintenanceDefaults(d maintenance.DefaultsSource) {
+	h.maintenanceDefaults = d
 }
 
 // NewVoyageHandler builds the handler. logger=nil → discard. store /
@@ -727,7 +739,7 @@ func (h *VoyageHandler) scenarioStartErr(ctx context.Context, req *voyageCreateR
 	if req.ScheduleAt != nil && req.ScheduleAt.After(at) {
 		at = *req.ScheduleAt
 	}
-	start, err := PlanRunStart(ctx, h.store, resolved, at,
+	start, err := PlanRunStart(ctx, h.store, h.maintenanceDefaults, resolved, at,
 		RunGate{InMaintenanceWindow: req.InMaintenanceWindow, ConfirmFreeze: req.ConfirmFreeze})
 	if err != nil {
 		if p, ok := runGateProblem(err); ok {

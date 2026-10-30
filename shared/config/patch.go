@@ -102,8 +102,10 @@ func patchOne(doc *Document, yamlPath string, value any) error {
 	// PatchSoul contract is a scalar replace; silently replacing a whole subtree
 	// risks silent data loss (`$.listen.grpc` → would drop
 	// tls.cert/tls.key/tls.ca). To change a mapping, write a separate Patch per
-	// scalar field.
-	if _, isScalar := target.(ast.ScalarNode); !isScalar {
+	// scalar field. An [OverlayJSON] is the exception: it is the whole value of
+	// its key, so replacing the subtree is the point.
+	_, structural := value.(OverlayJSON)
+	if _, isScalar := target.(ast.ScalarNode); !isScalar && !structural {
 		return fmt.Errorf("config: yaml path %q points to non-scalar node (kind=%s); "+
 			"only scalars are patchable (non_scalar_patch_target)", yamlPath, target.Type().String())
 	}

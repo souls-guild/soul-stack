@@ -718,7 +718,9 @@ Removes the host from the roster — it stops being a target of **every future r
 
 #### Maintenance windows and freezes — `/v1/incarnations/{id}/maintenance-windows`, `/v1/incarnations/{id}/freezes`
 
-[ADR-0093](../../adr/0093-maintenance-window.md), epic NIM-1069, NIM-1072, NIM-1137. Each incarnation has its own **maintenance windows** and **freezes**; there is no shared named window. A window is `weekly` (a slot set repeated every week) or `once` (one interval, for a fix scheduled outside the regular slots); both kinds are in the one list. A window is the time a run may **start**: a run already started is never cut off when the slot ends. A run that may not start now is meant to wait for the next open moment outside every freeze. During a **freeze** no automatic run is meant to start, with or without windows. **No windows at all means any time** (outside a freeze), and a `once` window that has ended is no window: an incarnation whose only windows have ended is open at any time.
+[ADR-0093](../../adr/0093-maintenance-window.md), epic NIM-1069, NIM-1072, NIM-1137, NIM-1138. Each incarnation has its own **maintenance windows** and **freezes**; there is no shared named window. A window is `weekly` (a slot set repeated every week) or `once` (one interval, for a fix scheduled outside the regular slots); both kinds are in the one list. A window is the time a run may **start**: a run already started is never cut off when the slot ends. A run that may not start now is meant to wait for the next open moment outside every freeze. During a **freeze** no automatic run is meant to start, with or without windows. **No windows at all means any time** (outside a freeze), and a `once` window that has ended is no window: an incarnation whose only windows have ended is open at any time — **unless the cluster default is set** (below).
+
+**The cluster default** (NIM-1138). The runtime setting `maintenance.default_windows` ([config.md](../config.md#maintenance), `PUT /v1/settings/cfg_maintenance_default_windows`) is a list of weekly windows that applies to every incarnation **with no weekly window of its own**. One weekly window of its own replaces the default entirely; its `once` windows add to the default; freezes are unchanged. To free one incarnation from the default, give it its own window every day at `00:00` for 1440 minutes in `UTC` (in a zone with daylight saving a 24-hour slot leaves an hour uncovered on the night the clock goes back). A forced run is held to no window either way. A change of the setting reaches every reader on every Keeper without a restart.
 
 The answer to "may a run start now, and if not, when" comes from one calculator, `keeper/internal/maintenance`. These routes store the windows and freezes and report that answer; how runs obey them is [§ Starting a run: the window and the freeze](#starting-a-run-the-window-and-the-freeze) (NIM-1074). The other consumers in the same release: scenario CEL (NIM-1073), Cadence (NIM-1075) and the UI (NIM-1076); cert rotation (NIM-1081) joins with epic NIM-1070.
 
@@ -766,7 +768,7 @@ Permissions: reads ride on `incarnation.get`, writes need `incarnation.maintenan
 
 `POST` answers `201` and `PUT` answers `200`, both with the window: `{id, kind, comment, created_at, updated_at}` plus the fields of its kind — `days, start_time, duration_minutes, timezone` or `starts_at, ends_at`. `id` is a UUID.
 
-**`GET …/maintenance-windows` → `200`:** every window in creation order, past `once` windows included until the Reaper deletes them, plus the status over the windows **and** the freezes:
+**`GET …/maintenance-windows` → `200`:** every window in creation order, past `once` windows included until the Reaper deletes them, the cluster default when it applies, and the status over the windows in effect **and** the freezes:
 
 ```json
 {
@@ -775,17 +777,32 @@ Permissions: reads ride on `incarnation.get`, writes need `incarnation.maintenan
                "created_at": "2026-10-27T18:00:00Z", "updated_at": "2026-10-27T18:00:00Z" },
              { "id": "5d1c…", "kind": "once", "starts_at": "2026-11-05T22:00:00Z", "ends_at": "2026-11-06T04:00:00Z",
                "comment": "fix NIM-1234", "created_at": "2026-10-30T09:00:00Z", "updated_at": "2026-10-30T09:00:00Z" } ],
-  "status": { "open_now": false, "next_start": "2026-11-02T23:00:00Z" }
+  "status": { "open_now": false, "next_start": "2026-11-02T23:00:00Z", "source": "own" }
 }
 ```
+
+An incarnation with no weekly window of its own, under a default:
+
+```json
+{
+  "items": [],
+  "defaults": [ { "kind": "weekly", "days": ["mon", "tue", "wed", "thu", "fri"], "start_time": "02:00",
+                  "duration_minutes": 180, "timezone": "Europe/Moscow", "comment": "nightly" } ],
+  "status": { "open_now": false, "next_start": "2026-11-02T23:00:00Z", "source": "default" }
+}
+```
+
+- `items`: the incarnation's own windows only.
+- `defaults`: the cluster default's windows, **present only when they apply** — the incarnation has no weekly window of its own. Each is a weekly window without `id` and timestamps.
 
 - `open_now`: a run may start now, meaning inside a window (or there are no windows that count) and outside every freeze.
 - `next_start`: the first instant at or after now at which a run may start; it is now itself when `open_now` is true.
 - `active_freeze`: the freeze in force now. When several overlap it is the one that ends last. Absent when there is none.
+- `source`: where the windows in effect come from — `own` (a weekly window of its own, or with no default a `once` window that has not ended), `default` (the windows in `defaults`, with the incarnation's `once` windows added), `none` (nothing counts: any time outside a freeze).
 
 **Request `FreezeRequest`:** `starts_at` and `ends_at` (RFC 3339, both required, `ends_at` after `starts_at`), `comment` (optional, at most 500 characters). `POST` answers `201` and `PUT` answers `200`, both with the freeze `{id, starts_at, ends_at, comment, created_at, updated_at}`. **`GET …/freezes` → `200`** returns `{items}`, past freezes included until the Reaper deletes them, ordered by start.
 
-**`DELETE`** answers `204`. It is not idempotent: deleting again is `404`, so the trail never records a delete of something that was not there. Deleting the last window that counts makes the incarnation open at any time outside a freeze.
+**`DELETE`** answers `204`. It is not idempotent: deleting again is `404`, so the trail never records a delete of something that was not there. Deleting the last window that counts makes the incarnation open at any time outside a freeze — or, when the cluster default is set, held to the default's windows.
 
 **Errors:** `400 malformed-request`; `403 forbidden`; `404 not-found` (no such incarnation, or no window/freeze with that id **on this incarnation**: the incarnation in the path is part of the address); `422 validation-failed` (a refused field, a malformed path id, or the incarnation is at its limit); `500 internal-error`.
 

@@ -10,9 +10,10 @@ import (
 )
 
 // SettingReply — one entry of the settings catalog. `value` and `default` are
-// typed JSON scalars (a number for a float/int field, a duration string like
-// "30s" for a duration one, a boolean for a flag), `source` says which layer the
-// effective value came from, in precedence order `default` < `pg` < `file`.
+// typed JSON (a number for a float/int field, a duration string like "30s" for a
+// duration one, a boolean for a flag, an array of windows for a weekly_windows
+// one), `source` says which layer the effective value came from, in precedence
+// order `default` < `pg` < `file`.
 //
 // `cluster_value` + `overridden_locally` appear only when this instance's
 // keeper.yml shadows an existing cluster override: without them a PUT would read
@@ -20,7 +21,7 @@ import (
 type SettingReply struct {
 	Key         string `json:"key"`
 	YAMLPath    string `json:"yaml_path"`
-	Type        string `json:"type" enum:"float,int,duration,bool,string"`
+	Type        string `json:"type" enum:"float,int,duration,bool,string,weekly_windows"`
 	Bounds      string `json:"bounds" doc:"accepted range, e.g. (0, 1] or [30s, 1h]; an enum (\"debug | info | warn | error\") or \"true | false\" where a range makes no sense"`
 	Default     any    `json:"default"`
 	Value       any    `json:"value" doc:"effective value on this instance"`

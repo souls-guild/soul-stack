@@ -387,6 +387,19 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **A cluster default for incarnations without windows (NIM-1138, epic NIM-1069,
+  [ADR-0093 amendment](docs/adr/0093-maintenance-window.md#amendment-2026-10-30-nim-1138-the-cluster-default-for-incarnations-without-windows)).**
+  The runtime setting `maintenance.default_windows` (`PUT /v1/settings/cfg_maintenance_default_windows`,
+  no restart) is a list of weekly windows, each checked as an incarnation's weekly window, at most
+  50, empty by default. It applies to every incarnation that has no weekly window of its own: one
+  own weekly window replaces it, own one-off windows add to it, freezes are unchanged. The run gate,
+  the Voyage claim, the Cadence tick, `in_maintenance_window()` and
+  `incarnation.maintenance_window.*`, the status and MCP all read it. `GET
+  /v1/incarnations/{id}/maintenance-windows` and `keeper.incarnation.maintenance-window.list` gain
+  `defaults` (present only when it applies) and `status.source`: `own`, `default` or `none`. The
+  settings catalog gains the type `weekly_windows`, its value a JSON array, written as JSON text.
+  With the setting empty nothing changes.
+
 - **One-off maintenance windows, and past ones are cleaned up (NIM-1137, epic NIM-1069).** A
   window now has a `kind`: `weekly` (the slots so far, and what a request without `kind` means) or
   `once`, one interval `{"kind":"once","starts_at","ends_at","comment"}` in the same list

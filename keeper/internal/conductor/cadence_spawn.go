@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/cadence"
+	"github.com/souls-guild/soul-stack/keeper/internal/maintenance"
 	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
@@ -67,6 +68,16 @@ type CadenceSpawner struct {
 
 	// now is the clock the window and freeze decisions read; nil is time.Now.
 	now func() time.Time
+	// startGate is the gate a spawn's start is asked of — the claim's, with the
+	// same cluster default ([CadenceSpawner.SetMaintenanceDefaults]).
+	startGate voyage.MaintenanceGate
+}
+
+// SetMaintenanceDefaults gives the spawn path the cluster default windows
+// (NIM-1138) the claim's gate holds, so the tick and the claim agree on when a
+// child may start. Unset, no default applies.
+func (s *CadenceSpawner) SetMaintenanceDefaults(d maintenance.DefaultsSource) {
+	s.startGate = voyage.MaintenanceGate{Defaults: d}
 }
 
 // ConsoleChecker is the narrow RBAC surface the spawn path needs — one
@@ -336,7 +347,7 @@ func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.C
 	row, targets := cadence.BuildVoyage(c, voyageID, resolved)
 	var startAt time.Time
 	if c.Kind == cadence.KindScenario {
-		at, nw, serr := spawnStart(ctx, tx, row, resolved, now)
+		at, nw, serr := spawnStart(ctx, s.startGate, tx, row, resolved, now)
 		if serr != nil {
 			return nil, false, serr
 		}

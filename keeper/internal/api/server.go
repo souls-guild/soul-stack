@@ -26,6 +26,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/maintenance"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushorch"
@@ -189,8 +190,12 @@ type Deps struct {
 
 	OperatorDB    handlers.OperatorPool
 	IncarnationDB handlers.IncarnationDB
-	SoulDB        handlers.SoulPool
-	TTLDefault    time.Duration
+	// MaintenanceDefaults — the cluster default maintenance windows (NIM-1138)
+	// the run gate, the Voyage start gate and the windows status apply. nil →
+	// none.
+	MaintenanceDefaults maintenance.DefaultsSource
+	SoulDB              handlers.SoulPool
+	TTLDefault          time.Duration
 	// TTLMax — `auth.jwt.ttl_max`, the longest lifetime create/issue-token accept
 	// (ADR-014 amendment NIM-1045). 0 → TTLDefault, i.e. no longer than before.
 	TTLMax time.Duration
@@ -701,6 +706,9 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// refs-lister (the same ls-remote cache as ServiceHandler) for the cheap mode of
 	// GET .../upgrade-paths (ADR-0068 §6); late-binding, the constructor isn't extended.
 	incH.SetServiceRefs(deps.ServiceRefs)
+	// The cluster default maintenance windows (NIM-1138) for the run gate and
+	// the windows status; late-binding, nil → none.
+	incH.SetMaintenanceDefaults(deps.MaintenanceDefaults)
 	// Gate (b) of a templated create (NIM-333): the composed name is re-measured
 	// against the caller's scope. deps.RBAC is a PermissionChecker by the
 	// RBACProvider contract, so this is the same enforcer the middleware gates on —
@@ -930,6 +938,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 			deps.VoyageMaxBatchSize,
 			logger,
 		)
+		voyageH.SetMaintenanceDefaults(deps.MaintenanceDefaults)
 	}
 
 	// cadenceH is optional: when nil CadenceDB the cadence.* routes aren't wired

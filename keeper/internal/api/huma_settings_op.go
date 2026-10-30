@@ -47,7 +47,7 @@ type settingPutInput struct {
 // field-registry parse + range check the loader uses — so PUT cannot admit a
 // value a reload would later reject. Struct name = contract schema name.
 type SettingUpdateRequest struct {
-	Value string `json:"value" required:"true" doc:"new value in text form (e.g. \"0.5\"); parsed and range-checked by the field registry"`
+	Value string `json:"value" required:"true" doc:"new value in text form (e.g. \"0.5\"; a JSON array as text for a weekly_windows key); parsed and range-checked by the field registry"`
 }
 
 // settingPutOutput — huma output PUT. Status=200 WITH BODY (the updated entry).

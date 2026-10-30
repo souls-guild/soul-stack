@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -96,6 +97,7 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 	if c.Maintenance != nil {
 		out = append(out, checkRetention(root, "$.maintenance.window_retention", c.Maintenance.WindowRetention)...)
 		out = append(out, checkRetention(root, "$.maintenance.freeze_retention", c.Maintenance.FreezeRetention)...)
+		out = append(out, checkDefaultWindows(root, c.Maintenance.DefaultWindows)...)
 	}
 	// console (ADR-0074): operator-facing envelope of the console plane. Only
 	// format and range here; the defaults are resolved in the daemon. There is
@@ -644,6 +646,35 @@ func checkRetention(root *ast.MappingNode, yamlPath, val string) []diag.Diagnost
 		})}
 	}
 	return nil
+}
+
+// checkDefaultWindows refuses a cluster default window an incarnation's own weekly
+// window would be refused (NIM-1138), and more windows than one incarnation may
+// hold.
+func checkDefaultWindows(root *ast.MappingNode, windows []KeeperMaintenanceWindow) []diag.Diagnostic {
+	const path = "$.maintenance.default_windows"
+	if len(windows) > MaintenanceMaxWindows {
+		return []diag.Diagnostic{atPath(root, path, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "value_out_of_range",
+			Message: fmt.Sprintf("at most %d default windows, got %d", MaintenanceMaxWindows, len(windows)),
+		})}
+	}
+	var out []diag.Diagnostic
+	for i, w := range windows {
+		_, err := NormalizeWeeklyMaintenanceWindow(w.Days, w.StartTime, w.DurationMinutes, w.Timezone, w.Comment)
+		var fe *MaintenanceFieldError
+		if !errors.As(err, &fe) {
+			continue
+		}
+		at := fmt.Sprintf("%s[%d]", path, i)
+		out = append(out, atPath(root, at+"."+fe.Field, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "maintenance_window_invalid",
+			Message: fmt.Sprintf("default window %d: %s", i, fe.Error()),
+		}))
+	}
+	return out
 }
 
 // minCadencePollFloor is the absolute minimum poll_floor (ADR-048 "Adaptive

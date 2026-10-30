@@ -381,7 +381,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.incarnation.maintenance-window.list",
-			Description:  "Lists the incarnation's maintenance windows in creation order, weekly and once alike (a once window that has ended is listed until the Reaper deletes it after maintenance.window_retention, and no longer counts), plus status: open_now (a run may start now), next_start (the first instant at or after now a run may start; now itself when open) and active_freeze (the freeze in force; absent when none). The status counts the freezes too: no windows means any time, and a freeze closes everything while it lasts. A window gates the START of a run; a started run is never cut off. Permission: incarnation.get (scope incarnation/coven/service by name).",
+			Description:  "Lists the incarnation's maintenance windows in creation order, weekly and once alike (a once window that has ended is listed until the Reaper deletes it after maintenance.window_retention, and no longer counts), defaults (the cluster default maintenance.default_windows, present only when it applies: the incarnation has no weekly window of its own; its once windows add to it), plus status: open_now (a run may start now), next_start (the first instant at or after now a run may start; now itself when open), active_freeze (the freeze in force; absent when none) and source (own, default or none: where the windows in effect come from). The status counts the freezes too: no windows in effect means any time, and a freeze closes everything while it lasts. A window gates the START of a run; a started run is never cut off. Permission: incarnation.get (scope incarnation/coven/service by name).",
 			InputSchema:  schemaIncarnationIDOnlyInput,
 			OutputSchema: schemaMaintenanceWindowListOutput,
 		},
@@ -408,7 +408,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.incarnation.maintenance-window.delete",
-			Description:  "Deletes one maintenance window. Not idempotent: deleting it again is code=not-found. Deleting the last window makes the incarnation open at any time outside a freeze. Permission: incarnation.maintenance-set. Audit maintenance_window.deleted.",
+			Description:  "Deletes one maintenance window. Not idempotent: deleting it again is code=not-found. Deleting the last window makes the incarnation open at any time outside a freeze, or held to the cluster default when it is set. Permission: incarnation.maintenance-set. Audit maintenance_window.deleted.",
 			InputSchema:  schemaMaintenanceWindowDeleteInput,
 			OutputSchema: schemaMaintenanceDeleteOutput,
 		},
@@ -692,7 +692,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.setting.update",
-			Description:  "Sets a cluster-wide override for one runtime setting; it reaches every Keeper instance without a restart, except where that instance's own keeper.yml sets the key and wins (the reply then carries cluster_value + overridden_locally). Permission: setting.update. The value is text in the field's own notation (\"0.5\", \"20\", \"2h\", \"true\"). Fails with code=not-found for a key outside the catalog and validation-failed when the value is out of range or would break a cross-field invariant — in both cases nothing is written.",
+			Description:  "Sets a cluster-wide override for one runtime setting; it reaches every Keeper instance without a restart, except where that instance's own keeper.yml sets the key and wins (the reply then carries cluster_value + overridden_locally). Permission: setting.update. The value is text in the field's own notation (\"0.5\", \"20\", \"2h\", \"true\"; for a weekly_windows key the JSON array as text, e.g. \"[{\\\"days\\\":[\\\"mon\\\"],\\\"start_time\\\":\\\"02:00\\\",\\\"duration_minutes\\\":120,\\\"timezone\\\":\\\"UTC\\\"}]\"). Fails with code=not-found for a key outside the catalog and validation-failed when the value is out of range or would break a cross-field invariant — in both cases nothing is written.",
 			InputSchema:  schemaSettingUpdateInput,
 			OutputSchema: schemaSettingView,
 		},
@@ -1830,10 +1830,18 @@ var (
 "properties":{
 "incarnation":{"type":"string"},
 "items":{"type":"array","items":{` + maintenanceWindowEntrySchema + `}},
-"status":{"type":"object","additionalProperties":false,"required":["open_now","next_start"],"properties":{
-"open_now":{"type":"boolean","description":"A run may start now: inside some window (or there are no windows, a once window that has ended being none) and outside every freeze."},
+"defaults":{"type":"array","description":"The cluster default (runtime setting maintenance.default_windows), present only when it applies: the incarnation has no weekly window of its own. Its own once windows add to it; one weekly window of its own replaces it.","items":{"type":"object","additionalProperties":false,"required":["kind","days","start_time","duration_minutes","timezone","comment"],"properties":{
+"kind":{"type":"string","enum":["weekly"]},
+"days":{"type":"array","items":{"type":"string"},"description":"Weekdays a slot starts on, in calendar order."},
+"start_time":{"type":"string","description":"HH:MM in timezone."},
+"duration_minutes":{"type":"integer"},
+"timezone":{"type":"string"},
+"comment":{"type":"string"}}}},
+"status":{"type":"object","additionalProperties":false,"required":["open_now","next_start","source"],"properties":{
+"open_now":{"type":"boolean","description":"A run may start now: inside a window in effect (or none is in effect, a once window that has ended counting as none) and outside every freeze."},
 "next_start":{"type":"string","description":"RFC3339: the first instant at or after now at which a run may start; now itself when open_now."},
-"active_freeze":{` + freezeEntrySchema + `,"description":"The freeze in force now - the one that ends last when several overlap; absent when none."}}}}}`)
+"active_freeze":{` + freezeEntrySchema + `,"description":"The freeze in force now - the one that ends last when several overlap; absent when none."},
+"source":{"type":"string","enum":["own","default","none"],"description":"Where the windows in effect come from: own - the incarnation's (a weekly window, or with no cluster default a once window that has not ended); default - the cluster default in defaults, with the incarnation's own once windows added; none - nothing counts, a run may start at any time outside a freeze."}}}}}`)
 
 	schemaFreezeCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -2220,8 +2228,9 @@ var (
 "created_at":{"type":"string","format":"date-time"},
 "updated_at":{"type":"string","format":"date-time"}}}`)
 
-	// SettingsStore (ADR-0073). `value` / `default` are typed JSON scalars — a
-	// number, a duration string ("30s") or a boolean, per the entry's `type`.
+	// SettingsStore (ADR-0073). `value` / `default` are typed JSON — a number, a
+	// duration string ("30s"), a boolean or an array of windows, per the entry's
+	// `type`.
 	schemaSettingView = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
@@ -2230,7 +2239,7 @@ var (
 "properties":{
 "key":{"type":"string"},
 "yaml_path":{"type":"string"},
-"type":{"type":"string","enum":["float","int","duration","bool","string"]},
+"type":{"type":"string","enum":["float","int","duration","bool","string","weekly_windows"]},
 "bounds":{"type":"string"},
 "default":{},
 "value":{},
@@ -2252,7 +2261,7 @@ var (
 "properties":{
 "key":{"type":"string"},
 "yaml_path":{"type":"string"},
-"type":{"type":"string","enum":["float","int","duration","bool","string"]},
+"type":{"type":"string","enum":["float","int","duration","bool","string","weekly_windows"]},
 "bounds":{"type":"string"},
 "default":{},
 "value":{},

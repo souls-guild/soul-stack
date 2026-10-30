@@ -42,6 +42,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/applywake"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
+	"github.com/souls-guild/soul-stack/keeper/internal/maintenance"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -523,6 +524,10 @@ type Deps struct {
 	// DB — pool for incarnation + applyrun CRUD (single Postgres, ADR-005).
 	DB     *pgxpool.Pool
 	Logger *slog.Logger
+
+	// MaintenanceDefaults — the cluster default windows (NIM-1138) the
+	// maintenance window a render pass reads applies. nil → none.
+	MaintenanceDefaults maintenance.DefaultsSource
 
 	// Vault — shared keeper-vault client for scoped resolve of `vault:` refs
 	// in operator input (docs/input.md → "vault_scope"). nil → input vault

@@ -123,8 +123,8 @@ type KeeperConfig struct {
 	Console *KeeperConsole `yaml:"console,omitempty"`
 
 	// Maintenance holds the cluster-wide settings of incarnations' maintenance
-	// windows and freezes (ADR-0093, NIM-1137). Optional; absent means the
-	// defaults.
+	// windows and freezes (ADR-0093, NIM-1137, NIM-1138). Optional; absent means
+	// the defaults.
 	Maintenance *KeeperMaintenance `yaml:"maintenance,omitempty"`
 
 	// Acolytes is the number of workers in the apply execution pool (ADR-027,
@@ -1975,14 +1975,38 @@ const (
 // freeze stays after it ends before the Reaper deletes it (NIM-1137).
 const DefaultMaintenanceRetention = 72 * time.Hour
 
-// KeeperMaintenance is the `maintenance:` block. Both retentions are read by the
-// Reaper on every pass, so they are runtime settings (ADR-0073).
+// KeeperMaintenance is the `maintenance:` block. Every field is read where it is
+// used, on every pass or read, so each is a runtime setting (ADR-0073).
 type KeeperMaintenance struct {
 	// WindowRetention is how long a `once` window stays after it ends; `0`
 	// keeps it for ever. Type `duration`, empty → [DefaultMaintenanceRetention].
 	WindowRetention string `yaml:"window_retention,omitempty"`
 	// FreezeRetention is the same for a freeze.
 	FreezeRetention string `yaml:"freeze_retention,omitempty"`
+	// DefaultWindows is the cluster default (NIM-1138): the weekly windows in
+	// effect for an incarnation that has no weekly window of its own. Empty —
+	// such an incarnation may start at any time outside a freeze.
+	DefaultWindows []KeeperMaintenanceWindow `yaml:"default_windows,omitempty"`
+}
+
+// KeeperMaintenanceWindow is one weekly window of `maintenance.default_windows`:
+// the fields of an incarnation's weekly window, checked by the same
+// [NormalizeWeeklyMaintenanceWindow]. The json tags are the canonical form the
+// settings overlay stores it in.
+type KeeperMaintenanceWindow struct {
+	Days            []string `yaml:"days" json:"days"`
+	StartTime       string   `yaml:"start_time" json:"start_time"`
+	DurationMinutes int      `yaml:"duration_minutes" json:"duration_minutes"`
+	Timezone        string   `yaml:"timezone" json:"timezone"`
+	Comment         string   `yaml:"comment,omitempty" json:"comment,omitempty"`
+}
+
+// DefaultWindowList is the cluster default as configured; nil on a nil block.
+func (m *KeeperMaintenance) DefaultWindowList() []KeeperMaintenanceWindow {
+	if m == nil {
+		return nil
+	}
+	return m.DefaultWindows
 }
 
 // ResolvedWindowRetention is the effective window retention; 0 means never

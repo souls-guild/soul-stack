@@ -17,6 +17,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -144,12 +145,27 @@ type SettingUpdateReply struct {
 func (r SettingUpdateReply) AuditPayload() middleware.AuditPayload {
 	p := middleware.AuditPayload{"key": r.Key}
 	if r.Value != nil {
-		p["value"] = r.Value
+		p["value"] = auditValue(r.Value)
 	}
 	if r.Previous != nil {
-		p["previous"] = r.Previous
+		p["previous"] = auditValue(r.Previous)
 	}
 	return p
+}
+
+// auditValue is v as the trail records it: a structural value (NIM-1138) as the
+// structure, since the audit pipeline copies a string-kinded value as the bare
+// string and would record the list's JSON text as one string.
+func auditValue(v any) any {
+	j, ok := v.(config.OverlayJSON)
+	if !ok {
+		return v
+	}
+	var out any
+	if err := json.Unmarshal([]byte(j), &out); err != nil {
+		return string(j)
+	}
+	return out
 }
 
 // PutTyped — PUT /v1/settings/{key} (WRITE+AUDIT): validate through the field

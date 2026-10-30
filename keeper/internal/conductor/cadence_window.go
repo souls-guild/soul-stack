@@ -29,13 +29,14 @@ type noWindow struct {
 // moment at all, which the claim would answer by failing the row.
 //
 // incarnations are row's targets (cadence.BuildVoyage marshals them into
-// TargetResolved), so the rules are loaded once for the gate and the skip.
-func spawnStart(ctx context.Context, db voyage.ExecQueryRower, row *voyage.Voyage, incarnations []string, now time.Time) (time.Time, *noWindow, error) {
-	rules, err := maintenance.LoadRules(ctx, db, incarnations)
+// TargetResolved), so the rules are loaded once for the gate and the skip. gate
+// carries the cluster default the claim's gate carries.
+func spawnStart(ctx context.Context, gate voyage.MaintenanceGate, db voyage.ExecQueryRower, row *voyage.Voyage, incarnations []string, now time.Time) (time.Time, *noWindow, error) {
+	rules, err := gate.LoadRules(ctx, db, incarnations)
 	if err != nil {
 		return time.Time{}, nil, err
 	}
-	verdict := voyage.MaintenanceGate{}.DecideRules(rules, incarnations, row, now)
+	verdict := gate.DecideRules(rules, incarnations, row, now)
 	if !verdict.NoStart {
 		return verdict.DeferTo, nil, nil
 	}

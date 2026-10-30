@@ -29,33 +29,32 @@ import (
 )
 
 // MaintenanceWindowsView is the domain result of GET .../maintenance-windows:
-// the windows and what the calculator says about them now.
+// the windows, the cluster default when it applies (NIM-1138), and what the
+// calculator says about the windows in effect now.
 type MaintenanceWindowsView struct {
-	Windows []maintenance.Window
-	Status  maintenance.Status
+	Windows  []maintenance.Window
+	Defaults []maintenance.Window
+	Status   maintenance.Status
 }
 
 // ListMaintenanceWindowsTyped — GET /v1/incarnations/{id}/maintenance-windows
-// (READ). The status block is computed over the windows AND the freezes, so a
-// freeze in force shows as `open_now: false` with its end as `next_start`.
+// (READ). The status block is computed over the windows in effect AND the
+// freezes, so a freeze in force shows as `open_now: false` with its end as
+// `next_start`.
 func (h *IncarnationHandler) ListMaintenanceWindowsTyped(ctx context.Context, name string) (MaintenanceWindowsView, error) {
 	var zero MaintenanceWindowsView
 	if err := h.loadIncarnationForMaintenance(ctx, name, "list-maintenance-windows"); err != nil {
 		return zero, err
 	}
-	windows, err := maintenance.ListWindows(ctx, h.db, name)
+	rules, err := maintenance.LoadRulesOf(ctx, h.db, name, h.maintenanceDefaults)
 	if err != nil {
 		return zero, h.maintenanceInternal("list-maintenance-windows", name, err)
 	}
-	freezes, err := maintenance.ListFreezes(ctx, h.db, name)
+	status, err := rules.Status(time.Now())
 	if err != nil {
 		return zero, h.maintenanceInternal("list-maintenance-windows", name, err)
 	}
-	calc, err := maintenance.NewCalculator(windows, freezes)
-	if err != nil {
-		return zero, h.maintenanceInternal("list-maintenance-windows", name, err)
-	}
-	return MaintenanceWindowsView{Windows: windows, Status: calc.Status(time.Now())}, nil
+	return MaintenanceWindowsView{Windows: rules.Windows, Defaults: rules.DefaultsInEffect(), Status: status}, nil
 }
 
 // CreateMaintenanceWindowTyped — POST /v1/incarnations/{id}/maintenance-windows

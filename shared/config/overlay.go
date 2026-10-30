@@ -38,12 +38,28 @@ import (
 // precisely where the cluster value applies: a path the file DOES set keeps its
 // local value (ADR-0073(b), amended — the file wins).
 //
-// Value must be a comparable scalar (ADR-0073(j.3) — structural values are
-// deferred): the idempotence guard compares entries by ==.
+// Value must be comparable: the idempotence guard compares entries by ==. It is
+// a scalar, or an [OverlayJSON] for the one structural key admitted
+// (ADR-0073(j.3), amended by NIM-1138).
 type OverlayEntry struct {
 	Path  string
 	Value any
 }
+
+// OverlayJSON is an overlay value that is not a scalar — the cluster default
+// maintenance windows (NIM-1138) — held as its canonical JSON text. Being a
+// string, it keeps an [OverlayEntry] comparable; the merge places the structure
+// the text spells (JSON is YAML flow syntax), and JSON output renders it as that
+// structure rather than as a string. Its text must be valid JSON: the settings
+// field registry produces it from a parsed value.
+type OverlayJSON string
+
+// MarshalYAML implements yaml.BytesMarshaler: the merge inserts the structure.
+func (j OverlayJSON) MarshalYAML() ([]byte, error) { return []byte(j), nil }
+
+// MarshalJSON implements json.Marshaler: the catalog and the audit payload show
+// the list, not its text.
+func (j OverlayJSON) MarshalJSON() ([]byte, error) { return []byte(j), nil }
 
 // OverlaySource is the injected supplier of overrides. Called on the reload
 // path, so implementations must be non-blocking (serve an in-memory snapshot,

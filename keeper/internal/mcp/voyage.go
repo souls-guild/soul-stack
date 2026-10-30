@@ -41,7 +41,7 @@ func (h *Handler) ensureVoyageHandler() *handlers.VoyageHandler {
 		h.deps.VoyageCommandResolver == nil {
 		return nil
 	}
-	return handlers.NewVoyageHandler(
+	vh := handlers.NewVoyageHandler(
 		h.deps.VoyageDB,
 		h.deps.VoyageScenarioResolver,
 		h.deps.VoyageCommandResolver,
@@ -59,6 +59,10 @@ func (h *Handler) ensureVoyageHandler() *handlers.VoyageHandler {
 		h.deps.VoyageMaxBatchSize,
 		h.deps.Logger,
 	)
+	// The start gate of a scenario Voyage applies the cluster default windows
+	// (NIM-1138), as the REST server's handler does.
+	vh.SetMaintenanceDefaults(h.deps.MaintenanceDefaults)
+	return vh
 }
 
 // callVoyageStart — keeper.voyage.start (POST /v1/voyages). RBAC-by-kind is
