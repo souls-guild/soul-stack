@@ -5,6 +5,8 @@
   "appearanceLangTitle": "Язык",
   "appearanceThemeDesc": "Выберите тему оформления. Выбор сохраняется между сессиями.",
   "appearanceThemeTitle": "Тема",
+  "appearanceTzDesc": "В этом поясе показываются и вводятся тех. окна, фризы и запланированные запуски. Выбор сохраняется в этом браузере.",
+  "appearanceTzTitle": "Часовой пояс",
   "archonCreatedVia": "Создан через",
   "archonNewJwtAria": "Новый JWT",
   "archonSelectedRolesAria": "выбранные роли",
