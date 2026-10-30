@@ -216,7 +216,7 @@ func marshalGeneric(ev TollEvent) ([]byte, error) {
 		"baseline_connected": ev.BaselineConnected,
 		"threshold":          ev.Threshold,
 		"window_seconds":     ev.WindowSeconds,
-		"timestamp":          ev.Timestamp.Format(time.RFC3339),
+		"timestamp":          ev.Timestamp.UTC().Format(time.RFC3339),
 	}
 	if ev.CovenName != "" {
 		body["coven_name"] = ev.CovenName
@@ -263,7 +263,7 @@ func marshalPagerDuty(ev TollEvent, vaultKV map[string]any) ([]byte, error) {
 			"summary":        summary,
 			"source":         ev.LeaderKID,
 			"severity":       severity,
-			"timestamp":      ev.Timestamp.Format(time.RFC3339),
+			"timestamp":      ev.Timestamp.UTC().Format(time.RFC3339),
 			"component":      "toll",
 			"group":          "soul-stack",
 			"class":          "cluster-availability",

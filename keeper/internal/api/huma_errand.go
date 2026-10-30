@@ -13,7 +13,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -64,13 +63,13 @@ func registerHumaErrandGet(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 			return nil, errandProblem(err)
 		}
 		if reply.Running {
-			body, merr := json.Marshal(newErrandAccepted(reply.Accepted))
+			body, merr := marshalWireBody(newErrandAccepted(reply.Accepted))
 			if merr != nil {
 				return nil, errandProblem(merr)
 			}
 			return &errandGetOutput{Status: 202, Body: body}, nil
 		}
-		body, merr := json.Marshal(newErrandResult(reply.Result))
+		body, merr := marshalWireBody(newErrandResult(reply.Result))
 		if merr != nil {
 			return nil, errandProblem(merr)
 		}

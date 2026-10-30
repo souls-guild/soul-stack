@@ -14,7 +14,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -183,7 +182,7 @@ func registerHumaSoulExec(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 			// 202 body — native ErrandAccepted (errand domain): the handler-view WITHOUT json tags
 			// cannot be marshaled directly (it would produce UpperCamel keys). The projection is byte-exact
 			// with the previous ErrandAccepted (errand_id/status).
-			body, merr := json.Marshal(newErrandAccepted(reply.Accepted))
+			body, merr := marshalWireBody(newErrandAccepted(reply.Accepted))
 			if merr != nil {
 				return nil, soulProblem(merr)
 			}
@@ -191,7 +190,7 @@ func registerHumaSoulExec(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 		}
 		// 200 body — native ErrandResult (errand domain): see above (the view → native
 		// wire-DTO projection gives byte-exact json tags/omitempty/field order).
-		body, merr := json.Marshal(newErrandResult(reply.Result))
+		body, merr := marshalWireBody(newErrandResult(reply.Result))
 		if merr != nil {
 			return nil, soulProblem(merr)
 		}

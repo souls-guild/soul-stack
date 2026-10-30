@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/wiretime"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/maintenance"
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
@@ -200,14 +201,14 @@ type DeferredRun struct {
 func InsertDeferredRun(ctx context.Context, db incarnation.TxBeginner, incID, scenarioName string, input map[string]any, aid string, scheduleAt time.Time) (DeferredRun, error) {
 	var inputJSON []byte
 	if input != nil {
-		b, err := json.Marshal(input)
+		b, err := json.Marshal(wiretime.UTC(input))
 		if err != nil {
 			return DeferredRun{}, fmt.Errorf("deferred run: marshal input: %w", err)
 		}
 		inputJSON = b
 	}
 	resolved, _ := json.Marshal([]string{incID})
-	origin, _ := json.Marshal(voyageTargetRequest{Incarnations: []string{incID}})
+	origin, _ := json.Marshal(wiretime.UTC(voyageTargetRequest{Incarnations: []string{incID}}))
 	at := scheduleAt.UTC()
 	one := 1
 	row := &voyage.Voyage{
@@ -297,7 +298,7 @@ func freezeActiveDetail(frozen []FrozenIncarnation, act string) string {
 		if rest := len(names) - len(shown); rest > 0 {
 			s += " and " + strconv.Itoa(rest) + " more"
 		}
-		s += " frozen until " + k.end.Format(time.RFC3339)
+		s += " frozen until " + k.end.UTC().Format(time.RFC3339)
 		if k.comment != "" {
 			s += " (" + strconv.Quote(k.comment) + ")"
 		}

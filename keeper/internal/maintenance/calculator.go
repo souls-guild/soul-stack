@@ -71,7 +71,7 @@ func NewCalculator(windows []Window, freezes []Freeze) (*Calculator, error) {
 				c.onceUntil = spec.EndsAt
 			}
 			c.texts = append(c.texts, windowText{
-				text:  fmt.Sprintf("once %s for %s", spec.StartsAt.Format(time.RFC3339), formatSpan(spec.EndsAt.Sub(spec.StartsAt))),
+				text:  fmt.Sprintf("once %s for %s", spec.StartsAt.UTC().Format(time.RFC3339), formatSpan(spec.EndsAt.Sub(spec.StartsAt))),
 				until: spec.EndsAt,
 			})
 			continue

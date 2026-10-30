@@ -118,7 +118,7 @@ func WriteUtilization(ctx context.Context, c *Client, sid string, ev *keeperv1.H
 	collectedStr := ""
 	if ca := ev.GetCollectedAt(); ca != nil {
 		collected = ca.AsTime().UTC()
-		collectedStr = collected.Format(time.RFC3339Nano)
+		collectedStr = ca.AsTime().UTC().Format(time.RFC3339Nano)
 	}
 
 	disksJSON, err := json.Marshal(disksFromProto(ev.GetDisks()))

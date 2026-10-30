@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/wiretime"
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -298,7 +299,7 @@ func buildMCPHandler(deps ServerDeps) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
+		if err := json.NewEncoder(w).Encode(wiretime.UTC(resp)); err != nil {
 			deps.Logger.Warn("mcp: encode response failed", slog.Any("error", err))
 		}
 	}
@@ -332,7 +333,7 @@ func writeRPCErrorHTTP(w http.ResponseWriter, status int, id json.RawMessage, co
 	resp := newRPCError(id, code, message, data)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(wiretime.UTC(resp))
 }
 
 // isJSONArray — true if the first non-whitespace byte is `[`. Used to

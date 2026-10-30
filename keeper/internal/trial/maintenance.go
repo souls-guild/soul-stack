@@ -33,9 +33,9 @@ func (f Fixtures) maintenanceWindow() (*render.MaintenanceWindow, error) {
 	}
 	switch {
 	case mw.Open && !mw.NextStart.Equal(trialInstant):
-		return nil, fmt.Errorf("fixtures.maintenance_window: an open window starts now - next_start is the L0 instant %s; leave it out", trialInstant.Format(time.RFC3339))
+		return nil, fmt.Errorf("fixtures.maintenance_window: an open window starts now - next_start is the L0 instant %s; leave it out", trialInstant.UTC().Format(time.RFC3339))
 	case !mw.Open && !mw.NextStart.After(trialInstant):
-		return nil, fmt.Errorf("fixtures.maintenance_window: a closed window starts later - next_start must be after the L0 instant %s", trialInstant.Format(time.RFC3339))
+		return nil, fmt.Errorf("fixtures.maintenance_window: a closed window starts later - next_start must be after the L0 instant %s", trialInstant.UTC().Format(time.RFC3339))
 	}
 	return &mw, nil
 }

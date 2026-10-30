@@ -1098,6 +1098,19 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Fixed
 
+- **Every instant in a REST or MCP answer is RFC 3339 in UTC, whatever zone the Keeper runs in
+  (NIM-1160).** On a Keeper host outside UTC, the times read from Postgres or taken from the clock
+  were answered with the host's offset — `"schedule_at": "2026-10-30T14:00:00-03:00"` on a Voyage,
+  `next_run_at` on a Cadence — while the maintenance windows answered `next_start` in UTC, and a
+  time a client sent was echoed with the client's offset. The instant was right; only its spelling
+  depended on the machine, so a client comparing strings got different answers from different
+  Keepers. Every encoder of the REST API, the MCP server and their event streams now moves each
+  instant to UTC before writing it (`"2026-10-30T17:00:00Z"`), as the
+  [API conventions](docs/keeper/operator-api.md) already stated. Times the Keeper writes as text are
+  UTC too: `schedule_at` and `expires_at` in audit payloads, a one-off window's text, the end of a
+  freeze in a refusal. Audit entries written before keep the offset they were written with; log
+  lines are unchanged. The leak predates the maintenance windows.
+
 - **A role scoped by `incarnation=` / `service=` / `coven=` passes the gates of incarnation routes
   (NIM-1087).** The REST gate's scope selector read the path parameter `name`, while every route
   under `/v1/incarnations` declares `{id}` (ADR-0085). The selector therefore got an empty value on

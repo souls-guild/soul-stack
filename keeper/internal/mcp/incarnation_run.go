@@ -194,7 +194,7 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 			"id":          a.ID,
 			"scenario":    a.Scenario,
 			"voyage_id":   d.VoyageID,
-			"schedule_at": d.ScheduleAt.Format(time.RFC3339),
+			"schedule_at": d.ScheduleAt.UTC().Format(time.RFC3339),
 		}
 		gate.AuditPayload(payload)
 		h.writeAudit(ctx, audit.EventIncarnationScenarioStarted, claims.Subject, payload)

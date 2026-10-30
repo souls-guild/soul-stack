@@ -492,7 +492,7 @@ type OperatorIssueTokenReply struct {
 func (r OperatorIssueTokenReply) AuditPayload() middleware.AuditPayload {
 	p := middleware.AuditPayload{
 		"aid":        r.AID,
-		"expires_at": r.ExpiresAt.Format(time.RFC3339),
+		"expires_at": r.ExpiresAt.UTC().Format(time.RFC3339),
 		"jwt_id":     r.JWTID,
 		"kind":       string(r.Kind),
 		"ttl":        r.TTL.String(),

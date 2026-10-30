@@ -14,6 +14,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/wiretime"
 	"github.com/souls-guild/soul-stack/keeper/internal/console"
 	keepergrpc "github.com/souls-guild/soul-stack/keeper/internal/grpc"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
@@ -804,12 +805,12 @@ func (c *consoleConn) reportWriteFailure(msg string, err error) {
 // the gap once there is room, not to compete with live output.
 func (c *consoleConn) flushDropped() {
 	for _, pending := range c.takePendingDrops() {
-		payload, err := json.Marshal(console.ChunkFrame{
+		payload, err := json.Marshal(wiretime.UTC(console.ChunkFrame{
 			Type:         console.TypeChunk,
 			SessionID:    pending.clientID,
 			Stream:       "stdout",
 			DroppedBytes: pending.bytes,
-		})
+		}))
 		if err != nil {
 			continue
 		}
@@ -1027,7 +1028,7 @@ func (c *consoleConn) DeliverChunk(sessionID string, stream keeperv1.ConsoleStre
 	counter := c.droppedCounter(sessionID)
 	pending := counter.Swap(0) + soulDropped
 
-	payload, err := json.Marshal(console.NewChunk(sessionID, stream, data, pending))
+	payload, err := json.Marshal(wiretime.UTC(console.NewChunk(sessionID, stream, data, pending)))
 	if err != nil {
 		c.logger.Warn("console: chunk marshal failed", slog.Any("error", err))
 		return
@@ -1072,7 +1073,7 @@ func (c *consoleConn) DeliverError(f console.ErrorFrame)   { c.sendControl(f) }
 // reading entirely, and a control frame cannot be dropped without stranding the
 // UI — so the socket is closed and every session behind it reaped.
 func (c *consoleConn) sendControl(frame any) {
-	payload, err := json.Marshal(frame)
+	payload, err := json.Marshal(wiretime.UTC(frame))
 	if err != nil {
 		c.logger.Warn("console: control frame marshal failed", slog.Any("error", err))
 		return

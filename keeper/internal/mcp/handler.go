@@ -11,6 +11,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/wiretime"
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
 	"github.com/souls-guild/soul-stack/keeper/internal/console"
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
@@ -356,7 +357,7 @@ func (h *Handler) handleInitialize(req jsonRPCRequest) (jsonRPCResponse, bool) {
 		ServerInfo:      serverInfo{Name: serverInfoName, Version: serverInfoVersion},
 		Capabilities:    initializeCapabilities{Tools: toolsCapability{ListChanged: false}},
 	}
-	raw, err := json.Marshal(res)
+	raw, err := json.Marshal(wiretime.UTC(res))
 	if err != nil {
 		h.deps.Logger.Error("mcp: initialize marshal failed", slog.Any("error", err))
 		return newRPCError(req.ID, rpcCodeInternalError, "initialize marshal failed", nil), false
@@ -382,7 +383,7 @@ type toolsListResult struct {
 
 func (h *Handler) handleToolsList(req jsonRPCRequest) (jsonRPCResponse, bool) {
 	res := toolsListResult{Tools: listTools(h.consolePlaneEnabled())}
-	raw, err := json.Marshal(res)
+	raw, err := json.Marshal(wiretime.UTC(res))
 	if err != nil {
 		h.deps.Logger.Error("mcp: tools/list marshal failed", slog.Any("error", err))
 		return newRPCError(req.ID, rpcCodeInternalError, "tools/list marshal failed", nil), false
@@ -1331,9 +1332,10 @@ func (h *Handler) callOperatorSetOwner(ctx context.Context, claims *jwt.Claims, 
 
 // toolResult serializes typed output into the MCP-spec `toolsCallResult`
 // (structuredContent + text representation in content[0].text for legacy
-// clients that don't read structuredContent).
+// clients that don't read structuredContent). Every instant in out is moved to
+// UTC first (NIM-1160).
 func (h *Handler) toolResult(id json.RawMessage, out any) jsonRPCResponse {
-	raw, err := json.Marshal(out)
+	raw, err := json.Marshal(wiretime.UTC(out))
 	if err != nil {
 		h.deps.Logger.Error("mcp: tool result marshal failed", slog.Any("error", err))
 		return newRPCError(id, rpcCodeInternalError, "tool result marshal failed", nil)
@@ -1344,7 +1346,7 @@ func (h *Handler) toolResult(id json.RawMessage, out any) jsonRPCResponse {
 		},
 		StructuredContent: raw,
 	}
-	resRaw, err := json.Marshal(res)
+	resRaw, err := json.Marshal(wiretime.UTC(res))
 	if err != nil {
 		h.deps.Logger.Error("mcp: tools/call result marshal failed", slog.Any("error", err))
 		return newRPCError(id, rpcCodeInternalError, "tools/call result marshal failed", nil)

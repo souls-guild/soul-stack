@@ -15,6 +15,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/wiretime"
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
@@ -1124,11 +1125,11 @@ func (h *VoyageHandler) buildVoyageRow(
 	effBatchSize *int,
 ) *voyage.Voyage {
 	resolvedJSON, _ := json.Marshal(resolved) // []string always serializes
-	originJSON, _ := json.Marshal(req.Target)
+	originJSON, _ := json.Marshal(wiretime.UTC(req.Target))
 
 	var inputJSON []byte
 	if req.Input != nil {
-		inputJSON, _ = json.Marshal(req.Input)
+		inputJSON, _ = json.Marshal(wiretime.UTC(req.Input))
 	}
 
 	row := &voyage.Voyage{

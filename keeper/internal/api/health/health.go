@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/api/wiretime"
 )
 
 // perCheckTimeout is a hard per-dependency timeout for the ping operation.
@@ -170,5 +172,5 @@ func Check(ctx context.Context, deps Deps) (map[string]string, bool) {
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	_ = json.NewEncoder(w).Encode(wiretime.UTC(body))
 }

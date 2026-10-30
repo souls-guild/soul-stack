@@ -470,7 +470,7 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 			"id":          name,
 			"scenario":    scenarioName,
 			"voyage_id":   d.VoyageID,
-			"schedule_at": d.ScheduleAt.Format(time.RFC3339),
+			"schedule_at": d.ScheduleAt.UTC().Format(time.RFC3339),
 		}
 		g.AuditPayload(payload)
 		return IncarnationRunReply{

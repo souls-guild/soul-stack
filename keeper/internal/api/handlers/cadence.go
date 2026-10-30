@@ -16,6 +16,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/wiretime"
 	"github.com/souls-guild/soul-stack/keeper/internal/cadence"
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
@@ -601,10 +602,10 @@ func (h *CadenceHandler) buildCadence(req *cadenceCreateRequest, id, createdByAI
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	targetJSON, _ := json.Marshal(req.Target)
+	targetJSON, _ := json.Marshal(wiretime.UTC(req.Target))
 	var inputJSON []byte
 	if req.Input != nil {
-		inputJSON, _ = json.Marshal(req.Input)
+		inputJSON, _ = json.Marshal(wiretime.UTC(req.Input))
 	}
 
 	c := &cadence.Cadence{
@@ -1378,11 +1379,11 @@ func applyCadencePatch(c *cadence.Cadence, req *cadencePatchRequest) {
 		}
 	}
 	if req.Input != nil {
-		inputJSON, _ := json.Marshal(req.Input)
+		inputJSON, _ := json.Marshal(wiretime.UTC(req.Input))
 		c.Input = inputJSON
 	}
 	if req.Target != nil {
-		targetJSON, _ := json.Marshal(req.Target)
+		targetJSON, _ := json.Marshal(wiretime.UTC(req.Target))
 		c.Target = targetJSON
 	}
 	// batch_size / batch_percent — a mutually exclusive pair. A PATCH of one format

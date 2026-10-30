@@ -38,6 +38,7 @@ import (
 
 	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/wiretime"
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
@@ -347,7 +348,7 @@ func streamRunEvents(hctx huma.Context, deps *runEventsDeps, applyID, aid string
 // masking (H1, the second barrier). A narrow duplicate of mcp writeSSEEvent — /mcp/events is not touched.
 func writeRunEventFrame(w io.Writer, ev applybus.Event) error {
 	masked := maskRunEventPayload(ev.Payload)
-	payloadJSON, err := json.Marshal(masked)
+	payloadJSON, err := json.Marshal(wiretime.UTC(masked))
 	if err != nil {
 		return fmt.Errorf("marshal payload: %w", err)
 	}

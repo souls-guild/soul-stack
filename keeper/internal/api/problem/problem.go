@@ -15,6 +15,8 @@ package problem
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/api/wiretime"
 )
 
 // ContentType — RFC 7807 §3 media type for problem responses.
@@ -320,7 +322,7 @@ func Write(w http.ResponseWriter, p Details) {
 	// json.NewEncoder will not return an error for a well-typed struct; if
 	// the transport write fails (client disconnected) — that's already
 	// after WriteHeader, there's nowhere to log the error. Ignored deliberately.
-	_ = json.NewEncoder(w).Encode(p)
+	_ = json.NewEncoder(w).Encode(wiretime.UTC(p))
 }
 
 // New assembles Details from a type URN and a detail message. Title and status

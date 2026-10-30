@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/wiretime"
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
@@ -434,7 +435,7 @@ func sseStillAuthorized(deps sseDeps, sub string, g sseGrant) bool {
 // result, so SSE's "no multiline data" requirement holds automatically).
 func writeSSEEvent(w http.ResponseWriter, ev applybus.Event) error {
 	masked := maskSSEPayload(ev.Payload)
-	payloadJSON, err := json.Marshal(masked)
+	payloadJSON, err := json.Marshal(wiretime.UTC(masked))
 	if err != nil {
 		return fmt.Errorf("marshal payload: %w", err)
 	}

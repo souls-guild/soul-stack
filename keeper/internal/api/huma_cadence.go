@@ -50,6 +50,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
@@ -61,6 +62,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/wiretime"
 )
 
 // humaProblemError overrides huma.NewError to our RFC 7807 problem+json.
@@ -523,6 +525,7 @@ func newHumaCadenceAPI(r chi.Router) huma.API {
 	// also removes the other default hooks (we don't need them — huma doesn't
 	// mount spec/docs).
 	cfg.CreateHooks = nil
+	cfg.Formats = wireJSONFormats()
 	api := humachi.New(r, cfg)
 	// INCARNATION (handler-native T5d): enum IncarnationStatus is a native
 	// SchemaProvider type (huma_enums.go/huma_incarnation_status.go), carried
@@ -574,6 +577,26 @@ func newHumaCadenceAPI(r chi.Router) huma.API {
 	return api
 }
 
+// wireJSONFormats is huma's JSON format with every instant moved to UTC before
+// it is encoded (NIM-1160). A fresh map: cfg.Formats arrives as huma's
+// package-level DefaultFormats, which must not be written to.
+func wireJSONFormats() map[string]huma.Format {
+	f := huma.Format{
+		Marshal: func(w io.Writer, v any) error {
+			return huma.DefaultJSONFormat.Marshal(w, wiretime.UTC(v))
+		},
+		Unmarshal: huma.DefaultJSONFormat.Unmarshal,
+	}
+	return map[string]huma.Format{"application/json": f, "json": f}
+}
+
+// marshalWireBody encodes a body that is handed to huma already encoded (a
+// json.RawMessage), which huma's format never looks inside — so the instants
+// in it are moved to UTC here instead.
+func marshalWireBody(v any) (json.RawMessage, error) {
+	return json.Marshal(wiretime.UTC(v))
+}
+
 // HumaCadenceSpecYAML assembles the OpenAPI fragment of the cadence routes
 // migrated to huma (pilot-1 — createCadence only) as a YAML string, WITHOUT
 // mounting on the real router. A hook for the rollout's spec-merge target and
@@ -604,6 +627,6 @@ func marshalAnnotations(m map[string]any) []byte {
 		return nil
 	}
 	// Safe: map[string]any always serializes; an error is impossible.
-	b, _ := json.Marshal(m)
+	b, _ := json.Marshal(wiretime.UTC(m))
 	return b
 }

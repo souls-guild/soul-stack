@@ -606,7 +606,7 @@ func (r *CertRotator) emitRotated(ctx context.Context, c dueCert, m *certissue.M
 			"voyage_id":          voyageID,
 			"fingerprint":        m.Fingerprint,
 			"serial_number":      m.SerialNumber,
-			"not_after":          m.NotAfter.Format(time.RFC3339),
+			"not_after":          m.NotAfter.UTC().Format(time.RFC3339),
 			"superseded_cert_id": c.certID,
 			"superseded_serial":  c.serialNumber,
 		},
