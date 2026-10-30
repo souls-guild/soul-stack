@@ -22,7 +22,8 @@ import (
 func maintenanceRows(windows []maintenance.Window, freezes []maintenance.Freeze) pgx.Rows {
 	var rows [][]any
 	for _, w := range windows {
-		rows = append(rows, []any{w.ID, w.IncarnationID, w.Days, w.StartTime, w.DurationMinutes, w.Timezone, w.Comment, time.Now(), time.Now()})
+		rows = append(rows, []any{w.ID, w.IncarnationID, w.Kind, w.Days, w.StartTime, w.DurationMinutes, w.Timezone,
+			(*time.Time)(nil), (*time.Time)(nil), w.Comment, time.Now(), time.Now()})
 	}
 	for _, f := range freezes {
 		rows = append(rows, []any{f.ID, f.IncarnationID, f.StartsAt, f.EndsAt, f.Comment, time.Now(), time.Now()})

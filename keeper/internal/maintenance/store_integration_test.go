@@ -265,11 +265,150 @@ func TestIntegration_LoadCompilesTheStoredRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := c.Text(); got != "sat 23:00 for 4h (UTC)" {
-		t.Errorf("Text() = %q", got)
+	if got := c.Text(freezeStart); got != "sat 23:00 for 4h (UTC)" {
+		t.Errorf("Text = %q", got)
 	}
 	// Saturday 2026-11-07's slot is frozen until 01:00 Sunday, then open.
 	if got := c.NextStart(time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)); !got.Equal(time.Date(2026, 11, 8, 1, 0, 0, 0, time.UTC)) {
 		t.Errorf("NextStart = %s, want 2026-11-08T01:00:00Z", got)
+	}
+}
+
+func TestIntegration_OnceWindowRoundTrip(t *testing.T) {
+	seedIncarnations(t, "redis-prod")
+	ctx := context.Background()
+	start := time.Date(2026, 12, 10, 1, 0, 0, 0, time.FixedZone("MSK", 3*3600))
+
+	w, err := InsertWindow(ctx, integrationPool, "redis-prod", WindowSpec{
+		Kind: KindOnce, StartsAt: start, EndsAt: start.Add(3 * time.Hour), Comment: "hotfix",
+	})
+	if err != nil {
+		t.Fatalf("InsertWindow once: %v", err)
+	}
+	if w.Kind != KindOnce || !w.StartsAt.Equal(start) || w.StartsAt.Location() != time.UTC ||
+		!w.EndsAt.Equal(start.Add(3*time.Hour)) || w.Days != nil || w.StartTime != "" || w.Timezone != "" || w.DurationMinutes != 0 {
+		t.Fatalf("inserted once window = %+v, want its bounds in UTC and no weekly field", w)
+	}
+	list, err := ListWindows(ctx, integrationPool, "redis-prod")
+	if err != nil || len(list) != 1 || !reflect.DeepEqual(list[0], w) {
+		t.Fatalf("ListWindows = %+v, %v; want exactly the inserted row", list, err)
+	}
+
+	// A PUT replaces the kind too: once -> weekly nulls the bounds, and back.
+	before, after, err := UpdateWindow(ctx, integrationPool, "redis-prod", w.ID, WindowSpec{
+		Days: []string{"mon"}, StartTime: "02:00", DurationMinutes: 60, Timezone: "UTC",
+	})
+	if err != nil || !reflect.DeepEqual(before, w) || after.Kind != KindWeekly || !after.StartsAt.IsZero() || !after.EndsAt.IsZero() {
+		t.Fatalf("UpdateWindow once -> weekly = %+v -> %+v, %v", before, after, err)
+	}
+	_, back, err := UpdateWindow(ctx, integrationPool, "redis-prod", w.ID, WindowSpec{
+		Kind: KindOnce, StartsAt: start, EndsAt: start.Add(time.Hour),
+	})
+	if err != nil || back.Kind != KindOnce || back.Days != nil || back.Timezone != "" || !back.EndsAt.Equal(start.Add(time.Hour)) {
+		t.Fatalf("UpdateWindow weekly -> once = %+v, %v", back, err)
+	}
+
+	c, err := Load(ctx, integrationPool, "redis-prod")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.OpenAt(start.Add(-time.Minute)) || !c.OpenAt(start) || !c.NextStart(start.Add(-time.Hour)).Equal(start) {
+		t.Errorf("the stored once window does not gate the start: closed before starts_at, open from it")
+	}
+}
+
+// TestIntegration_KindColumnsCheck writes around Normalize: each kind carries
+// exactly its own columns.
+func TestIntegration_KindColumnsCheck(t *testing.T) {
+	seedIncarnations(t, "redis-prod")
+	ctx := context.Background()
+	bad := map[string]string{
+		"once with days":     `INSERT INTO incarnation_maintenance_windows (incarnation_id, kind, days, starts_at, ends_at) VALUES ('redis-prod', 'once', '{mon}', '2026-12-10T00:00:00Z', '2026-12-10T01:00:00Z')`,
+		"once without end":   `INSERT INTO incarnation_maintenance_windows (incarnation_id, kind, starts_at) VALUES ('redis-prod', 'once', '2026-12-10T00:00:00Z')`,
+		"once empty":         `INSERT INTO incarnation_maintenance_windows (incarnation_id, kind, starts_at, ends_at) VALUES ('redis-prod', 'once', '2026-12-10T00:00:00Z', '2026-12-10T00:00:00Z')`,
+		"weekly with bounds": `INSERT INTO incarnation_maintenance_windows (incarnation_id, days, start_time, duration_minutes, timezone, starts_at, ends_at) VALUES ('redis-prod', '{mon}', '02:00', 60, 'UTC', '2026-12-10T00:00:00Z', '2026-12-10T01:00:00Z')`,
+		"weekly without tz":  `INSERT INTO incarnation_maintenance_windows (incarnation_id, days, start_time, duration_minutes) VALUES ('redis-prod', '{mon}', '02:00', 60)`,
+		"unknown kind":       `INSERT INTO incarnation_maintenance_windows (incarnation_id, kind, days, start_time, duration_minutes, timezone) VALUES ('redis-prod', 'daily', '{mon}', '02:00', 60, 'UTC')`,
+	}
+	for name, sql := range bad {
+		if _, err := integrationPool.Exec(ctx, sql); err == nil {
+			t.Errorf("%s: the table accepted a row the validation refuses", name)
+		}
+	}
+	if _, err := integrationPool.Exec(ctx, `INSERT INTO incarnation_maintenance_windows (incarnation_id, days, start_time, duration_minutes, timezone) VALUES ('redis-prod', '{mon}', '02:00', 60, 'UTC')`); err != nil {
+		t.Errorf("a row without kind (every row before migration 136) is refused: %v", err)
+	}
+}
+
+// TestIntegration_DeleteExpiredOnlyPastTheRetention is the guard of the
+// cleanup: a row goes only once its end is more than the retention in the past
+// by the database clock, a weekly window never, and the batch is bounded.
+func TestIntegration_DeleteExpiredOnlyPastTheRetention(t *testing.T) {
+	seedIncarnations(t, "redis-prod", "redis-stage")
+	ctx := context.Background()
+	var now time.Time
+	if err := integrationPool.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+		t.Fatalf("now: %v", err)
+	}
+	const retention = 72 * time.Hour
+	ago := func(d time.Duration) time.Time { return now.Add(-d) }
+	onceEnding := func(inc, comment string, end time.Time) {
+		t.Helper()
+		if _, err := InsertWindow(ctx, integrationPool, inc, WindowSpec{
+			Kind: KindOnce, StartsAt: end.Add(-time.Hour), EndsAt: end, Comment: comment,
+		}); err != nil {
+			t.Fatalf("InsertWindow %s: %v", comment, err)
+		}
+	}
+	onceEnding("redis-prod", "long gone", ago(retention+time.Hour))
+	onceEnding("redis-stage", "gone", ago(retention+time.Minute))
+	onceEnding("redis-prod", "ended, kept", ago(retention-time.Minute))
+	onceEnding("redis-prod", "just ended", ago(time.Minute))
+	onceEnding("redis-prod", "future", now.Add(time.Hour))
+	if _, err := InsertWindow(ctx, integrationPool, "redis-prod", WindowSpec{
+		Days: []string{"mon"}, StartTime: "02:00", DurationMinutes: 60, Timezone: "UTC", Comment: "weekly",
+	}); err != nil {
+		t.Fatalf("InsertWindow weekly: %v", err)
+	}
+
+	first, err := DeleteExpiredWindows(ctx, integrationPool, retention, 1)
+	if err != nil || len(first) != 1 || first[0].Comment != "long gone" || first[0].Kind != KindOnce {
+		t.Fatalf("first batch of 1 = %+v, %v; want the longest-ended window", first, err)
+	}
+	rest, err := DeleteExpiredWindows(ctx, integrationPool, retention, 100)
+	if err != nil || len(rest) != 1 || rest[0].Comment != "gone" || rest[0].IncarnationID != "redis-stage" {
+		t.Fatalf("second batch = %+v, %v; want only the other window past the retention", rest, err)
+	}
+	if again, err := DeleteExpiredWindows(ctx, integrationPool, retention, 100); err != nil || len(again) != 0 {
+		t.Fatalf("third batch = %+v, %v; want nothing left to delete", again, err)
+	}
+	left, _ := ListWindows(ctx, integrationPool, "redis-prod")
+	var kept []string
+	for _, w := range left {
+		kept = append(kept, w.Comment)
+	}
+	if want := []string{"ended, kept", "just ended", "future", "weekly"}; !reflect.DeepEqual(kept, want) {
+		t.Errorf("windows left = %v, want %v", kept, want)
+	}
+
+	freezeEnding := func(comment string, end time.Time) {
+		t.Helper()
+		if _, err := InsertFreeze(ctx, integrationPool, "redis-prod", FreezeSpec{StartsAt: end.Add(-time.Hour), EndsAt: end, Comment: comment}); err != nil {
+			t.Fatalf("InsertFreeze %s: %v", comment, err)
+		}
+	}
+	freezeEnding("gone", ago(retention+time.Minute))
+	freezeEnding("kept", ago(retention-time.Minute))
+	freezeEnding("active", now.Add(time.Hour))
+	gone, err := DeleteExpiredFreezes(ctx, integrationPool, retention, 100)
+	if err != nil || len(gone) != 1 || gone[0].Comment != "gone" {
+		t.Fatalf("DeleteExpiredFreezes = %+v, %v; want only the freeze past the retention", gone, err)
+	}
+	if freezes, _ := ListFreezes(ctx, integrationPool, "redis-prod"); len(freezes) != 2 {
+		t.Errorf("freezes left = %+v, want the two inside the retention", freezes)
+	}
+
+	if _, err := DeleteExpiredWindows(ctx, integrationPool, 0, 100); err == nil {
+		t.Error("DeleteExpiredWindows with retention 0 ran; 0 means never and the caller skips it")
 	}
 }

@@ -17,8 +17,8 @@ import (
 type MaintenanceCalculator interface {
 	OpenAt(t time.Time) bool
 	NextStart(t time.Time) time.Time
-	Text() string
-	HasWindows() bool
+	Text(t time.Time) string
+	HasWindows(t time.Time) bool
 }
 
 // MaintenanceWindow is the incarnation's maintenance window as one render pass reads
@@ -30,7 +30,8 @@ type MaintenanceCalculator interface {
 // value through its recipe rather than asking again.
 type MaintenanceWindow struct {
 	Open bool
-	// Text — the windows for a human, "" when there are none.
+	// Text — the windows that count at the pass's instant for a human, "" when
+	// there are none.
 	Text string
 	// NextStart — the first instant at or after the pass's at which a run may start:
 	// that instant itself when Open.
@@ -46,8 +47,8 @@ func MaintenanceAt(c MaintenanceCalculator, at time.Time) MaintenanceWindow {
 		return MaintenanceWindow{Open: true, NextStart: at}
 	}
 	mw := MaintenanceWindow{Open: c.OpenAt(at), NextStart: c.NextStart(at).UTC()}
-	if c.HasWindows() {
-		mw.Text = c.Text()
+	if c.HasWindows(at) {
+		mw.Text = c.Text(at)
 	}
 	return mw
 }

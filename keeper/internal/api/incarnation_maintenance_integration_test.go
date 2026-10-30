@@ -204,3 +204,73 @@ func TestIntegration_MaintenanceWindowsEndToEnd(t *testing.T) {
 		t.Errorf("freeze.deleted payload = %v, want the deleted freeze's fields", trail[3].payload)
 	}
 }
+
+// TestIntegration_OnceWindowsAndMixedBodies (NIM-1137): a once window lives in
+// the same list with only its own fields, a future one defers the status to its
+// start, one that has ended no longer counts, and a body mixing the two kinds is
+// 422 naming the field of the other kind.
+func TestIntegration_OnceWindowsAndMixedBodies(t *testing.T) {
+	truncateOperators(t)
+	seedOperator(t, maintWriter, "")
+	seedIncarnationFull(t, maintInc, "redis", maintWriter, nil, map[string]any{})
+	base, stop := startServer(t, &rbactest.Config{Roles: []rbactest.Role{
+		{Name: "maint-writer", Operators: []string{maintWriter}, Permissions: []string{"incarnation.get", "incarnation.maintenance-set"}},
+	}})
+	defer stop()
+	writer := newValidTokenFor(t, maintWriter, []string{"maint-writer"})
+	windows := base + "/v1/incarnations/" + maintInc + "/maintenance-windows"
+
+	now := time.Now().UTC().Truncate(time.Second)
+	for name, tc := range map[string]struct {
+		body  map[string]any
+		field string
+	}{
+		"once with days": {map[string]any{"kind": "once", "starts_at": now.Format(time.RFC3339),
+			"ends_at": now.Add(time.Hour).Format(time.RFC3339), "days": []string{"mon"}}, "'days'"},
+		"kind omitted with bounds": {map[string]any{"days": []string{"mon"}, "start_time": "02:00", "duration_minutes": 60,
+			"timezone": "UTC", "starts_at": now.Format(time.RFC3339)}, "'starts_at'"},
+		"once ending at its start": {map[string]any{"kind": "once", "starts_at": now.Format(time.RFC3339),
+			"ends_at": now.Format(time.RFC3339)}, "'ends_at'"},
+	} {
+		if code, body := maintDo(t, http.MethodPost, windows, writer, tc.body); code != http.StatusUnprocessableEntity ||
+			!bytes.Contains(body, []byte(tc.field)) {
+			t.Errorf("%s: %d %s, want 422 naming %s", name, code, body, tc.field)
+		}
+	}
+
+	past := map[string]any{"kind": "once", "starts_at": now.Add(-2 * time.Hour).Format(time.RFC3339),
+		"ends_at": now.Add(-time.Hour).Format(time.RFC3339), "comment": "done"}
+	if code, body := maintDo(t, http.MethodPost, windows, writer, past); code != http.StatusCreated {
+		t.Fatalf("POST past once window: %d %s", code, body)
+	}
+	var st maintStatusReply
+	_, body := maintDo(t, http.MethodGet, windows, writer, nil)
+	_ = json.Unmarshal(body, &st)
+	if len(st.Items) != 1 || !st.Status.OpenNow {
+		t.Fatalf("GET with only a past once window = %s, want it listed and open_now=true", body)
+	}
+
+	start := now.Add(2 * time.Hour)
+	code, body := maintDo(t, http.MethodPost, windows, writer, map[string]any{
+		"kind": "once", "starts_at": start.Format(time.RFC3339), "ends_at": start.Add(time.Hour).Format(time.RFC3339),
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("POST future once window: %d %s", code, body)
+	}
+	var created map[string]any
+	_ = json.Unmarshal(body, &created)
+	if created["kind"] != "once" || created["starts_at"] != start.Format(time.RFC3339) {
+		t.Errorf("created = %s, want kind once with starts_at", body)
+	}
+	for _, k := range []string{"days", "start_time", "duration_minutes", "timezone"} {
+		if _, ok := created[k]; ok {
+			t.Errorf("created once window carries the weekly field %q: %s", k, body)
+		}
+	}
+	st = maintStatusReply{}
+	_, body = maintDo(t, http.MethodGet, windows, writer, nil)
+	_ = json.Unmarshal(body, &st)
+	if len(st.Items) != 2 || st.Status.OpenNow || !st.Status.NextStart.Equal(start) {
+		t.Errorf("GET with a future once window = %s, want closed until %s", body, start.Format(time.RFC3339))
+	}
+}

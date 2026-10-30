@@ -292,7 +292,7 @@ Lists the incarnation's roster. Permission: `incarnation.get` (the roster needs 
 
 ### Maintenance windows and freezes (8)
 
-Parity with [`/v1/incarnations/{id}/maintenance-windows` and `/freezes`](../operator-api/incarnations.md) (NIM-1072); the semantics — what a window, a freeze and the status mean, DST, limits, audit — are there. Every tool takes the incarnation in `id` and checks it with the same body-scoped OR-Check over the incarnation's scope as the other incarnation tools: the `.list` tools ask `incarnation.get`, the rest `incarnation.maintenance-set`. Validation, storage and the audit payload are shared with REST. Async: **no**.
+Parity with [`/v1/incarnations/{id}/maintenance-windows` and `/freezes`](../operator-api/incarnations.md) (NIM-1072, NIM-1137); the semantics — what a window of each `kind`, a freeze and the status mean, DST, limits, the cleanup of past ones, audit — are there. The window tools take the same fields as the REST body (`kind`, the weekly fields or `starts_at`/`ends_at` as RFC 3339 strings), and a field of the other kind is `validation-failed` with the message REST gives with 422. Every tool takes the incarnation in `id` and checks it with the same body-scoped OR-Check over the incarnation's scope as the other incarnation tools: the `.list` tools ask `incarnation.get`, the rest `incarnation.maintenance-set`. Validation, storage and the audit payload are shared with REST. Async: **no**.
 
 #### `keeper.incarnation.maintenance-window.list`
 

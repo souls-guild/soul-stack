@@ -315,6 +315,11 @@ type Deps struct {
 	// requires live Redis). Production wire-up passes
 	// [*OrphanApplyingReconciler] from [NewOrphanApplyingReconciler].
 	OrphanApplying *OrphanApplyingReconciler
+
+	// ExpiredMaintenance deletes one-off maintenance windows and freezes past
+	// `maintenance.window_retention` / `maintenance.freeze_retention`
+	// (NIM-1137). Default-ON; nil → skipped with warn.
+	ExpiredMaintenance *MaintenancePurger
 }
 
 // Runner is the root structure. One instance per keeper process.
@@ -668,6 +673,7 @@ func (r *Runner) dispatch(ctx context.Context, cfg *config.KeeperConfig) {
 
 	r.dispatchReclaimVoyages(ctx, cfg, batchSize, dryRun)
 	r.dispatchReconcileOrphanApplying(ctx, cfg, batchSize, dryRun)
+	r.dispatchPurgeExpiredMaintenance(ctx, cfg, batchSize, dryRun)
 }
 
 // dispatchReclaimVoyages executes reclaim_voyages rule with default-ON

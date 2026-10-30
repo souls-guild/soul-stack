@@ -51,8 +51,8 @@ func TestNoWindowsIsAlwaysOpen(t *testing.T) {
 			t.Errorf("ActiveFreeze(%s) = %+v, want nil", at, f)
 		}
 	}
-	if got := c.Text(); got != "any time" {
-		t.Errorf("Text() = %q, want %q", got, "any time")
+	if got := c.Text(utc(2026, 1, 1, 0, 0)); got != "any time" {
+		t.Errorf("Text = %q, want %q", got, "any time")
 	}
 }
 
@@ -325,8 +325,8 @@ func TestText(t *testing.T) {
 		win("12:00", 45, "UTC", "sun"),
 	}, nil)
 	want := "mon,thu 02:00 for 3h (Europe/Moscow); sat 23:00 for 4h30m (UTC); sun 12:00 for 45m (UTC)"
-	if got := c.Text(); got != want {
-		t.Errorf("Text() = %q, want %q", got, want)
+	if got := c.Text(utc(2026, 1, 1, 0, 0)); got != want {
+		t.Errorf("Text = %q, want %q", got, want)
 	}
 }
 

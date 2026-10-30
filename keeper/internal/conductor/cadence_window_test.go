@@ -209,16 +209,20 @@ func TestProcessOne_InMaintenanceWindow_NoCommonWindow_IsARecordedSkip(t *testin
 	}
 }
 
-// An incarnation with neither windows nor freezes is always open: it is never
-// the reason, so it takes no row from the ones that are.
+// An incarnation with no window that counts is always open but for its
+// freezes: it is never the reason, so it takes no row from the ones that are —
+// one with no rows at all, and one whose only window is a once window that has
+// ended (NIM-1137).
 func TestProcessOne_InMaintenanceWindow_NoCommonWindow_ListsOnlyIncarnationsWithRules(t *testing.T) {
-	resolved := []string{"redis-a", "redis-b"}
+	resolved := []string{"redis-a", "redis-b", "redis-ended"}
 	for i := range noWindowListMax + 5 {
 		resolved = append(resolved, "free-"+string(rune('a'+i/26))+string(rune('a'+i%26)))
 	}
 	tx := &spawnFakeTx{windows: []maintenance.Window{
 		window("redis-a", []string{"mon"}, "02:00", 60),
 		window("redis-b", []string{"tue"}, "02:00", 60),
+		{ID: "redis-ended-w", IncarnationID: "redis-ended", Kind: maintenance.KindOnce,
+			StartsAt: nov(1, 10, 0), EndsAt: nov(1, 11, 0)},
 	}}
 	rec, spawned := spawnAt(t, tx, cronScenarioCadence(cadence.OverlapPolicySkip, true), resolved, nov(2, 14, 0))
 	if spawned || rec == nil || rec.noWindow == nil {

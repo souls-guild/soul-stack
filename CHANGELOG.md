@@ -387,6 +387,22 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **One-off maintenance windows, and past ones are cleaned up (NIM-1137, epic NIM-1069).** A
+  window now has a `kind`: `weekly` (the slots so far, and what a request without `kind` means) or
+  `once`, one interval `{"kind":"once","starts_at","ends_at","comment"}` in the same list
+  (`POST`/`PUT /v1/incarnations/{id}/maintenance-windows`, `keeper.incarnation.maintenance-window.*`;
+  column `kind` and the per-kind CHECK, migration 136). A body mixing the two kinds is refused with
+  422 naming the field (MCP `validation-failed`); a response carries the fields of its kind only.
+  A `once` window counts until its `ends_at`: an incarnation whose only windows have ended is open
+  at any time outside a freeze, and the claim, Cadence, the status block and
+  `incarnation.maintenance_window.text` (which now lists `once 2026-11-05T22:00:00Z for 6h`) read
+  that one answer. The Reaper deletes a `once` window `maintenance.window_retention` after it ends
+  and a freeze `maintenance.freeze_retention` after it ends — runtime settings
+  `cfg_maintenance_window_retention` / `cfg_maintenance_freeze_retention`, default `72h`, `0`
+  never — auditing each `maintenance_window.deleted` / `freeze.deleted` with `reason: "expired"`.
+  Spec — [ADR-0093 amendment 2026-10-30](docs/adr/0093-maintenance-window.md#amendment-2026-10-30-nim-1137-one-off-windows-and-the-cleanup-of-past-ones),
+  [docs/keeper/operator-api/incarnations.md](docs/keeper/operator-api/incarnations.md#maintenance-windows-and-freezes--v1incarnationsidmaintenance-windows-v1incarnationsidfreezes).
+
 - **A Cadence starts in its incarnations' maintenance window and never during a freeze (NIM-1075,
   epic NIM-1069).** The recipe gains `in_maintenance_window` (`POST`/`PATCH /v1/cadences`, always
   present on `GET`; column `cadences.in_maintenance_window`, migration 135). A `kind: scenario`

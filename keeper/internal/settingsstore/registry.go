@@ -64,6 +64,9 @@ type Field struct {
 
 	MinDur time.Duration
 	MaxDur time.Duration
+	// ZeroDisables marks a duration whose 0 switches its feature off, so a
+	// MinDur of 0 is a decision rather than a forgotten bound.
+	ZeroDisables bool
 
 	// Allowed, when set, is the closed set a string field accepts — the same
 	// enum the schema validator enforces, published so the UI renders a select
@@ -263,6 +266,34 @@ var fields = []Field{
 				return false
 			}
 			return c.Reaper.DryRun
+		},
+	},
+
+	// --- Maintenance: the Reaper resolves both per pass (NIM-1137) ----------
+	{
+		Key:          "cfg_maintenance_window_retention",
+		YAMLPath:     "$.maintenance.window_retention",
+		Kind:         KindDuration,
+		MinDur:       0,
+		MaxDur:       365 * 24 * time.Hour,
+		ZeroDisables: true,
+		Default:      formatDuration(config.DefaultMaintenanceRetention),
+		Description:  "Maintenance: how long a one-off maintenance window stays after it ends before the Reaper deletes it. 0 keeps them. An ended window no longer counts either way.",
+		Read: func(c *config.KeeperConfig) any {
+			return formatDuration(maintenanceCfg(c).ResolvedWindowRetention())
+		},
+	},
+	{
+		Key:          "cfg_maintenance_freeze_retention",
+		YAMLPath:     "$.maintenance.freeze_retention",
+		Kind:         KindDuration,
+		MinDur:       0,
+		MaxDur:       365 * 24 * time.Hour,
+		ZeroDisables: true,
+		Default:      formatDuration(config.DefaultMaintenanceRetention),
+		Description:  "Maintenance: how long a freeze stays after it ends before the Reaper deletes it. 0 keeps them.",
+		Read: func(c *config.KeeperConfig) any {
+			return formatDuration(maintenanceCfg(c).ResolvedFreezeRetention())
 		},
 	},
 
@@ -573,6 +604,15 @@ func cadenceCfg(c *config.KeeperConfig) *config.KeeperCadenceScheduler {
 		return nil
 	}
 	return c.CadenceScheduler
+}
+
+// maintenanceCfg is nil-safe the way the Reaper reads it: a nil block resolves
+// to the defaults.
+func maintenanceCfg(c *config.KeeperConfig) *config.KeeperMaintenance {
+	if c == nil {
+		return nil
+	}
+	return c.Maintenance
 }
 
 // Fields returns the registry in catalog order.

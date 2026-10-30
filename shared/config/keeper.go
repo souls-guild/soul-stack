@@ -122,6 +122,11 @@ type KeeperConfig struct {
 	// terminals one Archon may hold and how long an abandoned one lives.
 	Console *KeeperConsole `yaml:"console,omitempty"`
 
+	// Maintenance holds the cluster-wide settings of incarnations' maintenance
+	// windows and freezes (ADR-0093, NIM-1137). Optional; absent means the
+	// defaults.
+	Maintenance *KeeperMaintenance `yaml:"maintenance,omitempty"`
+
 	// Acolytes is the number of workers in the apply execution pool (ADR-027,
 	// Acolyte). Feature flag: 0 (default) — pool does not start, execution runs
 	// the old scenario-runner run-goroutine path; >0 — pool active. Cutover to
@@ -1965,6 +1970,51 @@ const (
 	DefaultReaperInterval  = time.Hour
 	DefaultReaperBatchSize = 1000
 )
+
+// DefaultMaintenanceRetention is how long a one-off maintenance window or a
+// freeze stays after it ends before the Reaper deletes it (NIM-1137).
+const DefaultMaintenanceRetention = 72 * time.Hour
+
+// KeeperMaintenance is the `maintenance:` block. Both retentions are read by the
+// Reaper on every pass, so they are runtime settings (ADR-0073).
+type KeeperMaintenance struct {
+	// WindowRetention is how long a `once` window stays after it ends; `0`
+	// keeps it for ever. Type `duration`, empty → [DefaultMaintenanceRetention].
+	WindowRetention string `yaml:"window_retention,omitempty"`
+	// FreezeRetention is the same for a freeze.
+	FreezeRetention string `yaml:"freeze_retention,omitempty"`
+}
+
+// ResolvedWindowRetention is the effective window retention; 0 means never
+// delete.
+func (m *KeeperMaintenance) ResolvedWindowRetention() time.Duration {
+	if m == nil {
+		return DefaultMaintenanceRetention
+	}
+	return resolveRetention(m.WindowRetention)
+}
+
+// ResolvedFreezeRetention is the effective freeze retention; 0 means never
+// delete.
+func (m *KeeperMaintenance) ResolvedFreezeRetention() time.Duration {
+	if m == nil {
+		return DefaultMaintenanceRetention
+	}
+	return resolveRetention(m.FreezeRetention)
+}
+
+// resolveRetention is resolveDuration where 0 is a value of its own: empty,
+// invalid or negative → [DefaultMaintenanceRetention].
+func resolveRetention(val string) time.Duration {
+	if val == "" {
+		return DefaultMaintenanceRetention
+	}
+	d, err := ParseDuration(val)
+	if err != nil || d < 0 {
+		return DefaultMaintenanceRetention
+	}
+	return d
+}
 
 // KeeperReaper is the background cleanup.
 type KeeperReaper struct {

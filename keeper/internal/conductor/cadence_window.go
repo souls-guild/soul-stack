@@ -43,9 +43,10 @@ func spawnStart(ctx context.Context, db voyage.ExecQueryRower, row *voyage.Voyag
 }
 
 // describeNoWindow lists, per incarnation, when it opens on its own. Only
-// incarnations with windows or freezes are listed: one with neither is always
-// open and never the reason. Broken ones come first: one of them alone explains
-// the skip, and the cap must not hide it behind twenty that are merely closed.
+// incarnations with a window that counts at now are listed: one without waits
+// at most for its freezes, so it is never the reason. Broken ones come first:
+// one of them alone explains the skip, and the cap must not hide it behind
+// twenty that are merely closed.
 func describeNoWindow(rules map[string]maintenance.Rules, incarnations int, now time.Time) *noWindow {
 	names := make([]string, 0, len(rules))
 	for inc := range rules {
@@ -63,7 +64,7 @@ func describeNoWindow(rules map[string]maintenance.Rules, incarnations int, now 
 			if len(nw.rows) == noWindowListMax {
 				return nw
 			}
-			if (errs[i] != nil) != wantBroken {
+			if (errs[i] != nil) != wantBroken || (errs[i] == nil && !calcs[i].HasWindows(now)) {
 				continue
 			}
 			row := map[string]any{"incarnation": inc}

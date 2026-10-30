@@ -299,6 +299,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"134_voyages_maintenance_gate.up.sql",
 		"135_cadences_in_maintenance_window.down.sql",
 		"135_cadences_in_maintenance_window.up.sql",
+		"136_maintenance_window_kinds.down.sql",
+		"136_maintenance_window_kinds.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)

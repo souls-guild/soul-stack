@@ -381,7 +381,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.incarnation.maintenance-window.list",
-			Description:  "Lists the incarnation's maintenance windows in creation order, plus status: open_now (a run may start now), next_start (the first instant at or after now a run may start; now itself when open) and active_freeze (the freeze in force; absent when none). The status counts the freezes too: no windows means any time, and a freeze closes everything while it lasts. A window gates the START of a run; a started run is never cut off. Permission: incarnation.get (scope incarnation/coven/service by name).",
+			Description:  "Lists the incarnation's maintenance windows in creation order, weekly and once alike (a once window that has ended is listed until the Reaper deletes it after maintenance.window_retention, and no longer counts), plus status: open_now (a run may start now), next_start (the first instant at or after now a run may start; now itself when open) and active_freeze (the freeze in force; absent when none). The status counts the freezes too: no windows means any time, and a freeze closes everything while it lasts. A window gates the START of a run; a started run is never cut off. Permission: incarnation.get (scope incarnation/coven/service by name).",
 			InputSchema:  schemaIncarnationIDOnlyInput,
 			OutputSchema: schemaMaintenanceWindowListOutput,
 		},
@@ -390,7 +390,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.incarnation.maintenance-window.create",
-			Description:  "Adds a maintenance window: on each listed day a slot starts at start_time (HH:MM wall clock in timezone) and lasts duration_minutes of elapsed time, at most a day; a slot may cross midnight and belongs to the day it starts on. A start the spring DST change skips moves forward by the gap; one the autumn change repeats is its first occurrence. At most 50 windows per incarnation. Permission: incarnation.maintenance-set (scope incarnation/coven/service by name); allowed in any incarnation status. Audit maintenance_window.created. Fails with code=validation-failed on a refused field, not-found if the incarnation doesn't exist.",
+			Description:  "Adds a maintenance window. kind=weekly (the default when kind is omitted): on each listed day a slot starts at start_time (HH:MM wall clock in timezone) and lasts duration_minutes of elapsed time, at most a day; a slot may cross midnight and belongs to the day it starts on. A start the spring DST change skips moves forward by the gap; one the autumn change repeats is its first occurrence. kind=once: one interval [starts_at, ends_at), RFC 3339; it counts until ends_at. Each kind takes only its own fields, and a field of the other kind is refused with code=validation-failed naming it, as REST answers 422. At most 50 windows per incarnation, both kinds together. Permission: incarnation.maintenance-set (scope incarnation/coven/service by name); allowed in any incarnation status. Audit maintenance_window.created. Fails with code=validation-failed on a refused field, not-found if the incarnation doesn't exist.",
 			InputSchema:  schemaMaintenanceWindowCreateInput,
 			OutputSchema: schemaMaintenanceWindowOutput,
 		},
@@ -399,7 +399,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.incarnation.maintenance-window.update",
-			Description:  "Replaces every field of one maintenance window. Permission: incarnation.maintenance-set. Audit maintenance_window.updated, with the fields before the change under previous. Fails with code=not-found when no window with that window_id belongs to this incarnation.",
+			Description:  "Replaces every field of one maintenance window, its kind included (an omitted kind is weekly), with the field rules of create. Permission: incarnation.maintenance-set. Audit maintenance_window.updated, with the fields before the change under previous. Fails with code=not-found when no window with that window_id belongs to this incarnation.",
 			InputSchema:  schemaMaintenanceWindowUpdateInput,
 			OutputSchema: schemaMaintenanceWindowOutput,
 		},
@@ -1794,7 +1794,7 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["id","days","start_time","duration_minutes","timezone"],
+"required":["id"],
 "properties":{
 "id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id."},
 ` + maintenanceWindowFieldsSchema + `}}`)
@@ -1803,7 +1803,7 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["id","window_id","days","start_time","duration_minutes","timezone"],
+"required":["id","window_id"],
 "properties":{
 "id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id."},
 "window_id":{"type":"string","pattern":"` + maintenanceIDPattern + `","description":"Maintenance window id (UUID)."},
@@ -1831,7 +1831,7 @@ var (
 "incarnation":{"type":"string"},
 "items":{"type":"array","items":{` + maintenanceWindowEntrySchema + `}},
 "status":{"type":"object","additionalProperties":false,"required":["open_now","next_start"],"properties":{
-"open_now":{"type":"boolean","description":"A run may start now: inside a slot of some window (or there are no windows) and outside every freeze."},
+"open_now":{"type":"boolean","description":"A run may start now: inside some window (or there are no windows, a once window that has ended being none) and outside every freeze."},
 "next_start":{"type":"string","description":"RFC3339: the first instant at or after now at which a run may start; now itself when open_now."},
 "active_freeze":{` + freezeEntrySchema + `,"description":"The freeze in force now - the one that ends last when several overlap; absent when none."}}}}}`)
 

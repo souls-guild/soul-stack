@@ -17,6 +17,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
@@ -30,18 +32,24 @@ import (
 const (
 	maintenanceIDPattern = `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
 
-	maintenanceWindowFieldsSchema = `"days":{"type":"array","minItems":1,"maxItems":7,"uniqueItems":true,"items":{"type":"string","enum":["mon","tue","wed","thu","fri","sat","sun"]},"description":"Weekdays a slot starts on."},
-"start_time":{"type":"string","pattern":"^([01][0-9]|2[0-3]):[0-5][0-9]$","description":"Wall-clock start of each slot, HH:MM, in timezone."},
-"duration_minutes":{"type":"integer","minimum":1,"maximum":1440,"description":"Slot length in minutes of elapsed time, at most a day."},
-"timezone":{"type":"string","minLength":1,"maxLength":64,"description":"IANA zone, e.g. Europe/Moscow or UTC; names that depend on the Keeper host (Local, localtime, posix/...) are refused."},
+	maintenanceWindowFieldsSchema = `"kind":{"type":"string","enum":["weekly","once"],"description":"weekly (the default when omitted) or once. Each kind takes only its own fields; a field of the other kind is refused with code=validation-failed naming it."},
+"days":{"type":"array","minItems":1,"maxItems":7,"uniqueItems":true,"items":{"type":"string","enum":["mon","tue","wed","thu","fri","sat","sun"]},"description":"weekly, required: weekdays a slot starts on."},
+"start_time":{"type":"string","pattern":"^([01][0-9]|2[0-3]):[0-5][0-9]$","description":"weekly, required: wall-clock start of each slot, HH:MM, in timezone."},
+"duration_minutes":{"type":"integer","minimum":1,"maximum":1440,"description":"weekly, required: slot length in minutes of elapsed time, at most a day."},
+"timezone":{"type":"string","minLength":1,"maxLength":64,"description":"weekly, required: IANA zone, e.g. Europe/Moscow or UTC; names that depend on the Keeper host (Local, localtime, posix/...) are refused."},
+"starts_at":{"type":"string","description":"once, required: start of the window, RFC 3339, inclusive."},
+"ends_at":{"type":"string","description":"once, required: end of the window, RFC 3339, exclusive; after starts_at."},
 "comment":{"type":"string","maxLength":500,"description":"Free text, at most 500 characters."}`
 
-	maintenanceWindowEntrySchema = `"type":"object","additionalProperties":false,"required":["id","days","start_time","duration_minutes","timezone","comment","created_at","updated_at"],"properties":{
+	maintenanceWindowEntrySchema = `"type":"object","additionalProperties":false,"required":["id","kind","comment","created_at","updated_at"],"properties":{
 "id":{"type":"string","description":"Window id (UUID)."},
-"days":{"type":"array","items":{"type":"string"},"description":"Weekdays a slot starts on, in calendar order."},
-"start_time":{"type":"string"},
-"duration_minutes":{"type":"integer"},
-"timezone":{"type":"string"},
+"kind":{"type":"string","enum":["weekly","once"]},
+"days":{"type":"array","items":{"type":"string"},"description":"weekly: weekdays a slot starts on, in calendar order."},
+"start_time":{"type":"string","description":"weekly."},
+"duration_minutes":{"type":"integer","description":"weekly."},
+"timezone":{"type":"string","description":"weekly."},
+"starts_at":{"type":"string","description":"once: RFC3339, inclusive."},
+"ends_at":{"type":"string","description":"once: RFC3339, exclusive. Listed after it has passed until the Reaper deletes the window; it no longer counts."},
 "comment":{"type":"string"},
 "created_at":{"type":"string","description":"RFC3339."},
 "updated_at":{"type":"string","description":"RFC3339."}}`
@@ -61,10 +69,13 @@ const (
 
 type maintenanceWindowEntry struct {
 	ID              string   `json:"id"`
-	Days            []string `json:"days"`
-	StartTime       string   `json:"start_time"`
-	DurationMinutes int      `json:"duration_minutes"`
-	Timezone        string   `json:"timezone"`
+	Kind            string   `json:"kind"`
+	Days            []string `json:"days,omitempty"`
+	StartTime       string   `json:"start_time,omitempty"`
+	DurationMinutes int      `json:"duration_minutes,omitempty"`
+	Timezone        string   `json:"timezone,omitempty"`
+	StartsAt        string   `json:"starts_at,omitempty"`
+	EndsAt          string   `json:"ends_at,omitempty"`
 	Comment         string   `json:"comment"`
 	CreatedAt       string   `json:"created_at"`
 	UpdatedAt       string   `json:"updated_at"`
@@ -108,10 +119,13 @@ type maintenanceListArgs struct {
 type maintenanceWindowWriteArgs struct {
 	ID              string   `json:"id"`
 	WindowID        string   `json:"window_id"`
+	Kind            string   `json:"kind"`
 	Days            []string `json:"days"`
 	StartTime       string   `json:"start_time"`
 	DurationMinutes int      `json:"duration_minutes"`
 	Timezone        string   `json:"timezone"`
+	StartsAt        string   `json:"starts_at"`
+	EndsAt          string   `json:"ends_at"`
 	Comment         string   `json:"comment"`
 }
 
@@ -182,7 +196,11 @@ func (h *Handler) callMaintenanceWindowCreate(ctx context.Context, claims *jwt.C
 	if a.WindowID != "" {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'window_id' is assigned by the Keeper; omit it on create")
 	}
-	w, err := maintenance.InsertWindow(ctx, h.deps.IncarnationDB, a.ID, a.spec())
+	spec, err := a.spec(args)
+	if err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, err.Error())
+	}
+	w, err := maintenance.InsertWindow(ctx, h.deps.IncarnationDB, a.ID, spec)
 	if err != nil {
 		return h.maintenanceToolError(req, toolName, a.ID, "maintenance window", "", err)
 	}
@@ -202,7 +220,11 @@ func (h *Handler) callMaintenanceWindowUpdate(ctx context.Context, claims *jwt.C
 	if !maintenance.ValidID(a.WindowID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'window_id' must be a UUID")
 	}
-	before, after, err := maintenance.UpdateWindow(ctx, h.deps.IncarnationDB, a.ID, a.WindowID, a.spec())
+	spec, err := a.spec(args)
+	if err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, err.Error())
+	}
+	before, after, err := maintenance.UpdateWindow(ctx, h.deps.IncarnationDB, a.ID, a.WindowID, spec)
 	if err != nil {
 		return h.maintenanceToolError(req, toolName, a.ID, "maintenance window", a.WindowID, err)
 	}
@@ -392,49 +414,69 @@ func (a *maintenanceWindowDeleteArgs) incarnationID() string { return a.ID }
 func (a *freezeWriteArgs) incarnationID() string             { return a.ID }
 func (a *freezeDeleteArgs) incarnationID() string            { return a.ID }
 
-func (a *maintenanceWindowWriteArgs) spec() maintenance.WindowSpec {
-	return maintenance.WindowSpec{
+// spec parses the two RFC 3339 strings ([parseBounds]); the kinds and the
+// refusal of a mixed body are keeper/internal/maintenance's, shared with REST.
+// args are the raw arguments, so a field of the other kind sent empty is
+// refused here too, as REST's schema refuses it: zero reads as absent below.
+func (a *maintenanceWindowWriteArgs) spec(args json.RawMessage) (maintenance.WindowSpec, error) {
+	var sent map[string]json.RawMessage
+	_ = json.Unmarshal(args, &sent)
+	if err := maintenance.CheckKindFields(a.Kind, slices.Collect(maps.Keys(sent))); err != nil {
+		return maintenance.WindowSpec{}, err
+	}
+	s := maintenance.WindowSpec{
+		Kind:            a.Kind,
 		Days:            a.Days,
 		StartTime:       a.StartTime,
 		DurationMinutes: a.DurationMinutes,
 		Timezone:        a.Timezone,
 		Comment:         a.Comment,
 	}
+	err := parseBounds(a.StartsAt, a.EndsAt, &s.StartsAt, &s.EndsAt)
+	return s, err
 }
 
-// spec parses the two RFC 3339 strings; an empty one is left zero so
-// [maintenance.FreezeSpec.Validate] reports it as missing, the same message
-// REST gives.
 func (a *freezeWriteArgs) spec() (maintenance.FreezeSpec, error) {
 	s := maintenance.FreezeSpec{Comment: a.Comment}
+	err := parseBounds(a.StartsAt, a.EndsAt, &s.StartsAt, &s.EndsAt)
+	return s, err
+}
+
+// parseBounds parses starts_at and ends_at; an empty one is left zero so the
+// validator reports it as missing (or as absent, on a weekly window), the same
+// message REST gives.
+func parseBounds(startsAt, endsAt string, starts, ends *time.Time) error {
 	for _, f := range []struct {
 		name string
 		raw  string
 		dst  *time.Time
-	}{{"starts_at", a.StartsAt, &s.StartsAt}, {"ends_at", a.EndsAt, &s.EndsAt}} {
+	}{{"starts_at", startsAt, starts}, {"ends_at", endsAt, ends}} {
 		if f.raw == "" {
 			continue
 		}
 		t, err := time.Parse(time.RFC3339, f.raw)
 		if err != nil {
-			return s, fmt.Errorf("field '%s' must be an RFC 3339 timestamp, got %q", f.name, f.raw)
+			return fmt.Errorf("field '%s' must be an RFC 3339 timestamp, got %q", f.name, f.raw)
 		}
 		*f.dst = t
 	}
-	return s, nil
+	return nil
 }
 
 func newMaintenanceWindowEntry(w maintenance.Window) maintenanceWindowEntry {
-	return maintenanceWindowEntry{
-		ID:              w.ID,
-		Days:            w.Days,
-		StartTime:       w.StartTime,
-		DurationMinutes: w.DurationMinutes,
-		Timezone:        w.Timezone,
-		Comment:         w.Comment,
-		CreatedAt:       rfc3339(w.CreatedAt),
-		UpdatedAt:       rfc3339(w.UpdatedAt),
+	out := maintenanceWindowEntry{
+		ID:        w.ID,
+		Kind:      w.Kind,
+		Comment:   w.Comment,
+		CreatedAt: rfc3339(w.CreatedAt),
+		UpdatedAt: rfc3339(w.UpdatedAt),
 	}
+	if w.Kind == maintenance.KindOnce {
+		out.StartsAt, out.EndsAt = rfc3339(w.StartsAt), rfc3339(w.EndsAt)
+		return out
+	}
+	out.Days, out.StartTime, out.DurationMinutes, out.Timezone = w.Days, w.StartTime, w.DurationMinutes, w.Timezone
+	return out
 }
 
 func newFreezeEntry(f maintenance.Freeze) freezeEntry {

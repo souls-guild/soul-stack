@@ -39,7 +39,8 @@ func (g *gateIncDB) Query(ctx context.Context, sql string, args ...any) (pgx.Row
 	case strings.Contains(sql, "FROM incarnation_maintenance_windows"):
 		rows := make([][]any, len(g.windows))
 		for i, w := range g.windows {
-			rows[i] = []any{w.ID, w.IncarnationID, w.Days, w.StartTime, w.DurationMinutes, w.Timezone, w.Comment, time.Now(), time.Now()}
+			rows[i] = []any{w.ID, w.IncarnationID, w.Kind, w.Days, w.StartTime, w.DurationMinutes, w.Timezone,
+				(*time.Time)(nil), (*time.Time)(nil), w.Comment, time.Now(), time.Now()}
 		}
 		return &gateRows{rows: rows}, nil
 	case strings.Contains(sql, "FROM incarnation_freezes"):

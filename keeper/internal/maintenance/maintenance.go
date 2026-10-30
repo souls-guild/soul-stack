@@ -5,12 +5,13 @@
 // the UI read the same answer from [Calculator]; the Reaper's cert rotation
 // joins them with epic NIM-1070.
 //
-// A MaintenanceWindow is a weekly slot set: on each listed day a slot starts at
-// a wall-clock time in the window's own timezone and lasts a duration. A window
-// gates the START of a run; a run already started is never cut off when the
-// slot ends. A Freeze is a one-off interval during which no automatic run
-// starts, whatever the windows say. An incarnation with no windows may start a
-// run at any time outside a freeze.
+// A MaintenanceWindow is of one of two kinds. A `weekly` window is a slot set:
+// on each listed day a slot starts at a wall-clock time in the window's own
+// timezone and lasts a duration. A `once` window is one interval (NIM-1137). A
+// window gates the START of a run; a run already started is never cut off when
+// the slot ends. A Freeze is a one-off interval during which no automatic run
+// starts, whatever the windows say. An incarnation with no windows — a `once`
+// window that has ended is none — may start a run at any time outside a freeze.
 //
 // [ADR-0093]: ../../../docs/adr/0093-maintenance-window.md
 package maintenance
@@ -30,10 +31,18 @@ import (
 	_ "time/tzdata"
 )
 
+// The two kinds of window. Each carries only its own fields: Days, StartTime,
+// DurationMinutes and Timezone a weekly one, StartsAt and EndsAt a once one.
+const (
+	KindWeekly = "weekly"
+	KindOnce   = "once"
+)
+
 // Window is one MaintenanceWindow of an incarnation.
 type Window struct {
 	ID            string
 	IncarnationID string
+	Kind          string
 	// Days are the weekdays a slot starts on, as `mon`..`sun`, in calendar
 	// order. A slot belongs to the day it starts on, even when it crosses
 	// midnight.
@@ -44,9 +53,21 @@ type Window struct {
 	// slot over a DST change still lasts exactly this long.
 	DurationMinutes int
 	Timezone        string
-	Comment         string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// StartsAt and EndsAt are a once window's half-open interval
+	// [StartsAt, EndsAt).
+	StartsAt  time.Time
+	EndsAt    time.Time
+	Comment   string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// Spec is the operator-supplied part of w.
+func (w Window) Spec() WindowSpec {
+	return WindowSpec{
+		Kind: w.Kind, Days: w.Days, StartTime: w.StartTime, DurationMinutes: w.DurationMinutes,
+		Timezone: w.Timezone, StartsAt: w.StartsAt, EndsAt: w.EndsAt, Comment: w.Comment,
+	}
 }
 
 // Freeze is one Freeze of an incarnation: the half-open interval
@@ -62,12 +83,17 @@ type Freeze struct {
 }
 
 // WindowSpec is the operator-supplied part of a window: what create and update
-// accept. [WindowSpec.Normalize] validates it.
+// accept. [WindowSpec.Normalize] validates it. An empty Kind is weekly, so a
+// request written before the kinds existed means what it meant. A zero field is
+// an absent one.
 type WindowSpec struct {
+	Kind            string
 	Days            []string
 	StartTime       string
 	DurationMinutes int
 	Timezone        string
+	StartsAt        time.Time
+	EndsAt          time.Time
 	Comment         string
 }
 
@@ -121,10 +147,76 @@ func invalid(field, format string, args ...any) error {
 	return &ValidationError{Field: field, Reason: fmt.Sprintf(format, args...)}
 }
 
-// Normalize validates s and returns it with Days in calendar order. Duplicate
-// days are refused rather than collapsed: a window listing a day twice is more
-// likely a typo for another day than a meaningful request.
+// Normalize validates s and returns it with its kind spelled out, the days of a
+// weekly window in calendar order and the bounds of a once window in UTC, cut
+// to the second: the render asks the calculator at a whole second, and a bound
+// between two seconds would let the claim start a run the render then sees
+// outside the window. A field of the other kind is refused by name rather than
+// ignored: the operator who sent it meant something by it.
 func (s WindowSpec) Normalize() (WindowSpec, error) {
+	if err := CheckKindFields(s.Kind, s.setFields()); err != nil {
+		return s, err
+	}
+	switch s.Kind {
+	case "", KindWeekly:
+		s.Kind = KindWeekly
+		return s.normalizeWeekly()
+	case KindOnce:
+		s.StartsAt, s.EndsAt = s.StartsAt.UTC().Truncate(time.Second), s.EndsAt.UTC().Truncate(time.Second)
+		if err := checkInterval(s.StartsAt, s.EndsAt); err != nil {
+			return s, err
+		}
+		return s, checkComment(s.Comment)
+	default:
+		return s, invalid("kind", "must be %s or %s, got %q", KindWeekly, KindOnce, s.Kind)
+	}
+}
+
+var (
+	weeklyFields = []string{"days", "start_time", "duration_minutes", "timezone"}
+	onceFields   = []string{"starts_at", "ends_at"}
+)
+
+// CheckKindFields refuses a field among fields that belongs to the other kind
+// than kind (empty is weekly). [WindowSpec.Normalize] asks it about the fields
+// that are not zero; a caller that sees which fields a request sent asks it
+// about those, so one sent empty is refused like one with a value. An unknown
+// kind passes here and is refused by Normalize.
+func CheckKindFields(kind string, fields []string) error {
+	other, reason := onceFields, "belongs to a once window; a weekly window takes days, start_time, duration_minutes and timezone"
+	switch kind {
+	case "", KindWeekly:
+	case KindOnce:
+		other, reason = weeklyFields, "belongs to a weekly window; a once window takes starts_at and ends_at"
+	default:
+		return nil
+	}
+	for _, f := range other {
+		if slices.Contains(fields, f) {
+			return invalid(f, "%s", reason)
+		}
+	}
+	return nil
+}
+
+// setFields names the kind-specific fields of s that are not zero.
+func (s WindowSpec) setFields() []string {
+	var out []string
+	for f, set := range map[string]bool{
+		"days": len(s.Days) > 0, "start_time": s.StartTime != "", "duration_minutes": s.DurationMinutes != 0,
+		"timezone": s.Timezone != "", "starts_at": !s.StartsAt.IsZero(), "ends_at": !s.EndsAt.IsZero(),
+	} {
+		if set {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// normalizeWeekly puts the days in calendar order. Duplicate days are refused
+// rather than collapsed: a window listing a day twice is more likely a typo for
+// another day than a meaningful request.
+func (s WindowSpec) normalizeWeekly() (WindowSpec, error) {
 	if len(s.Days) == 0 {
 		return s, invalid("days", "must list at least one day of %v", weekdays)
 	}
@@ -164,18 +256,26 @@ func (s WindowSpec) Normalize() (WindowSpec, error) {
 // Validate checks s. Zero times are refused, so an omitted field is not read as
 // the year 1.
 func (s FreezeSpec) Validate() error {
-	if s.StartsAt.IsZero() {
+	if err := checkInterval(s.StartsAt, s.EndsAt); err != nil {
+		return err
+	}
+	return checkComment(s.Comment)
+}
+
+// checkInterval checks the bounds of a freeze or a once window.
+func checkInterval(start, end time.Time) error {
+	if start.IsZero() {
 		return invalid("starts_at", "is required")
 	}
-	if s.EndsAt.IsZero() {
+	if end.IsZero() {
 		return invalid("ends_at", "is required")
 	}
 	// Compared at the microsecond Postgres stores, so an interval that is empty
 	// in the column is refused here rather than by its CHECK as a 500.
-	if !s.EndsAt.Truncate(time.Microsecond).After(s.StartsAt.Truncate(time.Microsecond)) {
+	if !end.Truncate(time.Microsecond).After(start.Truncate(time.Microsecond)) {
 		return invalid("ends_at", "must be after starts_at")
 	}
-	return checkComment(s.Comment)
+	return nil
 }
 
 func checkComment(c string) error {

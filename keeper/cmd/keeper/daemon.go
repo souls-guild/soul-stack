@@ -6534,6 +6534,11 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			orphanApplyingReconciler = reaper.NewOrphanApplyingReconciler(d.pool, rc, d.auditWriter, logger)
 		}
 
+		var expiredMaintenance *reaper.MaintenancePurger
+		if d.pool != nil {
+			expiredMaintenance = reaper.NewMaintenancePurger(d.pool, d.auditWriter, logger)
+		}
+
 		runner, err := reaper.NewRunner(reaper.Deps{
 			Purger:                 executor,
 			Redis:                  rc,
@@ -6547,6 +6552,7 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			OrphanEphemeralTidings: orphanEphemeralTidingsPurger,
 			OrphanApplying:         orphanApplyingReconciler,
 			CertRotator:            certRotator,
+			ExpiredMaintenance:     expiredMaintenance,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "keeper run: build reaper: %v\n", err)

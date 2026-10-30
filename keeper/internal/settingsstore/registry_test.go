@@ -90,7 +90,7 @@ func TestRegistry_KeyContract(t *testing.T) {
 				t.Errorf("key %q: empty range [%v, %v]", f.Key, f.Min, f.Max)
 			}
 		case KindDuration:
-			if f.MinDur <= 0 || f.MinDur >= f.MaxDur {
+			if f.MinDur < 0 || (f.MinDur == 0 && !f.ZeroDisables) || f.MinDur >= f.MaxDur {
 				t.Errorf("key %q: empty duration range [%v, %v]", f.Key, f.MinDur, f.MaxDur)
 			}
 		case KindBool:

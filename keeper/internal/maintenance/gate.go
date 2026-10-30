@@ -114,10 +114,6 @@ const (
 	commonStartSteps = 1000
 )
 
-// HasWindows reports whether the calculator holds any window; without one it
-// is open whenever no freeze covers the moment.
-func (c *Calculator) HasWindows() bool { return len(c.windows) > 0 }
-
 // lastFreezeEnd returns the end of the calculator's last freeze, zero without one.
 func (c *Calculator) lastFreezeEnd() time.Time {
 	if n := len(c.frozen); n > 0 {
@@ -143,7 +139,9 @@ func CommonStart(cals []*Calculator, t time.Time) (time.Time, bool) {
 	windowed := false
 	latest := t
 	for _, c := range cals {
-		windowed = windowed || c.HasWindows()
+		// Asked at t: a calculator without a window that counts at t has none
+		// later either.
+		windowed = windowed || c.HasWindows(t)
 		if s := c.NextStart(t); s.After(latest) {
 			latest = s
 		}

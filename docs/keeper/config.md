@@ -675,6 +675,23 @@ reaper:
 | `reaper.lock_ttl` | `duration` | `5m` | TTL Redis-lease for leadership ([ADR-006](../adr/0006-cache-redis.md)). |
 | `reaper.rules` | `map<string, object>` | — | Cleaning rules. The structure of each rule (fields, types, conditional mandatoryness according to `action`) is normatively defined in [reaper.md → Rule structure](reaper.md); directory of predefined rules and binding to tables - [reaper.md → Rules](reaper.md). The `reclaim_apply_runs` rule is **disabled** by default and is enabled only under the gate - see [reaper.md → Enabling recovery](reaper.md) (WARN: do not enable when `acolytes: 0`). Cadence spawn (`spawn_due_cadence` / `action: spawn`) **is no longer in Reaper** - it went to the [Conductor](conductor.md) subsystem ([ADR-048](../adr/0048-conductor.md)); see block [`cadence_scheduler`](#cadence_scheduler). |
 
+## `maintenance`
+
+How long an incarnation's past one-off maintenance windows and freezes are kept ([ADR-0093](../adr/0093-maintenance-window.md), amendment NIM-1137). The [Reaper](reaper.md#rules) deletes a `once` window whose `ends_at` is older than `window_retention`, and a freeze whose `ends_at` is older than `freeze_retention`, one `reaper.batch_size` batch of each per pass, auditing every row `maintenance_window.deleted` / `freeze.deleted` with `reason: "expired"`. A weekly window is never deleted. A past one counts for nothing either way: a `once` window stops gating runs at its end, so the retention only decides how long the UI and the API still show it.
+
+```yaml
+maintenance:
+  window_retention: 72h   # past once windows; 0 keeps them for ever
+  freeze_retention: 72h   # past freezes; 0 keeps them for ever
+```
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `maintenance.window_retention` | `duration` | `72h` | Age after `ends_at` at which a `once` window is deleted. `0` — never. Negative → `value_out_of_range` at load. **Runtime setting** `cfg_maintenance_window_retention` (`PUT /v1/settings/cfg_maintenance_window_retention`, no restart; the next Reaper pass uses it). |
+| `maintenance.freeze_retention` | `duration` | `72h` | The same for a freeze, `cfg_maintenance_freeze_retention`. |
+
+Both rules run on every pass of an enabled Reaper (`reaper.enabled`), honour `reaper.dry_run`, and are not `reaper.rules` entries: the retention is their switch.
+
 ## `cadence_scheduler`
 
 Subsystem config [Conductor](conductor.md) - leader-elected executor of [Cadence](../naming-rules.md)-schedules ([ADR-048](../adr/0048-conductor.md)). Conductor, based on its tick, selects mature Cadence and spawns a regular Voyage run; lease `conductor:leader` is independent from `reaper:leader`. Block **optional** - if absent, defaults apply + default-ON when Redis (footgun-guard) is configured. Full description of behavior, including [adaptive polling step](conductor.md) and [floor minimum Cadence period](conductor.md) - [conductor.md](conductor.md).
@@ -1242,6 +1259,8 @@ Admitted so far (the set grows as `keeper.yml` shrinks toward the bootstrap floo
 | `cfg_reaper_interval` | `reaper.interval` | duration | `[1m, 24h]` | `1h` |
 | `cfg_reaper_batch_size` | `reaper.batch_size` | int | `[1, 100000]` | `1000` |
 | `cfg_reaper_dry_run` | `reaper.dry_run` | bool | `true \| false` | `false` |
+| `cfg_maintenance_window_retention` | `maintenance.window_retention` | duration | `[0s, 8760h]`, `0` = never delete | `72h` |
+| `cfg_maintenance_freeze_retention` | `maintenance.freeze_retention` | duration | `[0s, 8760h]`, `0` = never delete | `72h` |
 | `cfg_cadence_scheduler_poll_floor` | `cadence_scheduler.poll_floor` | duration | `[30s, 1h]` | `30s` |
 | `cfg_cadence_scheduler_poll_ceiling` | `cadence_scheduler.poll_ceiling` | duration | `[30s, 1h]` | `1m` |
 | `cfg_cadence_scheduler_poll_idle` | `cadence_scheduler.poll_idle` | duration | `[30s, 24h]` | `2m` |

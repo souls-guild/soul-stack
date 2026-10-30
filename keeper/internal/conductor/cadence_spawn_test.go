@@ -81,8 +81,12 @@ func (t *spawnFakeTx) Query(_ context.Context, sql string, args ...any) (pgx.Row
 		var vals [][]any
 		for _, w := range t.windows {
 			if slices.Contains(ids, w.IncarnationID) {
-				vals = append(vals, []any{w.ID, w.IncarnationID, w.Days, w.StartTime, w.DurationMinutes,
-					w.Timezone, w.Comment, w.CreatedAt, w.UpdatedAt})
+				var starts, ends *time.Time
+				if w.Kind == maintenance.KindOnce {
+					starts, ends = &w.StartsAt, &w.EndsAt
+				}
+				vals = append(vals, []any{w.ID, w.IncarnationID, w.Kind, w.Days, w.StartTime, w.DurationMinutes,
+					w.Timezone, starts, ends, w.Comment, w.CreatedAt, w.UpdatedAt})
 			}
 		}
 		return &valueRows{vals: vals}, nil

@@ -12,15 +12,28 @@ import (
 // takes the instant it is asked about, and nothing reads the clock.
 //
 // "Open" means inside a slot of some window (or there are no windows) AND
-// outside every freeze. A freeze applies with or without windows.
+// outside every freeze. A freeze applies with or without windows. A once window
+// counts only until it ends (NIM-1137): asked about a later instant, an
+// incarnation whose only windows are once windows that have ended has none.
 type Calculator struct {
 	windows []slotRule
-	freezes []Freeze
+	once    []span
+	// onceUntil is the end of the last once window: before it the once windows
+	// count, from it on they do not.
+	onceUntil time.Time
+	freezes   []Freeze
 	// frozen is freezes merged into disjoint intervals, sorted, with touching
 	// intervals joined, so the next start after a freeze is the end of the
 	// whole run of freezes it belongs to.
 	frozen []span
-	text   string
+	texts  []windowText
+}
+
+// windowText is one window as Text renders it; until is a once window's end,
+// zero for a weekly one.
+type windowText struct {
+	text  string
+	until time.Time
 }
 
 type slotRule struct {
@@ -44,13 +57,21 @@ type Status struct {
 // knows — and names the window.
 func NewCalculator(windows []Window, freezes []Freeze) (*Calculator, error) {
 	c := &Calculator{}
-	texts := make([]string, 0, len(windows))
 	for _, w := range windows {
-		spec, err := WindowSpec{
-			Days: w.Days, StartTime: w.StartTime, DurationMinutes: w.DurationMinutes, Timezone: w.Timezone,
-		}.Normalize()
+		spec, err := w.Spec().Normalize()
 		if err != nil {
 			return nil, fmt.Errorf("maintenance window %s: %w", w.ID, err)
+		}
+		if spec.Kind == KindOnce {
+			c.once = append(c.once, span{spec.StartsAt, spec.EndsAt})
+			if spec.EndsAt.After(c.onceUntil) {
+				c.onceUntil = spec.EndsAt
+			}
+			c.texts = append(c.texts, windowText{
+				text:  fmt.Sprintf("once %s for %s", spec.StartsAt.Format(time.RFC3339), formatSpan(spec.EndsAt.Sub(spec.StartsAt))),
+				until: spec.EndsAt,
+			})
+			continue
 		}
 		loc, _ := loadZone(spec.Timezone)
 		var r slotRule
@@ -63,13 +84,8 @@ func NewCalculator(windows []Window, freezes []Freeze) (*Calculator, error) {
 		r.dur = time.Duration(spec.DurationMinutes) * time.Minute
 		r.loc = loc
 		c.windows = append(c.windows, r)
-		texts = append(texts, fmt.Sprintf("%s %s for %s (%s)",
-			strings.Join(spec.Days, ","), spec.StartTime, formatMinutes(spec.DurationMinutes), spec.Timezone))
-	}
-	if len(texts) == 0 {
-		c.text = "any time"
-	} else {
-		c.text = strings.Join(texts, "; ")
+		c.texts = append(c.texts, windowText{text: fmt.Sprintf("%s %s for %s (%s)",
+			strings.Join(spec.Days, ","), spec.StartTime, formatMinutes(spec.DurationMinutes), spec.Timezone)})
 	}
 
 	c.freezes = slices.Clone(freezes)
@@ -95,12 +111,22 @@ func (c *Calculator) OpenAt(t time.Time) bool {
 	if c.frozenUntil(t) != nil {
 		return false
 	}
-	return len(c.windows) == 0 || c.inSlot(t)
+	return !c.HasWindows(t) || c.inSlot(t)
+}
+
+// HasWindows reports whether the calculator holds a window that counts at t: a
+// weekly one, or a once window that has not ended by t. Without one it is open
+// whenever no freeze covers the moment. It never turns from false to true as t
+// grows.
+func (c *Calculator) HasWindows(t time.Time) bool {
+	return len(c.windows) > 0 || c.onceUntil.After(t)
 }
 
 // NextStart returns the first instant at or after t at which a run may start:
-// t itself when [Calculator.OpenAt] is true. Every window lists at least one
-// day and freezes are finite, so such an instant always exists.
+// t itself when [Calculator.OpenAt] is true. Every weekly window lists at least
+// one day, and freezes and once windows are finite, so such an instant always
+// exists. A freeze that covers what is left of the once windows therefore
+// leaves the incarnation open at its end, since by then they have ended.
 func (c *Calculator) NextStart(t time.Time) time.Time {
 	cand := t
 	for {
@@ -108,12 +134,13 @@ func (c *Calculator) NextStart(t time.Time) time.Time {
 			cand = *end
 			continue
 		}
-		if len(c.windows) == 0 {
+		if !c.HasWindows(cand) {
 			return cand
 		}
 		next := c.slotFrom(cand)
-		// Zero only for a window with no days, which NewCalculator refuses;
-		// returning beats looping back to the year 1.
+		// Zero only for a weekly window with no days, which NewCalculator
+		// refuses: a once window that counts at cand has not ended, so it holds
+		// cand or starts after it. Returning beats looping back to the year 1.
 		if next.IsZero() || next.Equal(cand) {
 			return next
 		}
@@ -156,11 +183,22 @@ func (c *Calculator) FreezeEnd(t time.Time) time.Time {
 	return t
 }
 
-// Text renders the windows for a human or a scenario, e.g.
-// `mon,thu 02:00 for 3h (Europe/Moscow); sat 23:00 for 4h30m (UTC)`, in the
-// order the windows were given; `any time` when there are none. Freezes are not
-// part of it.
-func (c *Calculator) Text() string { return c.text }
+// Text renders the windows that count at t for a human or a scenario, e.g.
+// `mon,thu 02:00 for 3h (Europe/Moscow); once 2026-11-05T22:00:00Z for 6h`, in
+// the order the windows were given; `any time` when there are none. A once
+// window is written in UTC, like `next_start`. Freezes are not part of it.
+func (c *Calculator) Text(t time.Time) string {
+	texts := make([]string, 0, len(c.texts))
+	for _, w := range c.texts {
+		if w.until.IsZero() || w.until.After(t) {
+			texts = append(texts, w.text)
+		}
+	}
+	if len(texts) == 0 {
+		return "any time"
+	}
+	return strings.Join(texts, "; ")
+}
 
 // Status bundles the three answers for t.
 func (c *Calculator) Status(t time.Time) Status {
@@ -185,14 +223,22 @@ func (c *Calculator) inSlot(t time.Time) bool {
 	return c.slotFrom(t).Equal(t)
 }
 
-// slotFrom returns t when t is inside a slot, else the earliest slot start
-// after t. It looks two local days back: a slot is at most 24h of elapsed
-// time, but one starting late on a spring-forward day gains the skipped hour
-// on the wall clock and runs into the day after next (sat 23:30 for 24h in
-// Berlin ends Monday 00:30). Eight days ahead always reaches every listed
-// weekday.
+// slotFrom returns t when t is inside a slot or a once window, else the
+// earliest start of either after t. For a weekly window it looks two local days
+// back: a slot is at most 24h of elapsed time, but one starting late on a
+// spring-forward day gains the skipped hour on the wall clock and runs into the
+// day after next (sat 23:30 for 24h in Berlin ends Monday 00:30). Eight days
+// ahead always reaches every listed weekday.
 func (c *Calculator) slotFrom(t time.Time) time.Time {
 	var next time.Time
+	for _, s := range c.once {
+		if !t.Before(s.start) && t.Before(s.end) {
+			return t
+		}
+		if s.start.After(t) && (next.IsZero() || s.start.Before(next)) {
+			next = s.start
+		}
+	}
 	for _, r := range c.windows {
 		lt := t.In(r.loc)
 		for i := -2; i <= 8; i++ {
@@ -247,6 +293,15 @@ func wallClock(y int, m time.Month, d, minute int, loc *time.Location) time.Time
 
 func weekdayOf(day string) time.Weekday {
 	return time.Weekday((slices.Index(weekdays, day) + 1) % 7)
+}
+
+// formatSpan is formatMinutes for a once window, whose bounds may carry
+// seconds.
+func formatSpan(d time.Duration) string {
+	if d%time.Minute == 0 {
+		return formatMinutes(int(d / time.Minute))
+	}
+	return d.String()
 }
 
 func formatMinutes(m int) string {

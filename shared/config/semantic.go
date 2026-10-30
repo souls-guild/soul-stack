@@ -91,6 +91,12 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 		out = append(out, checkCadencePollProfile(root, c.CadenceScheduler)...)
 		out = append(out, cadenceIntervalBelowFloorWarn(root, c.CadenceScheduler)...)
 	}
+	// maintenance (ADR-0093, NIM-1137): a retention of 0 keeps for ever, so a
+	// negative one is refused rather than resolved to the default.
+	if c.Maintenance != nil {
+		out = append(out, checkRetention(root, "$.maintenance.window_retention", c.Maintenance.WindowRetention)...)
+		out = append(out, checkRetention(root, "$.maintenance.freeze_retention", c.Maintenance.FreezeRetention)...)
+	}
 	// console (ADR-0074): operator-facing envelope of the console plane. Only
 	// format and range here; the defaults are resolved in the daemon. There is
 	// nothing to validate about WHETHER sessions are recorded — recording is not
@@ -622,6 +628,22 @@ func checkDuration(root *ast.MappingNode, yamlPath, val string) []diag.Diagnosti
 		Message: fmt.Sprintf("invalid duration %q: %v", val, err),
 		Hint:    hint,
 	})}
+}
+
+// checkRetention is [checkDuration] for a retention, which may be 0 but not
+// negative.
+func checkRetention(root *ast.MappingNode, yamlPath, val string) []diag.Diagnostic {
+	if out := checkDuration(root, yamlPath, val); out != nil || val == "" {
+		return out
+	}
+	if d, _ := ParseDuration(val); d < 0 {
+		return []diag.Diagnostic{atPath(root, yamlPath, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "value_out_of_range",
+			Message: fmt.Sprintf("retention must not be negative, got %s (0 keeps for ever)", val),
+		})}
+	}
+	return nil
 }
 
 // minCadencePollFloor is the absolute minimum poll_floor (ADR-048 "Adaptive

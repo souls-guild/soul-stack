@@ -2322,7 +2322,7 @@ components:
           format: date-time
           type: string
         open_now:
-          description: "a run may start now: inside a slot of some window (or there are no windows) and outside every freeze"
+          description: "a run may start now: inside some window (or there are no windows, a once window that has ended being none) and outside every freeze"
           type: boolean
       required:
         - open_now
@@ -2337,32 +2337,45 @@ components:
           format: date-time
           type: string
         days:
-          description: weekdays a slot starts on, in calendar order
+          description: "weekly: weekdays a slot starts on, in calendar order"
           items:
             type: string
           type:
             - array
             - "null"
         duration_minutes:
+          description: "weekly: slot length in minutes"
           format: int64
           type: integer
+        ends_at:
+          description: "once: end, exclusive. A once window whose end has passed is listed until the Reaper deletes it, and no longer counts"
+          format: date-time
+          type: string
         id:
           description: window id (UUID)
           type: string
+        kind:
+          description: weekly or once
+          enum:
+            - weekly
+            - once
+          type: string
         start_time:
-          description: HH:MM in timezone
+          description: "weekly: HH:MM in timezone"
+          type: string
+        starts_at:
+          description: "once: start, inclusive"
+          format: date-time
           type: string
         timezone:
+          description: "weekly: IANA zone of start_time"
           type: string
         updated_at:
           format: date-time
           type: string
       required:
         - id
-        - days
-        - start_time
-        - duration_minutes
-        - timezone
+        - kind
         - comment
         - created_at
         - updated_at
@@ -2390,7 +2403,7 @@ components:
           maxLength: 500
           type: string
         days:
-          description: weekdays a slot starts on; a slot belongs to the day it starts on, even when it crosses midnight
+          description: "weekly, required: weekdays a slot starts on; a slot belongs to the day it starts on, even when it crosses midnight"
           items:
             enum:
               - mon
@@ -2408,25 +2421,34 @@ components:
             - "null"
           uniqueItems: true
         duration_minutes:
-          description: slot length in minutes of elapsed time, at most a day; a slot over a DST change still lasts exactly this long
+          description: "weekly, required: slot length in minutes of elapsed time, at most a day; a slot over a DST change still lasts exactly this long"
           format: int64
           maximum: 1440
           minimum: 1
           type: integer
+        ends_at:
+          description: "once, required: end of the window, RFC 3339 (exclusive); after starts_at. Once it has passed the window no longer counts"
+          format: date-time
+          type: string
+        kind:
+          description: weekly (the default when omitted) or once; each kind takes only its own fields, and a field of the other kind is refused with 422 naming it
+          enum:
+            - weekly
+            - once
+          type: string
         start_time:
-          description: wall-clock start of each slot, HH:MM, in timezone. A time the spring DST change skips moves forward by the gap; a time the autumn change repeats is its first occurrence
+          description: "weekly, required: wall-clock start of each slot, HH:MM, in timezone. A time the spring DST change skips moves forward by the gap; a time the autumn change repeats is its first occurrence"
           pattern: ^([01][0-9]|2[0-3]):[0-5][0-9]$
           type: string
+        starts_at:
+          description: "once, required: start of the window, RFC 3339 (inclusive)"
+          format: date-time
+          type: string
         timezone:
-          description: IANA zone of start_time, e.g. Europe/Moscow or UTC; names that depend on the Keeper host (Local, localtime, posix/...) are refused
+          description: "weekly, required: IANA zone of start_time, e.g. Europe/Moscow or UTC; names that depend on the Keeper host (Local, localtime, posix/...) are refused"
           maxLength: 64
           minLength: 1
           type: string
-      required:
-        - days
-        - start_time
-        - duration_minutes
-        - timezone
       type: object
     ModuleCatalogItem:
       additionalProperties: false
@@ -9417,7 +9439,7 @@ paths:
         - choir
   /v1/incarnations/{id}/freezes:
     get:
-      description: Every freeze of the incarnation, past ones included, ordered by start. During a freeze no automatic run starts, with or without windows; a forced run needs explicit consent. Permission incarnation.get. Read-only, no audit.
+      description: Every freeze of the incarnation, past ones included until the Reaper deletes them after `maintenance.freeze_retention`, ordered by start. During a freeze no automatic run starts, with or without windows; a forced run needs explicit consent. Permission incarnation.get. Read-only, no audit.
       operationId: listIncarnationFreezes
       parameters:
         - description: incarnation id
@@ -9773,7 +9795,7 @@ paths:
         - incarnation
   /v1/incarnations/{id}/maintenance-windows:
     get:
-      description: "Every maintenance window of the incarnation in creation order, plus `status`: whether a run may start now (`open_now`), the first instant it may (`next_start`, now itself when open) and the freeze in force (`active_freeze`). The status is computed over the windows AND the freezes: no windows means any time, and a freeze closes everything while it lasts. A window gates the start of a run; a started run is never cut off when the slot ends. Permission incarnation.get. Read-only, no audit."
+      description: "Every maintenance window of the incarnation in creation order, plus `status`: whether a run may start now (`open_now`), the first instant it may (`next_start`, now itself when open) and the freeze in force (`active_freeze`). The status is computed over the windows AND the freezes: no windows means any time, and a freeze closes everything while it lasts. A `once` window counts only until its `ends_at`; one that has ended is still listed until the Reaper deletes it after `maintenance.window_retention`, and an incarnation whose only windows have ended is open at any time. A window gates the start of a run; a started run is never cut off when the slot ends. Permission incarnation.get. Read-only, no audit."
       operationId: listIncarnationMaintenanceWindows
       parameters:
         - description: incarnation id
@@ -9818,7 +9840,7 @@ paths:
       tags:
         - incarnation
     post:
-      description: "Adds a weekly slot set: on each listed day a slot starts at start_time in timezone and lasts duration_minutes (may cross midnight). 422 on a refused field or when the incarnation already has 50 windows. Audit maintenance_window.created. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start."
+      description: "Adds a window. `kind: weekly` (the default when `kind` is omitted) is a slot set: on each listed day a slot starts at start_time in timezone and lasts duration_minutes (may cross midnight). `kind: once` is one interval [starts_at, ends_at). Each kind takes only its own fields: a field of the other kind is 422 naming it. 422 also on any other refused field or when the incarnation already has 50 windows of both kinds together. Audit maintenance_window.created. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start."
       operationId: createIncarnationMaintenanceWindow
       parameters:
         - description: incarnation id
@@ -9870,7 +9892,7 @@ paths:
         - incarnation
   /v1/incarnations/{id}/maintenance-windows/{window_id}:
     delete:
-      description: "Deletes the window. Not idempotent: deleting it again is 404. Deleting the last window makes the incarnation open at any time outside a freeze. Audit maintenance_window.deleted. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start."
+      description: "Deletes the window. Not idempotent: deleting it again is 404. Deleting the last window that counts makes the incarnation open at any time outside a freeze. Audit maintenance_window.deleted. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start."
       operationId: deleteIncarnationMaintenanceWindow
       parameters:
         - description: incarnation id
@@ -9918,7 +9940,7 @@ paths:
       tags:
         - incarnation
     put:
-      description: Replaces every field of the window. 404 when no window with that id belongs to this incarnation. Audit maintenance_window.updated, with the fields before the change under `previous`. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start.
+      description: Replaces every field of the window, its kind included; an omitted `kind` is `weekly`. 404 when no window with that id belongs to this incarnation. Audit maintenance_window.updated, with the fields before the change under `previous`. Permission incarnation.maintenance-set, the same incarnation scope as every other incarnation mutation; allowed in any incarnation status, since a window only decides when a FUTURE run may start.
       operationId: updateIncarnationMaintenanceWindow
       parameters:
         - description: incarnation id

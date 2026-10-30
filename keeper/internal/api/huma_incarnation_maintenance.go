@@ -117,10 +117,13 @@ func registerHumaIncarnationMaintenanceWrite(humaAPI huma.API, incH *handlers.In
 
 func windowSpec(r MaintenanceWindowRequest) maintenance.WindowSpec {
 	return maintenance.WindowSpec{
+		Kind:            r.Kind,
 		Days:            r.Days,
 		StartTime:       r.StartTime,
 		DurationMinutes: r.DurationMinutes,
 		Timezone:        r.Timezone,
+		StartsAt:        r.StartsAt,
+		EndsAt:          r.EndsAt,
 		Comment:         r.Comment,
 	}
 }
@@ -130,16 +133,20 @@ func freezeSpec(r FreezeRequest) maintenance.FreezeSpec {
 }
 
 func newMaintenanceWindowReply(w maintenance.Window) MaintenanceWindow {
-	return MaintenanceWindow{
-		ID:              w.ID,
-		Days:            w.Days,
-		StartTime:       w.StartTime,
-		DurationMinutes: w.DurationMinutes,
-		Timezone:        w.Timezone,
-		Comment:         w.Comment,
-		CreatedAt:       w.CreatedAt,
-		UpdatedAt:       w.UpdatedAt,
+	out := MaintenanceWindow{
+		ID:        w.ID,
+		Kind:      w.Kind,
+		Comment:   w.Comment,
+		CreatedAt: w.CreatedAt,
+		UpdatedAt: w.UpdatedAt,
 	}
+	if w.Kind == maintenance.KindOnce {
+		starts, ends := w.StartsAt.UTC(), w.EndsAt.UTC()
+		out.StartsAt, out.EndsAt = &starts, &ends
+		return out
+	}
+	out.Days, out.StartTime, out.DurationMinutes, out.Timezone = w.Days, w.StartTime, w.DurationMinutes, w.Timezone
+	return out
 }
 
 func newFreezeReply(f maintenance.Freeze) Freeze {

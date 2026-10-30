@@ -3,7 +3,7 @@
 **Status:** accepted 2026-10-27; number 0093 stamped at its squash-merge into `release/NIM-1069`, shipped without the service-TLS epic NIM-1070 by release NIM-1133
 **Amends:** [ADR-043](0043-voyage.md) (a `scheduled` Voyage becomes the carrier of a run deferred to a window, and the claim asks the gate; the create request gains `in_maintenance_window` and `confirm_freeze`), [ADR-046](0046-cadence.md) (the run recipe gains `in_maintenance_window`; a spawn during a freeze is deferred, never confirmed), [ADR-010](0010-templating.md) (render CEL gains its first time-dependent function; NIM-1073 records the function and its contexts), [ADR-017](0017-keeper-side-core.md) (the Reaper's cert rotation never starts during a freeze; recorded in NIM-1077's amendment of that ADR, which takes effect with epic NIM-1070)
 **Leaves unchanged:** [ADR-0091](0091-scenario-linear-barrier.md) — a run that has started is not cut off, and nothing here reaches inside it; [ADR-028](0028-rbac-storage.md) — one name joins the closed permission catalog, the model does not move
-**Implemented by:** NIM-1072 (calculator, tables, REST, RBAC, audit, MCP), NIM-1073 (CEL), NIM-1074 (run and Voyage fields, deferral, freeze consent), NIM-1075 (Cadence), NIM-1076 (UI) — epic NIM-1069; NIM-1081 (cert rotation in a window) takes effect with epic NIM-1070; this ADR is NIM-1071
+**Implemented by:** NIM-1072 (calculator, tables, REST, RBAC, audit, MCP), NIM-1073 (CEL), NIM-1074 (run and Voyage fields, deferral, freeze consent), NIM-1075 (Cadence), NIM-1076 (UI) — epic NIM-1069; NIM-1137 (one-off windows, the cleanup of past ones; [amendment 2026-10-30](#amendment-2026-10-30-nim-1137-one-off-windows-and-the-cleanup-of-past-ones)); NIM-1081 (cert rotation in a window) takes effect with epic NIM-1070; this ADR is NIM-1071
 
 ### Problem
 
@@ -35,7 +35,7 @@ worker claims a `scheduled` row only once `schedule_at <= NOW()`
 
 | Entity | What it is |
 |---|---|
-| `MaintenanceWindow` | A weekly slot: days of the week, a start time, a duration, an IANA timezone, a comment. An incarnation has zero or more, and their union is the time a run may start. |
+| `MaintenanceWindow` | A weekly slot: days of the week, a start time, a duration, an IANA timezone, a comment. An incarnation has zero or more, and their union is the time a run may start. A second kind, one interval, joined with NIM-1137 (amendment 2026-10-30). |
 | `Freeze` | A one-off interval: a start, an end, a comment. While it lasts no automatic run starts, and an operator's run needs explicit consent (§5). |
 
 - Each row belongs to exactly one incarnation. There is no shared named window and no reference
@@ -47,7 +47,7 @@ worker claims a `scheduled` row only once `schedule_at <= NOW()`
 - Windows and freezes are separate tables because they answer different questions: a window says
   when a run *may* start, a freeze says when it *must not*. A freeze is not a window with a
   negative sign, and a freeze with no window around it is meaningful.
-- Each window keeps its own timezone, so a slot means the same wall-clock time on both sides of a
+- Each weekly window keeps its own timezone, so a slot means the same wall-clock time on both sides of a
   DST change. A slot may cross midnight, slots may overlap, and a freeze may cut a slot.
 
 **2. A window gates the START of a run, and nothing else.**
@@ -216,7 +216,7 @@ host has no window of its own (Not in v1).
   12-10 02:00" is the server's answer, not a second implementation of the calculator in the browser
   (NIM-1072).
 - `keeper/internal/maintenance` holds one pure calculator over an incarnation's windows and freezes,
-  with the clock injected: `OpenAt(t)`, `NextStart(t)`, `ActiveFreeze(t)`, `Text()`. Every consumer
+  with the clock injected: `OpenAt(t)`, `NextStart(t)`, `ActiveFreeze(t)`, `Text(t)`. Every consumer
   (the run path, the Voyage claim, Conductor, CEL, the status block, and with NIM-1070 the Reaper) asks it, so
   "open" means one thing everywhere.
 - The field `in_maintenance_window` and the function `in_maintenance_window()` share a spelling and
@@ -224,7 +224,7 @@ host has no window of its own (Not in v1).
   now". They never meet in one place: a request field is not CEL, and CEL has no request.
 
 **8. Scenarios can read the window.** `incarnation.maintenance_window.text` is the windows in
-human-readable form (`Text()`), `incarnation.maintenance_window.next_start` is `NextStart(now)`,
+human-readable form (`Text(now)`), `incarnation.maintenance_window.next_start` is `NextStart(now)`,
 and `in_maintenance_window()` is `OpenAt(now)`. With no windows and no active freeze the function
 is true and `next_start` is now. A scenario uses them to say in a notification when the next window
 is, or to skip a disruptive step outside one. Settled by NIM-1073 (2026-10-28):
@@ -245,7 +245,7 @@ is, or to skip a disruptive step outside one. Settled by NIM-1073 (2026-10-28):
   `execution_model: staged`, `compute:`, service `vars/`, `validate:`, migration-CEL. The full list
   is in
   [templating.md §2.3](../templating.md#23-registered-cel-functions-starting-minimum).
-- `next_start` is an RFC3339 string in UTC; with no windows `text` is `""`, not `Text()`'s
+- `next_start` is an RFC3339 string in UTC; with no windows `text` is `""`, not `Text`'s
   `any time`.
 
 ### Not in v1
@@ -323,3 +323,70 @@ Built by NIM-1075 (`keeper/internal/conductor/cadence_window.go`, `cadence_spawn
 - **`in_maintenance_window` on a `kind: command` recipe is refused** with 422, and by the CHECK
   `cadences_in_maintenance_window_scenario_only` (migration 135): it would be accepted and do
   nothing. A command spawn reads no windows and no freezes.
+
+### Amendment 2026-10-30 (NIM-1137): one-off windows and the cleanup of past ones
+
+Decided by the user at the demo of release NIM-1133 (2026-10-30); built by NIM-1137
+(`keeper/internal/maintenance`, migration 136, `keeper/internal/reaper/maintenance_purge.go`). The
+use case: an incarnation has its regular windows, a problem needs a fix tomorrow, and the operator
+adds a window for that one occasion and schedules the work into it.
+
+- **A window has a kind, `weekly` or `once`, in the same list** (§1's table gains a second shape;
+  the user chose it over a separate entity beside the freeze). `weekly` is the slot set of §1.
+  `once` is `{kind: once, starts_at, ends_at, comment}`, the half-open `[starts_at, ends_at)` in
+  RFC 3339, `ends_at` after `starts_at`, of any length, kept to the whole second — the precision
+  the render reads a window at (§8). A request without `kind` is `weekly`, so a client written
+  before the kinds means what it meant. **Each kind carries exactly its own fields:** a body that
+  sends a field of the other kind, empty or not, is refused with 422 (MCP `validation-failed`)
+  naming that field, never read past; the column `incarnation_maintenance_windows.kind` and the
+  CHECK `incarnation_maintenance_windows_kind_columns` hold the same rule in the table. A `PUT`
+  replaces the kind with the rest. This is not the rejected "one table with a kind column for
+  windows and freezes": both kinds say when a run *may* start, so only the calculator branches on
+  the kind, and a freeze stays its own table.
+- **The cap of 50 counts both kinds, past `once` windows included**, because the cap keeps the
+  calculator small and the calculator still reads a past row until it is deleted. With the default
+  retention a past one leaves within three days; with `maintenance.window_retention: 0`, or with
+  the Reaper off, an incarnation that adds a window per occasion reaches the cap, and the 422 asks
+  the operator to delete one.
+- **A past one-off window does not count.** "Open" of §2 reads: no freeze covers the moment, and
+  the incarnation has no window **that counts at that moment**, or the moment is inside one. A
+  weekly window always counts; a `once` window counts until its `ends_at`. So an incarnation whose
+  only windows are `once` windows that have ended is open at any time outside a freeze, and
+  `HasWindows(t)` never turns from false to true as `t` grows. A freeze cuts a `once` window as it
+  cuts a slot. `CommonStart`, the claim, the Cadence tick, the status block and the scenario CEL
+  read this one answer; `Text(t)` lists only the windows that count at `t`, a `once` window as
+  `once 2026-11-05T22:00:00Z for 6h` (UTC, like `next_start`).
+- **The calculator decides it per instant, `NextStart` included**, so a forecast agrees with the
+  gate that will be asked when it comes (§2: the gate is decided when the run starts). Three
+  consequences, accepted with the rule:
+  - an incarnation with no weekly window, whose `once` windows a stretch of freezes covers to their
+    end, has its next start at the end of that stretch, outside any window: by then they have
+    ended, and a request made at that moment would start at once;
+  - a run deferred into a `once` window and claimed only after its `ends_at` (a Keeper down, a
+    queue held) starts at the claim, outside any window, when the incarnation has no weekly window;
+    with one, it is deferred to the next slot as usual;
+  - in a run over several incarnations, a target's `once` window that meets no common moment with
+    the others is passed over, not refused: the common start lands after it ends, where that
+    target no longer has a window. Only weekly windows can fail to meet (§3).
+- **Past ones are deleted, each kind of row by its own key** (runtime settings of
+  [ADR-0073](0073-keeper-runtime-config-pg.md), so a change needs no restart):
+  `maintenance.window_retention` deletes a `once` window whose `ends_at` is more than that long
+  ago, `maintenance.freeze_retention` a freeze; both default to `72h`, and `0` keeps them for ever.
+  Settings keys `cfg_maintenance_window_retention` / `cfg_maintenance_freeze_retention`, bounds
+  `[0s, 8760h]` on a `PUT`; `keeper.yml` refuses only a negative value. A weekly window is never
+  deleted. Until a past row is deleted it is still listed by the API, so the UI can hide it behind
+  "show past" the way it hides past freezes.
+- **The Reaper deletes them**, on every pass of an enabled Reaper, one `reaper.batch_size` batch of
+  each per pass, by the database clock, longest-ended first (rules
+  `purge_expired_maintenance_windows` / `purge_expired_freezes`, not `reaper.rules` entries: the
+  retention is their switch). `reaper.dry_run` applies: a dry pass deletes nothing. Each deleted
+  row is audited `maintenance_window.deleted` / `freeze.deleted` with the row's fields and
+  `reason: "expired"`, `source: keeper_internal`, no archon — the Reaper's convention, best-effort
+  after the delete commits. Every window event now carries `kind`. **Deleting a past row changes no
+  answer**, since it no longer counted — up to the skew between the Keeper's clock, which the
+  status block reads, and the database's, which the delete reads: no deferred run loses a window
+  it waits for, because a window it waits for has not ended.
+- **Copying windows from another incarnation is the UI's** (NIM-1076; the copy of the kinds is
+  NIM-1136): it copies the weekly windows and the `once` ones that have not ended, not past ones.
+  Core has no copy endpoint; until NIM-1136, the UI of NIM-1076 copies every listed window as a
+  weekly one, and a `once` window among them is refused with 422.

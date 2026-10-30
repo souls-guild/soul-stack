@@ -1447,12 +1447,15 @@ const (
 
 	// An Archon changed an incarnation's maintenance windows or freezes (epic
 	// NIM-1069, NIM-1072), through REST or MCP under incarnation.maintenance-set.
-	// Payload `{incarnation_id, id, ...fields}`: a window's `days`, `start_time`,
-	// `duration_minutes`, `timezone`, `comment`, or a freeze's `starts_at`,
-	// `ends_at`, `comment`, as they are after the change (as they were, for a
-	// delete). `.updated` adds `previous`, the fields before it, read off the
-	// same statement. keeper/internal/maintenance builds the payload for both
-	// surfaces.
+	// Payload `{incarnation_id, id, ...fields}`: a window's `kind` and the fields
+	// of that kind (`days`, `start_time`, `duration_minutes`, `timezone` for
+	// weekly, `starts_at`, `ends_at` for once) and `comment`, or a freeze's
+	// `starts_at`, `ends_at`, `comment`, as they are after the change (as they
+	// were, for a delete). `.updated` adds `previous`, the fields before it, read
+	// off the same statement. A `.deleted` the Reaper writes for a once window
+	// or a freeze past its retention (NIM-1137) has no archon and adds
+	// `reason: "expired"`. keeper/internal/maintenance builds the payload for
+	// every writer.
 	EventMaintenanceWindowCreated EventType = "maintenance_window.created"
 	EventMaintenanceWindowUpdated EventType = "maintenance_window.updated"
 	EventMaintenanceWindowDeleted EventType = "maintenance_window.deleted"
