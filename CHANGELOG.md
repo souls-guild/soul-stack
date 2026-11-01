@@ -387,6 +387,19 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **When each step of a run started and how long it ran (NIM-1170, epic NIM-1169).**
+  `GET /v1/incarnations/{id}/runs/{apply_id}/tasks` gains `started_at` / `finished_at` on every
+  task and on every host of `hosts[]`, RFC 3339 in UTC, each omitted when the Keeper has no such
+  instant. A task started when its first host did and finished when its last host did; while any
+  host it was sent to has not finished it, it carries `started_at` alone. The Keeper stamps them
+  itself: a Keeper task (`on: keeper`) around its own execution, a Soul task when the host is sent
+  its tasks (the first of them) or when the result of the task before it arrives, so a Soul task's
+  start includes the network, and the task right after an `async:` one carries no start or a
+  late one. A host whose run ended
+  without reporting a task has that task finish when its run did. The times live in the new table
+  `apply_run_plan_host_times` (migration 137), cascading from `apply_run_plan`; runs started
+  before it carry no times.
+
 - **A cluster default for incarnations without windows (NIM-1138, epic NIM-1069,
   [ADR-0093 amendment](docs/adr/0093-maintenance-window.md#amendment-2026-10-30-nim-1138-the-cluster-default-for-incarnations-without-windows)).**
   The runtime setting `maintenance.default_windows` (`PUT /v1/settings/cfg_maintenance_default_windows`,

@@ -258,7 +258,7 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 		Attempt: int32(run.Attempt),
 		Passage: int32(run.Passage),
 	}
-	if err := c.deps.Deps.Outbound.SendApply(ctx, run.SID, req); err != nil {
+	if err := sendTimed(ctx, c.deps.Deps.Outbound, c.deps.Deps.DB, log, run.SID, req); err != nil {
 		// SendApply returned an error: delivery is NOT CONFIRMED (a network
 		// failure could have hit AFTER transit — the host may have received the
 		// job). Terminal to failed (UpdateWardStatus allows dispatched→failed) —

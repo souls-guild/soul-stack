@@ -296,10 +296,12 @@ type RunTaskErrorEntry struct {
 // error — only on the failed host (omitempty). status — TASK_STATUS_*
 // (keeperv1.TaskStatus).
 type RunTaskHostEntry struct {
-	SID    string                  `json:"sid" pattern:"^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$" doc:"host FQDN OR synthetic run sid (keeper=on:keeper)"`
-	Status string                  `json:"status" enum:"TASK_STATUS_UNSPECIFIED,TASK_STATUS_OK,TASK_STATUS_CHANGED,TASK_STATUS_SKIPPED,TASK_STATUS_FAILED,TASK_STATUS_TIMED_OUT,TASK_STATUS_CANCELLED"`
-	Output *map[string]interface{} `json:"output,omitempty"`
-	Error  *RunTaskErrorEntry      `json:"error,omitempty"`
+	SID        string                  `json:"sid" pattern:"^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$" doc:"host FQDN OR synthetic run sid (keeper=on:keeper)"`
+	Status     string                  `json:"status" enum:"TASK_STATUS_UNSPECIFIED,TASK_STATUS_OK,TASK_STATUS_CHANGED,TASK_STATUS_SKIPPED,TASK_STATUS_FAILED,TASK_STATUS_TIMED_OUT,TASK_STATUS_CANCELLED"`
+	Output     *map[string]interface{} `json:"output,omitempty"`
+	Error      *RunTaskErrorEntry      `json:"error,omitempty"`
+	StartedAt  *time.Time              `json:"started_at,omitempty" doc:"when the host started the task, as the Keeper saw it: a Keeper task (sid keeper) when it began to run; a Soul task when the host was sent its tasks (the first of them) or when the result of the task before it arrived, so it includes the network. Absent when the Keeper saw no start: a run older than this field, or the task right after an async: one, which runs beside it (that task may also read a late start)"`
+	FinishedAt *time.Time              `json:"finished_at,omitempty" doc:"when the host finished the task: a Keeper task when it returned, a Soul task when its result arrived; for a host whose run ended without reporting the task, when that run ended. Absent when the Keeper recorded no finish"`
 }
 
 // RunTaskEntry — native element of tasks[]: plan of one task (host-invariant
@@ -315,6 +317,8 @@ type RunTaskEntry struct {
 	Params       *map[string]interface{} `json:"params,omitempty" doc:"masked input of the task; a top-level key whose value differs between hosts reads <per-host>, and params_by_host carries its values"`
 	ParamsByHost *RunTaskParamsByHost    `json:"params_by_host,omitempty" doc:"present only when the task's masked input differs between hosts: every leaf of the input with the values it took and the hosts that took each"`
 	Waves        [][]string              `json:"waves,omitempty" doc:"present only for a host task of a serial: step sent in more than one wave: the step's hosts per wave in dispatch order, the same on every host task of the step. It lists the hosts of a wave the run ended before; a host the Keeper settled before the first wave without sending it anything is in no wave"`
+	StartedAt    *time.Time              `json:"started_at,omitempty" doc:"when the first host started the task, hosts still running it included (hosts[] lists only hosts with a result). Absent until a host started it"`
+	FinishedAt   *time.Time              `json:"finished_at,omitempty" doc:"when the last host finished the task; absent while any host it was sent to has not finished it. A host in a later wave of a serial: step is sent the task only with its wave, so between waves the task reads finished"`
 	Hosts        []RunTaskHostEntry      `json:"hosts"`
 }
 

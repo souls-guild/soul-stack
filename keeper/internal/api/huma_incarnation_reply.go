@@ -258,7 +258,7 @@ func newRunTasksReply(v handlers.RunTasksView) RunTasksReply {
 	for i, t := range v.Tasks {
 		hosts := make([]RunTaskHostEntry, len(t.Hosts))
 		for j, hs := range t.Hosts {
-			he := RunTaskHostEntry{SID: hs.SID, Status: hs.Status, Output: ptrMap(hs.Output)}
+			he := RunTaskHostEntry{SID: hs.SID, Status: hs.Status, Output: ptrMap(hs.Output), StartedAt: hs.StartedAt, FinishedAt: hs.FinishedAt}
 			if hs.Error != nil {
 				he.Error = &RunTaskErrorEntry{Code: hs.Error.Code, Module: hs.Error.Module, Message: hs.Error.Message}
 			}
@@ -272,6 +272,8 @@ func newRunTasksReply(v handlers.RunTasksView) RunTasksReply {
 			Params:       ptrMap(t.Params),
 			ParamsByHost: newRunTaskParamsByHost(t.ParamsByHost),
 			Waves:        t.Waves,
+			StartedAt:    t.StartedAt,
+			FinishedAt:   t.FinishedAt,
 			Hosts:        hosts,
 		}
 	}

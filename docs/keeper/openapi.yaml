@@ -3987,6 +3987,10 @@ components:
     RunTaskEntry:
       additionalProperties: false
       properties:
+        finished_at:
+          description: "when the last host finished the task; absent while any host it was sent to has not finished it. A host in a later wave of a serial: step is sent the task only with its wave, so between waves the task reads finished"
+          format: date-time
+          type: string
         hosts:
           items:
             $ref: "#/components/schemas/RunTaskHostEntry"
@@ -4011,6 +4015,10 @@ components:
         plan_index:
           format: int64
           type: integer
+        started_at:
+          description: when the first host started the task, hosts still running it included (hosts[] lists only hosts with a result). Absent until a host started it
+          format: date-time
+          type: string
         waves:
           description: "present only for a host task of a serial: step sent in more than one wave: the step's hosts per wave in dispatch order, the same on every host task of the step. It lists the hosts of a wave the run ended before; a host the Keeper settled before the first wave without sending it anything is in no wave"
           items:
@@ -4047,12 +4055,20 @@ components:
       properties:
         error:
           $ref: "#/components/schemas/RunTaskErrorEntry"
+        finished_at:
+          description: "when the host finished the task: a Keeper task when it returned, a Soul task when its result arrived; for a host whose run ended without reporting the task, when that run ended. Absent when the Keeper recorded no finish"
+          format: date-time
+          type: string
         output:
           additionalProperties: {}
           type: object
         sid:
           description: host FQDN OR synthetic run sid (keeper=on:keeper)
           pattern: ^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$
+          type: string
+        started_at:
+          description: "when the host started the task, as the Keeper saw it: a Keeper task (sid keeper) when it began to run; a Soul task when the host was sent its tasks (the first of them) or when the result of the task before it arrived, so it includes the network. Absent when the Keeper saw no start: a run older than this field, or the task right after an async: one, which runs beside it (that task may also read a late start)"
+          format: date-time
           type: string
         status:
           enum:

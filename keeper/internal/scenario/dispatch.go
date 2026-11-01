@@ -673,7 +673,7 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 		// incarnation stays in applying. The WARN right before SendApply
 		// catches this at the point of dispatch.
 		r.warnCrossKeeperDispatch(ctx, sid, log)
-		if err := r.deps.Outbound.SendApply(ctx, sid, req); err != nil {
+		if err := sendTimed(ctx, r.deps.Outbound, r.applyDB, log, sid, req); err != nil {
 			// error_summary is exposed via barrier/status_details (GET
 			// incarnation, no masking). The SendApply err carries req with
 			// raw (resolved) Params and could echo a secret in a

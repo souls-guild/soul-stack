@@ -14,10 +14,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// TaskEvent records one task's terminal event for host sid across all four
-// channels: the `task.executed` audit event, the failure reason on the host's
-// `apply_runs` row, its advisory notices, the `register:` accumulator, and the
-// operator SSE frame.
+// TaskEvent records one task's terminal event for host sid across its channels:
+// the `task.executed` audit event, the failure reason on the host's `apply_runs`
+// row, its advisory notices, the `register:` accumulator, the task's time row, and
+// the operator SSE frame.
 //
 // A nil event is ignored (the caller has already logged the protocol violation
 // it represents; the two transports word that differently).
@@ -33,7 +33,28 @@ func (s *Sink) TaskEvent(ctx context.Context, sid string, ev *keeperv1.TaskEvent
 	s.recordTaskFailure(ctx, sid, ev)
 	s.recordRunNotices(ctx, sid, ev)
 	s.accumulateRegister(ctx, sid, ev)
+	s.finishTaskTime(ctx, sid, ev)
 	s.publishTaskExecuted(sid, ev)
+}
+
+// finishTaskTime closes the task's time row and starts the host's next one
+// (NIM-1170): the Soul reports a task only when it ends, so the end of one is the
+// Keeper's start of the next — except after a cancelled task, past which the host
+// runs nothing and reports nothing. A task the Keeper never sent has no row and is
+// left alone. A write error is only logged: it costs the run view a time, never the
+// apply stream.
+func (s *Sink) finishTaskTime(ctx context.Context, sid string, ev *keeperv1.TaskEvent) {
+	if s.deps.DB == nil {
+		return
+	}
+	startNext := ev.GetStatus() != keeperv1.TaskStatus_TASK_STATUS_CANCELLED
+	if err := applyrun.FinishHostTask(ctx, s.deps.DB, ev.GetApplyId(), sid, int(ev.GetPlanIndex()), startNext); err != nil {
+		s.deps.Logger.Warn("applysink: recording the task's finish failed, the run view shows it unfinished",
+			slog.String("sid", sid),
+			slog.String("apply_id", ev.GetApplyId()),
+			slog.Int64("plan_index", int64(ev.GetPlanIndex())),
+			slog.Any("error", err))
+	}
 }
 
 // JudgedTaskEvent records a task outcome the Keeper writes for a host whose failure

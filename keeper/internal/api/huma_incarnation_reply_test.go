@@ -266,3 +266,31 @@ func TestGoldenWire_RunHostHandled(t *testing.T) {
 		t.Errorf("hosts wire =\n%s\nwant\n%s", got, want)
 	}
 }
+
+// NIM-1170: a task's and a host's times ride the wire as RFC 3339 instants, a task
+// still running carries started_at alone, and a task without times omits both keys,
+// so the body of a run older than the times is byte-for-byte what it was.
+func TestGoldenWire_RunTaskTimes(t *testing.T) {
+	start := time.Date(2026, 10, 31, 12, 0, 1, 0, time.UTC)
+	end := start.Add(15 * time.Minute)
+	reply := newRunTasksReply(handlers.RunTasksView{Tasks: []handlers.RunTaskView{
+		{PlanIndex: 0, Name: "apply", Module: "core.ssh.apply", StartedAt: &start, FinishedAt: &end,
+			Hosts: []handlers.RunTaskHostView{{SID: "keeper", Status: "TASK_STATUS_CHANGED", StartedAt: &start, FinishedAt: &end}}},
+		{PlanIndex: 1, Name: "wait", Module: "core.exec.run", StartedAt: &end},
+		{PlanIndex: 2, Name: "report", Module: "core.exec.run"},
+	}})
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(reply); err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := `{"tasks":[` +
+		`{"plan_index":0,"passage":0,"id":"apply","module":"core.ssh.apply","started_at":"2026-10-31T12:00:01Z","finished_at":"2026-10-31T12:15:01Z",` +
+		`"hosts":[{"sid":"keeper","status":"TASK_STATUS_CHANGED","started_at":"2026-10-31T12:00:01Z","finished_at":"2026-10-31T12:15:01Z"}]},` +
+		`{"plan_index":1,"passage":0,"id":"wait","module":"core.exec.run","started_at":"2026-10-31T12:15:01Z","hosts":[]},` +
+		`{"plan_index":2,"passage":0,"id":"report","module":"core.exec.run","hosts":[]}]}`
+	if got := string(bytes.TrimSpace(buf.Bytes())); got != want {
+		t.Errorf("wire =\n%s\nwant\n%s", got, want)
+	}
+}

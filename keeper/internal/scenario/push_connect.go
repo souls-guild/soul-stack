@@ -21,7 +21,7 @@ var errPushUnreachable = errors.New(soulUnavailable)
 // session that broke after the command started is never retried: that would
 // apply the step twice.
 func (r *Runner) sendPush(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, sid string, route push.Route, req *keeperv1.ApplyRequest, onEvent push.EventHandler) (*keeperv1.RunResult, error) {
-	rr, err := r.deps.PushApply.SendApply(ctx, sid, route, req, onEvent)
+	rr, err := r.pushOnce(ctx, log, sid, route, req, onEvent)
 	if spec.executionModel != ExecutionLinear || !errors.Is(err, push.ErrConnect) {
 		return rr, err
 	}
@@ -43,9 +43,21 @@ func (r *Runner) sendPush(ctx context.Context, spec RunSpec, log *slog.Logger, p
 		if !time.Now().Before(deadline) {
 			return nil, fmt.Errorf("%w: no SSH session within soul_timeout (%s): %w", errPushUnreachable, soulTimeout, err)
 		}
-		rr, err = r.deps.PushApply.SendApply(ctx, sid, route, req, onEvent)
+		rr, err = r.pushOnce(ctx, log, sid, route, req, onEvent)
 		if !errors.Is(err, push.ErrConnect) {
 			return rr, err
 		}
 	}
+}
+
+// pushOnce is one SSH attempt at a push host's step, its time rows written first
+// as [sendTimed] writes them for a stream host. A failed connect started nothing
+// on the host.
+func (r *Runner) pushOnce(ctx context.Context, log *slog.Logger, sid string, route push.Route, req *keeperv1.ApplyRequest, onEvent push.EventHandler) (*keeperv1.RunResult, error) {
+	stampSent(ctx, r.applyDB, log, sid, req)
+	rr, err := r.deps.PushApply.SendApply(ctx, sid, route, req, onEvent)
+	if errors.Is(err, push.ErrConnect) {
+		forgetSent(ctx, r.applyDB, log, sid, req)
+	}
+	return rr, err
 }

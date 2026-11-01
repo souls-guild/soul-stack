@@ -218,7 +218,7 @@ func (w *stepWatch) trySend(ctx context.Context, run *applyrun.ApplyRun, req *ke
 			return false, fmt.Errorf("scenario: insert apply_run (%s): %w", run.SID, err)
 		}
 	}
-	if serr := w.r.deps.Outbound.SendApply(ctx, run.SID, req); serr != nil {
+	if serr := sendTimed(ctx, w.r.deps.Outbound, w.r.applyDB, w.log, run.SID, req); serr != nil {
 		// Every SendApply failure is a missing or saturated stream — the request is
 		// only queued here — so none of them is a reason to fail the host before
 		// soul_timeout.

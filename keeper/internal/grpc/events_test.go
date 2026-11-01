@@ -23,16 +23,23 @@ import (
 )
 
 // fakeApplyRunDB — an applyrun.ExecQueryRower stub: a configurable QueryRow for
-// SelectIncarnationByApplyID and an Exec counter for UpdateStatus.
+// SelectIncarnationByApplyID and an Exec counter for UpdateStatus. The task's time
+// row (NIM-1170), written for every TaskEvent, is kept apart in timeArgs so the
+// counter still counts the apply_runs writes.
 type fakeApplyRunDB struct {
 	queryRow  func() pgx.Row
 	execCalls int
 	execSQL   string
 	execArgs  []any
 	execTag   pgconn.CommandTag
+	timeArgs  [][]any
 }
 
 func (f *fakeApplyRunDB) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, "apply_run_plan_host_times") {
+		f.timeArgs = append(f.timeArgs, args)
+		return pgconn.NewCommandTag("UPDATE 1"), nil
+	}
 	f.execCalls++
 	f.execSQL = sql
 	f.execArgs = args
@@ -258,6 +265,34 @@ func TestHandleTaskEvent_OKDoesNotRecordFailure(t *testing.T) {
 	})
 	if ardb.execCalls != 0 {
 		t.Errorf("execCalls = %d, want 0 (OK does not write a failure)", ardb.execCalls)
+	}
+}
+
+// NIM-1170: a Soul's TaskEvent finishes the task's time row on the stream path —
+// the global plan_index, not the local task_idx — whatever the outcome.
+func TestHandleTaskEvent_FinishesTheTaskTime(t *testing.T) {
+	ardb := &fakeApplyRunDB{}
+	h := newTestHandlerWithApplyRun(t, &recordingAudit{}, ardb)
+	h.handleTaskEvent(context.Background(), "host.example.com", "session-1", &keeperv1.TaskEvent{
+		ApplyId: "01HAPPLY", TaskIdx: 1, PlanIndex: 6, Status: keeperv1.TaskStatus_TASK_STATUS_OK,
+	})
+	if len(ardb.timeArgs) != 1 {
+		t.Fatalf("time writes = %d, want 1", len(ardb.timeArgs))
+	}
+	if got := ardb.timeArgs[0]; got[0] != "01HAPPLY" || got[1] != "host.example.com" || got[2] != 6 || got[3] != true {
+		t.Errorf("time write args = %v, want (01HAPPLY, host.example.com, 6, start the next)", got)
+	}
+}
+
+// A cancelled task ends its host's run: its finish starts no next task.
+func TestHandleTaskEvent_CancelledTaskStartsNoNextTime(t *testing.T) {
+	ardb := &fakeApplyRunDB{}
+	h := newTestHandlerWithApplyRun(t, &recordingAudit{}, ardb)
+	h.handleTaskEvent(context.Background(), "host.example.com", "session-1", &keeperv1.TaskEvent{
+		ApplyId: "01HAPPLY", TaskIdx: 2, PlanIndex: 2, Status: keeperv1.TaskStatus_TASK_STATUS_CANCELLED,
+	})
+	if len(ardb.timeArgs) != 1 || ardb.timeArgs[0][3] != false {
+		t.Fatalf("time writes = %v, want one that starts no next task", ardb.timeArgs)
 	}
 }
 

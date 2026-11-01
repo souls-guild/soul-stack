@@ -1534,12 +1534,15 @@ type RunTaskErrorView struct {
 }
 
 // RunTaskHostView — per-host result of one run task (projection of audit task.executed):
-// status + output (register_data) + error. Output/Error are nil if absent.
+// status + output (register_data) + error, and when the host started and finished
+// the task (NIM-1170). Output/Error/StartedAt/FinishedAt are nil if absent.
 type RunTaskHostView struct {
-	SID    string
-	Status string
-	Output map[string]any
-	Error  *RunTaskErrorView
+	SID        string
+	Status     string
+	Output     map[string]any
+	Error      *RunTaskErrorView
+	StartedAt  *time.Time
+	FinishedAt *time.Time
 }
 
 // RunTaskView — plan of one run task (host-invariant name/module/passage) +
@@ -1554,6 +1557,9 @@ type RunTaskHostView struct {
 // Waves is set only for a host task of a `serial:` step sent in more than one wave
 // (NIM-996): the step's hosts per wave, in dispatch order, the same on every host
 // task of the step.
+//
+// StartedAt/FinishedAt fold the task's host times ([taskTimes]); nil until a host
+// started it, FinishedAt nil while a host it was sent to has not finished it.
 type RunTaskView struct {
 	PlanIndex    int
 	Passage      int
@@ -1562,6 +1568,8 @@ type RunTaskView struct {
 	Params       map[string]any
 	ParamsByHost *applyrun.ParamsByHost
 	Waves        [][]string
+	StartedAt    *time.Time
+	FinishedAt   *time.Time
 	Hosts        []RunTaskHostView
 }
 
@@ -1628,6 +1636,23 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 		hostParamsByPlan[hp.PlanIndex] = append(hostParamsByPlan[hp.PlanIndex], hp)
 	}
 
+	// Best-effort too: without these rows the tasks answer with no times.
+	times, err := applyrun.SelectRunTaskTimes(ctx, h.db, applyID)
+	if err != nil {
+		h.logger.Warn("incarnation.run-tasks: task times select failed, showing the tasks without times",
+			slog.String("name", name), slog.String("apply_id", applyID), slog.Any("error", err))
+		times = nil
+	}
+	timesByPlan := map[int][]applyrun.RunTaskTime{}
+	timeOf := map[int]map[string]applyrun.RunTaskTime{}
+	for _, tt := range times {
+		timesByPlan[tt.PlanIndex] = append(timesByPlan[tt.PlanIndex], tt)
+		if timeOf[tt.PlanIndex] == nil {
+			timeOf[tt.PlanIndex] = map[string]applyrun.RunTaskTime{}
+		}
+		timeOf[tt.PlanIndex][tt.SID] = tt
+	}
+
 	// per-host results from audit (task.executed), grouped plan_index → sid.
 	// runTasksAudit=nil (unit without a reader) → plan WITHOUT hosts. The last result on
 	// (plan_index, sid) wins (execs are ordered by time, later overwrites).
@@ -1665,6 +1690,9 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 	for _, p := range plan {
 		hosts := make([]RunTaskHostView, 0, len(byPlanHost[p.PlanIndex]))
 		for _, hv := range byPlanHost[p.PlanIndex] {
+			if tt, ok := timeOf[p.PlanIndex][hv.SID]; ok {
+				hv.StartedAt, hv.FinishedAt = tt.StartedAt, tt.FinishedAt
+			}
 			hosts = append(hosts, hv)
 		}
 		sort.Slice(hosts, func(i, j int) bool { return hosts[i].SID < hosts[j].SID })
@@ -1674,6 +1702,7 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 				slog.String("apply_id", applyID), slog.Int("plan_index", p.PlanIndex), slog.Any("error", gerr))
 			byHost = nil
 		}
+		started, finished := taskTimes(timesByPlan[p.PlanIndex])
 		tasks = append(tasks, RunTaskView{
 			PlanIndex:    p.PlanIndex,
 			Passage:      p.Passage,
@@ -1682,10 +1711,34 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 			Params:       runPlanParams(p.Params), // S1b: masked params from apply_run_plan (NULL→nil)
 			ParamsByHost: byHost,
 			Waves:        runPlanWaves(p.Waves),
+			StartedAt:    started,
+			FinishedAt:   finished,
 			Hosts:        hosts,
 		})
 	}
 	return RunTasksView{Tasks: tasks}, nil
+}
+
+// taskTimes folds a task's host time rows into the task's own: it started when its
+// first host did, and finished when its last host did — not before, so while any
+// host it was sent to has not finished it, it has no finish. A host in a later
+// wave of a `serial:` step has no row until its wave is sent: between waves the
+// step reads finished, and the next wave takes the finish back.
+func taskTimes(rows []applyrun.RunTaskTime) (started, finished *time.Time) {
+	for _, r := range rows {
+		if r.StartedAt != nil && (started == nil || r.StartedAt.Before(*started)) {
+			started = r.StartedAt
+		}
+	}
+	for _, r := range rows {
+		if r.FinishedAt == nil {
+			return started, nil
+		}
+		if finished == nil || r.FinishedAt.After(*finished) {
+			finished = r.FinishedAt
+		}
+	}
+	return started, finished
 }
 
 // runPlanParams deserializes a task's masked params from the stored jsonb
