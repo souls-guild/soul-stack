@@ -175,6 +175,15 @@ func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 		if err != nil {
 			return nil, fmt.Errorf("push: teleport identity %q: TLS-config: %w", cfg.IdentityFile, err)
 		}
+		leaf, err := presentedCertificate(tlsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("push: teleport identity %q: TLS certificate: %w", cfg.IdentityFile, err)
+		}
+		// The proxy refuses an expired identity for every node alike, so this is
+		// checked on each attempt: one that lapses mid join wait ends the wait.
+		if time.Now().After(leaf.NotAfter) {
+			return nil, fmt.Errorf("push: %w", &TeleportIdentityError{Path: cfg.IdentityFile, NotAfter: leaf.NotAfter})
+		}
 		if cfg.AlpnUpgrade {
 			// alpn mode: the inner gRPC-mTLS goes to the real Teleport proxy
 			// (Teleport-CA cert, SAN `teleport.cluster.local`) — a merged trust
@@ -216,6 +225,11 @@ func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 		conn, _, err := proxyClient.DialHost(ctx, target, cfg.Cluster, nil)
 		if err != nil {
 			_ = proxyClient.Close()
+			// proxy.NewClient does not wait for the connection, so the proxy's
+			// verdict on the identity arrives here, with the first stream.
+			if isProxyRefusal(err) {
+				return nil, fmt.Errorf("push: %w", &TeleportIdentityError{Path: cfg.IdentityFile, NotAfter: leaf.NotAfter, Err: fmt.Errorf("%s: %w", cfg.ProxyAddr, err)})
+			}
 			return nil, fmt.Errorf("push: teleport dial-host %s (cluster %q): %w", target, cfg.Cluster, err)
 		}
 

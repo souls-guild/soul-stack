@@ -425,6 +425,22 @@ func writeValidIdentityFile(t *testing.T) string {
 // refusal of an identity without one can be tested against the same fixture.
 func writeIdentityFile(t *testing.T, withHostCA bool) string {
 	t.Helper()
+	return writeIdentityFileWith(t, identityOpts{withHostCA: withHostCA})
+}
+
+// identityOpts shapes the TLS half of a fixture identity. The zero value is the
+// self-signed certificate valid for the next hour that [writeIdentityFile] writes.
+type identityOpts struct {
+	withHostCA bool
+	// tlsNotAfter is the TLS certificate's expiry; zero is an hour from now.
+	tlsNotAfter time.Time
+	// tlsCA, when set, signs the TLS certificate for client auth and becomes the
+	// identity's TLS CA, so a proxy fixture under the same CA is trusted.
+	tlsCA *testTLSCA
+}
+
+func writeIdentityFileWith(t *testing.T, o identityOpts) string {
+	t.Helper()
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -459,14 +475,23 @@ func writeIdentityFile(t *testing.T, withHostCA bool) string {
 	}
 	sshCertPEM := ssh.MarshalAuthorizedKey(cert)
 
-	// X.509 TLS cert, self-signed with the same ed25519 key.
+	// X.509 TLS cert under the same ed25519 key, self-signed unless o.tlsCA is set.
+	notAfter := o.tlsNotAfter
+	if notAfter.IsZero() {
+		notAfter = time.Now().Add(time.Hour)
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
+		NotBefore:    notAfter.Add(-2 * time.Hour),
+		NotAfter:     notAfter,
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	parent, signerKey := tmpl, any(priv)
+	if o.tlsCA != nil {
+		tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+		parent, signerKey = o.tlsCA.cert, o.tlsCA.key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, pub, signerKey)
 	if err != nil {
 		t.Fatalf("create x509 cert: %v", err)
 	}
@@ -476,7 +501,10 @@ func writeIdentityFile(t *testing.T, withHostCA bool) string {
 		PrivateKey: privPEM,
 		Certs:      identityfile.Certs{SSH: sshCertPEM, TLS: tlsCertPEM},
 	}
-	if withHostCA {
+	if o.tlsCA != nil {
+		idf.CACerts.TLS = [][]byte{o.tlsCA.pem}
+	}
+	if o.withHostCA {
 		caPub, _, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
 			t.Fatalf("ed25519 host CA keygen: %v", err)

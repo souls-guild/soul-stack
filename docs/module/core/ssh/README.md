@@ -208,6 +208,7 @@ waits, and only the connect (NIM-872,
 | Bastion declines on policy (`administratively prohibited`) | **fails at once** | retried |
 | "node offline or does not exist" from the proxy | — | retried |
 | Host key refused (host cert not from our CA; on teleport, a key the identity's CA did not sign, or an identity with no SSH CA at all) | **fails at once** | **fails at once** (NIM-905) |
+| The Keeper's own identity expired, or refused by the proxy (a TLS alert about its certificate, `PermissionDenied`, `Unauthenticated`) | — | **fails at once** (NIM-1171) |
 | Any other SSH handshake rejection (our key refused) | **fails at once** | retried |
 | `Authorize` deny, `Sign` failure | **fails at once** (both are upstream of the retry) | not called |
 | A step exiting non-zero | **fails at once** | fails at once |
@@ -228,6 +229,15 @@ whatever the transport: a key that was refused is refused again, and fifteen
 minutes of retries would only turn the refusal into a timeout. A Teleport identity
 file that carries no SSH CA can verify no host at all; the Keeper refuses to start
 with one, and an identity reissued without one fails each step at once.
+
+**Nor is the Keeper's own identity waited on** (NIM-1171). The proxy judges it
+before it looks for the node, so an expired or refused identity is refused for
+every host alike. Each attempt first checks the identity's TLS certificate against
+the clock and, once it has expired, fails without contacting the proxy, naming the
+file and the moment; a refusal from the proxy itself fails the same way, as a typed
+`push.TeleportIdentityError`. gRPC hands a TLS alert back as text only, so that one
+case is recognised by the alert's text as crypto/tls prints it. The Keeper still
+starts with an expired identity: tbot may renew it before the first step.
 
 **Two consequences worth planning for.**
 

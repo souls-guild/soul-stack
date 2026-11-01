@@ -469,9 +469,9 @@ func TestSSHApply_FailedDeliveryAuditsNoTasks(t *testing.T) {
 	}
 }
 
-// ★ GUARD (decision 10). On teleport the join wait retries every error, so a
-// host-key refusal has to stop it by type — on BOTH states, since the dial is
-// shared.
+// ★ GUARD (decision 10). On teleport the join wait retries every error but a
+// refused Keeper identity, so a host-key refusal has to stop it by type — on BOTH
+// states, since the dial is shared.
 //
 // Mutation: drop the push.IsHostKeyError check in dialWithJoinRetry and this
 // reddens — the refusal is dialed until the budget runs out.
@@ -504,6 +504,53 @@ func TestSSH_TeleportDoesNotRetryAHostKeyRefusal(t *testing.T) {
 				t.Errorf("refusal = %q reads as a wait that ran out", msg)
 			}
 		})
+	}
+}
+
+// ★ GUARD (NIM-1171). The Keeper's own Teleport identity expired, or refused by the
+// proxy, fails the host on the first attempt on both states: the proxy refuses it
+// for every node alike, so the join wait has nothing to wait for. The live run this
+// guards dialed each of three hosts 63-66 times over fifteen minutes.
+//
+// Mutation: make teleportJoinRetry.retryable return true for every error again and
+// this reddens — each refusal is dialed until the budget runs out.
+func TestSSH_TeleportDoesNotRetryARefusedKeeperIdentity(t *testing.T) {
+	expiry := time.Date(2026, 10, 31, 9, 12, 0, 0, time.UTC)
+	refusals := map[string]error{
+		"expired before dialing": &push.TeleportIdentityError{Path: "/var/lib/keeper/teleport/identity", NotAfter: expiry},
+		"refused by the proxy": &push.TeleportIdentityError{Path: "/var/lib/keeper/teleport/identity", NotAfter: expiry,
+			Err: errors.New(`opening proxy stream: rpc error: code = Unavailable desc = connection error: desc = "error reading server preface: remote error: tls: expired certificate"`)},
+	}
+	for name, refusal := range refusals {
+		for _, state := range []string{StateRun, StateApply} {
+			t.Run(name+"/"+state, func(t *testing.T) {
+				var attempts atomic.Int32
+				h := newApplyHarness(t)
+				h.mod.Dial = func(context.Context, push.DialConfig) (push.Session, error) {
+					attempts.Add(1)
+					return nil, fmt.Errorf("push: %w", refusal)
+				}
+				p := applyParams(t, vm("vm-1.example"))
+				if state == StateRun {
+					p = params(t, map[string]any{"ssh_provider": "teleport", "hosts": []any{vm("vm-1.example")}, "steps": writeTokenSteps()})
+				}
+				p.Fields["join_wait_timeout"] = structpb.NewStringValue("200ms")
+				st := internaltest.NewApplyStreamCtx(h.ctx())
+				if err := h.mod.Apply(&pluginv1.ApplyRequest{State: state, Params: p}, st); err != nil {
+					t.Fatalf("Apply: %v", err)
+				}
+				msg := mustFail(t, st)
+				if attempts.Load() != 1 {
+					t.Errorf("dialed %d time(s), want one — the proxy refuses this identity for every node", attempts.Load())
+				}
+				if strings.Contains(msg, "join_wait_timeout") {
+					t.Errorf("refusal = %q reads as a wait that ran out", msg)
+				}
+				if !strings.Contains(msg, "/var/lib/keeper/teleport/identity") {
+					t.Errorf("refusal = %q does not name the identity file", msg)
+				}
+			})
+		}
 	}
 }
 

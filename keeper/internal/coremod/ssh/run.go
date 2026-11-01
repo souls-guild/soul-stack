@@ -536,14 +536,16 @@ type joinRetry struct {
 }
 
 var (
-	// teleportJoinRetry retries every Dial error but a refused host key, which
-	// dialWithJoinRetry stops on for both transports. In this mode the proxy answers
-	// for a node that has not enrolled yet with an ordinary error string ("node
-	// offline or does not exist") that carries no shape a classifier could read,
-	// and the transport, user-auth and host-verify a direct dial could fail on
-	// separately all happen behind that same one call.
+	// teleportJoinRetry retries every Dial error but two: a refused host key, which
+	// dialWithJoinRetry stops on for both transports, and the Keeper's own identity
+	// expired or refused by the proxy (NIM-1171) — the proxy judges that before it
+	// looks for the node, so no join can change the answer. In this mode the proxy
+	// answers for a node that has not enrolled yet with an ordinary error string
+	// ("node offline or does not exist") that carries no shape a classifier could
+	// read, and the transport, user-auth and host-verify a direct dial could fail
+	// on separately all happen behind that same one call.
 	teleportJoinRetry = joinRetry{
-		retryable: func(error) bool { return true },
+		retryable: func(err error) bool { return !push.IsTeleportIdentityError(err) },
 		unreached: "node not reachable via Teleport",
 	}
 	// directJoinRetry retries only a failure to establish the TCP connection.
@@ -597,8 +599,9 @@ func (m *Module) dialWithJoinRetry(ctx context.Context, cfg push.DialConfig, joi
 		lastErr = err
 
 		// A host whose key was refused, or which nothing can verify, will be
-		// refused again: on teleport `retryable` is true for every error, so this
-		// is what keeps a rejected key from turning into a join timeout (NIM-905).
+		// refused again: on teleport `retryable` admits every error but a refused
+		// Keeper identity, so this is what keeps a rejected key from turning into a
+		// join timeout (NIM-905).
 		if push.IsHostKeyError(err) || !r.retryable(err) {
 			return nil, err
 		}
