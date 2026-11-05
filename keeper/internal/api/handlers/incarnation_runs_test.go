@@ -435,3 +435,77 @@ func TestRunDetailTyped_NoticesReachTheView(t *testing.T) {
 		t.Errorf("Hosts[1] reported nothing but carries %+v", got)
 	}
 }
+
+// TestRunDetailTyped_ServiceVersion pins the projection of the run's service git ref:
+// the ref of the one recipe document the store picks (which document wins is
+// applyrun's SQL, pinned by TestIntegration_RunDetailServiceVersion), empty when
+// there is none or it does not parse — never the incarnation's current pin.
+func TestRunDetailTyped_ServiceVersion(t *testing.T) {
+	now := time.Now().UTC()
+	cases := []struct {
+		name string
+		doc  []byte
+		want string
+	}{
+		{name: "the document names the ref", doc: []byte(`{"service_ref":{"Name":"dragonfly","Git":"file:///srv/dragonfly","Ref":"v1.4.0"},"scenario_name":"create"}`), want: "v1.4.0"},
+		{name: "no document: empty", want: ""},
+		{name: "NULL document: empty", doc: []byte{}, want: ""},
+		{name: "a linear step's recipe pins a commit, not the ref", doc: []byte(`{"service_ref":{"Name":"dragonfly","Git":"file:///srv/dragonfly","Ref":"9f1c2b7e4d3a5f6081726354a5b6c7d8e9f0a1b2"},"scenario_name":"create","step":{"roster":["h1"],"tasks":[0]}}`), want: ""},
+		{name: "an unparseable document does not fail the read", doc: []byte(`{"service_ref":`), want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var asked bool
+			db := &fakeIncDB{
+				selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
+				applyRunsRows: func() (pgx.Rows, error) {
+					return &applyRunsHostRows{rows: []applyRunHostRow{{
+						sid: "host-a", status: "success", scenario: "create", startedAt: now, finishedAt: &now,
+					}}}, nil
+				},
+				runServiceRefRow: func(applyID, name string) pgx.Row {
+					asked = true
+					if applyID != validApplyID || name != "redis-prod" {
+						t.Errorf("service ref asked for (%q, %q), want (%q, redis-prod)", applyID, name, validApplyID)
+					}
+					if tc.doc == nil {
+						return errRow{err: pgx.ErrNoRows}
+					}
+					return staticRow{values: []any{tc.doc}}
+				},
+			}
+			h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+			d, err := h.RunDetailTyped(context.Background(), "redis-prod", validApplyID, allowScope)
+			if err != nil {
+				t.Fatalf("RunDetailTyped: %v", err)
+			}
+			if !asked {
+				t.Fatal("the run's service ref was never read")
+			}
+			if d.ServiceVersion != tc.want {
+				t.Errorf("ServiceVersion = %q, want %q", d.ServiceVersion, tc.want)
+			}
+		})
+	}
+}
+
+// TestRunDetailTyped_ServiceRefErrorFails — a failing read of the run's service ref is
+// a failed run read (500), not a silently missing version: an absent field must mean
+// "the run recorded none", never "the database did not answer".
+func TestRunDetailTyped_ServiceRefErrorFails(t *testing.T) {
+	now := time.Now().UTC()
+	db := &fakeIncDB{
+		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
+		applyRunsRows: func() (pgx.Rows, error) {
+			return &applyRunsHostRows{rows: []applyRunHostRow{{
+				sid: "keeper", status: "success", scenario: "create", startedAt: now, finishedAt: &now,
+			}}}, nil
+		},
+		runServiceRefRow: func(string, string) pgx.Row {
+			return errRow{err: errors.New("connection reset")}
+		},
+	}
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+	_, err := h.RunDetailTyped(context.Background(), "redis-prod", validApplyID, allowScope)
+	requireProblemStatus(t, err, 500)
+}

@@ -1409,6 +1409,9 @@ type RunDetailView struct {
 	Input        map[string]any
 	// Failure — why a run that did not succeed stopped (NIM-1000); nil otherwise.
 	Failure *applyrun.RunFailure
+	// ServiceVersion — the service git ref the run rendered with; "" when the run
+	// recorded none ([applyrun.RunDetail.ServiceVersion]).
+	ServiceVersion string
 }
 
 // IncarnationRunsReply — typed envelope of GET /v1/incarnations/{id}/runs (handler-native:
@@ -1514,15 +1517,16 @@ func (h *IncarnationHandler) RunDetailTyped(ctx context.Context, name, applyID s
 		})
 	}
 	return RunDetailView{
-		ApplyID:      d.ApplyID,
-		Scenario:     d.Scenario,
-		Status:       string(d.Status),
-		StartedAt:    d.StartedAt,
-		FinishedAt:   d.FinishedAt,
-		StartedByAID: d.StartedByAID,
-		Hosts:        hosts,
-		Input:        d.Input,
-		Failure:      d.Failure,
+		ApplyID:        d.ApplyID,
+		Scenario:       d.Scenario,
+		Status:         string(d.Status),
+		StartedAt:      d.StartedAt,
+		FinishedAt:     d.FinishedAt,
+		StartedByAID:   d.StartedByAID,
+		Hosts:          hosts,
+		Input:          d.Input,
+		Failure:        d.Failure,
+		ServiceVersion: d.ServiceVersion,
 	}, nil
 }
 

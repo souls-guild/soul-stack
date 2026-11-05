@@ -3,8 +3,11 @@ package applyrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Read-view of incarnation runs for the Operator API (GET /v1/incarnations/{id}/runs
@@ -144,6 +147,10 @@ type RunDetail struct {
 	// Failure is why a run that did not succeed stopped, nil otherwise
 	// ([SelectRunFailures]).
 	Failure *RunFailure
+	// ServiceVersion is the git ref of the Service repo the run rendered with,
+	// as the run named it ([selectRunServiceRefSQL]). An upgrade moves the
+	// incarnation's pin and not this. Empty when the run recorded none.
+	ServiceVersion string
 }
 
 // AggregateRunStatus collapses a run into [RunStatus]. dropped is how many of its
@@ -278,6 +285,27 @@ WHERE ar.apply_id = $1 AND ar.incarnation_name = $2
 ORDER BY ar.sid ASC, ar.passage ASC
 `
 
+// selectRunServiceRefSQL picks the one [Recipe] document that names the run's
+// service ref: the `run` snapshot of its terminal history row, else the recipe
+// of any planned row. COALESCE evaluates the second subquery only when the first
+// is NULL, and that one stops at the first row carrying a recipe without reading
+// any recipe's content — a linear run polled every few seconds has hosts × steps
+// rows of them. Rows written by the inline and keeper-side paths carry no
+// recipe, and some terminals record no snapshot (a RunResult commit, an orphan
+// release), so a run can have neither: the answer is then NULL.
+const selectRunServiceRefSQL = `
+SELECT COALESCE(
+    (SELECT run
+     FROM state_history
+     WHERE apply_id = $1 AND incarnation_name = $2 AND run IS NOT NULL
+     ORDER BY at DESC, history_id DESC
+     LIMIT 1),
+    (SELECT recipe
+     FROM apply_runs
+     WHERE apply_id = $1 AND incarnation_name = $2 AND recipe IS NOT NULL
+     LIMIT 1))
+`
+
 // SelectRunDetail returns the details of a single run: all host×passage rows for an
 // apply_id belonging to the specified incarnation (WHERE on both — enforcement of
 // "apply_id of this incarnation"; foreign apply_id returns 0 rows → [ErrApplyRunNotFound]).
@@ -382,7 +410,28 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 		return nil, err
 	}
 	detail.Failure = failures[applyID]
+	var doc []byte
+	switch err := db.QueryRow(ctx, selectRunServiceRefSQL, applyID, incarnationName).Scan(&doc); {
+	case err == nil:
+		detail.ServiceVersion = recipeServiceRef(doc)
+	case !errors.Is(err, pgx.ErrNoRows):
+		return nil, fmt.Errorf("applyrun: run service ref: %w", err)
+	}
 	return &detail, nil
+}
+
+// recipeServiceRef is the service git ref a jsonb [Recipe] carries; "" for NULL
+// or an unparseable document, which must not fail the read of the run itself.
+//
+// A linear step's recipe names none: it pins the commit the run loaded
+// (scenario.stepRecipe), not the ref the run was asked for. A run's planned
+// rows are all step rows or none, so the one row read decides for the run.
+func recipeServiceRef(b []byte) string {
+	r, err := UnmarshalRecipe(b)
+	if err != nil || r == nil || r.Step != nil {
+		return ""
+	}
+	return r.ServiceRef.Ref
 }
 
 const selectRunStatusSQL = `

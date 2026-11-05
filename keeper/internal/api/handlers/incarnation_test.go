@@ -97,6 +97,9 @@ type fakeIncDB struct {
 	// FROM apply_runs). nil → empty list / 0 (for scope-gate/empty tests).
 	applyRunsCountRow func(sql string) pgx.Row
 	applyRunsRows     func() (pgx.Rows, error)
+	// runServiceRefRow — the run detail's read of the one recipe document naming
+	// the run's service ref (applyrun.selectRunServiceRefSQL). nil → no such row.
+	runServiceRefRow func(applyID, name string) pgx.Row
 
 	// Run-tasks read-view (GET .../runs/{apply_id}/tasks, NIM-37): the EXISTS probe
 	// of whether the run belongs to the incarnation (runExistsRow, nil → true = "belongs")
@@ -171,6 +174,14 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		// create was started with. One source now — the recipe probe below is gone.
 		return staticRow{values: []any{"create", "01HFAILEDRUN00000000000000",
 			[]byte(`{"scenario_name":"create","input":{"version":"7.2"}}`)}}
+	}
+	// The run detail's service-ref read also names `recipe IS NOT NULL`, so it is
+	// matched before the rerun guard below.
+	if strings.Contains(sql, "SELECT COALESCE(") && strings.Contains(sql, "FROM state_history") {
+		if f.runServiceRefRow != nil {
+			return f.runServiceRefRow(args[0].(string), args[1].(string))
+		}
+		return errRow{err: pgx.ErrNoRows}
 	}
 	if strings.Contains(sql, "FROM apply_runs") && strings.Contains(sql, "recipe IS NOT NULL") {
 		// The rerun path must never come here again: its input is the history

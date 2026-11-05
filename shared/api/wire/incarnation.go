@@ -271,15 +271,16 @@ type RunNoticeEntry struct {
 // masking on the write path, ***MASKED*** for secrets); nil for old runs / input-less
 // paths.
 type RunDetailReply struct {
-	ApplyID      string                  `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
-	Scenario     string                  `json:"scenario"`
-	Status       string                  `json:"status" enum:"applying,success,failed,partial_failed,cancelled"`
-	StartedAt    time.Time               `json:"started_at"`
-	FinishedAt   *time.Time              `json:"finished_at,omitempty"`
-	StartedByAID *string                 `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
-	Hosts        []RunHostStatusEntry    `json:"hosts"`
-	Input        *map[string]interface{} `json:"input,omitempty"`
-	Failure      *RunFailureEntry        `json:"failure,omitempty"`
+	ApplyID        string                  `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
+	Scenario       string                  `json:"scenario"`
+	Status         string                  `json:"status" enum:"applying,success,failed,partial_failed,cancelled"`
+	StartedAt      time.Time               `json:"started_at"`
+	FinishedAt     *time.Time              `json:"finished_at,omitempty"`
+	StartedByAID   *string                 `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
+	Hosts          []RunHostStatusEntry    `json:"hosts"`
+	Input          *map[string]interface{} `json:"input,omitempty"`
+	Failure        *RunFailureEntry        `json:"failure,omitempty"`
+	ServiceVersion string                  `json:"service_version,omitempty" doc:"git ref of the Service repo the run was asked to render, as the incarnation's service_version names one (a tag or branch, never the commit a linear step pinned); an upgrade since does not change it. Absent when the run recorded none: no snapshot on its terminal history row and no recipe on a non-step planned line - a linear run before its terminal, an inline or keeper-side run, a terminal that wrote no snapshot"`
 }
 
 // RunTaskErrorEntry — native error part of a per-host task outcome (FAILED/TIMED_OUT).

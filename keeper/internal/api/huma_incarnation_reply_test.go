@@ -294,3 +294,31 @@ func TestGoldenWire_RunTaskTimes(t *testing.T) {
 		t.Errorf("wire =\n%s\nwant\n%s", got, want)
 	}
 }
+
+// TestGoldenWire_RunServiceVersion pins `service_version` on the run detail: present
+// with the ref the run recorded, absent when it recorded none, so a client tells "this
+// run's version" from "unknown" by the key alone and an old run's body is unchanged.
+func TestGoldenWire_RunServiceVersion(t *testing.T) {
+	started := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
+	encode := func(v handlers.RunDetailView) string {
+		t.Helper()
+		b, err := json.Marshal(newRunDetailReply(v))
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return string(b)
+	}
+	base := handlers.RunDetailView{ApplyID: "01M4XGKBF2WQS7SBZP6QDKV9GA", Scenario: "create", Status: "success", StartedAt: started}
+
+	withRef := base
+	withRef.ServiceVersion = "v1.4.0"
+	want := `{"apply_id":"01M4XGKBF2WQS7SBZP6QDKV9GA","scenario":"create","status":"success","started_at":"2026-11-04T10:00:00Z","hosts":[],"service_version":"v1.4.0"}`
+	if got := encode(withRef); got != want {
+		t.Errorf("wire =\n%s\nwant\n%s", got, want)
+	}
+
+	want = `{"apply_id":"01M4XGKBF2WQS7SBZP6QDKV9GA","scenario":"create","status":"success","started_at":"2026-11-04T10:00:00Z","hosts":[]}`
+	if got := encode(base); got != want {
+		t.Errorf("wire without a recorded ref =\n%s\nwant\n%s", got, want)
+	}
+}

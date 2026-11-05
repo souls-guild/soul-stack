@@ -237,15 +237,16 @@ func newRunDetailReply(v handlers.RunDetailView) RunDetailReply {
 		input = &v.Input
 	}
 	return RunDetailReply{
-		ApplyID:      v.ApplyID,
-		Scenario:     v.Scenario,
-		Status:       v.Status,
-		StartedAt:    v.StartedAt,
-		FinishedAt:   v.FinishedAt,
-		StartedByAID: v.StartedByAID,
-		Hosts:        hosts,
-		Input:        input,
-		Failure:      newRunFailureEntry(v.Failure),
+		ApplyID:        v.ApplyID,
+		Scenario:       v.Scenario,
+		Status:         v.Status,
+		StartedAt:      v.StartedAt,
+		FinishedAt:     v.FinishedAt,
+		StartedByAID:   v.StartedByAID,
+		Hosts:          hosts,
+		Input:          input,
+		Failure:        newRunFailureEntry(v.Failure),
+		ServiceVersion: v.ServiceVersion,
 	}
 }
 
