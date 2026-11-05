@@ -228,7 +228,10 @@ the step at once instead of waiting out the join budget. The test fixture that c
 `known_hosts` today; it gains an SSH CA, and the preflight is not loosened to fit it.
 Bound, stated: whether a Teleport RBAC refusal at `DialHost` arrives as a typed access-denied
 error is the proxy's behaviour and is unverified here; until it is, it stays in the wait and is
-named in the message the wait ends with.
+named in the message the wait ends with. **Superseded by NIM-1171:** an access denial,
+`PermissionDenied` or `Unauthenticated` at `DialHost` is now read as the proxy refusing the
+Keeper's own identity and is not waited on — see
+[ADR-063, amendment 2026-11-05](0063-bootstrap-token-delivery.md#amendment-2026-11-05--the-keepers-own-refused-identity-is-not-a-wait-nim-1171).
 
 **11. All hosts at once; any failure fails the step.** A SID listed twice is refused before
 anything is dialed — two installs racing on one machine would redeem one token twice. Hosts run in

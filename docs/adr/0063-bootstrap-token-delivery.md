@@ -864,3 +864,79 @@ Guards: `TestIntegration_IssuedBatch_IdentityWithoutAgent*`,
 `TestAwait_FirstRealPresenceErrorIsKept`,
 `TestAwait_PresenceAnswerSurvivesAnExcusedFactsPoll`,
 `TestAwait_TimeoutNamesWhatTheRegistryKnowsPerHost`.
+
+## Amendment 2026-11-05 — the Keeper's own refused identity is not a wait (NIM-1171)
+
+The 2026-09-14 rule "`teleport` retries every `Dial` error" lost its first exception
+to NIM-905, a refused host key. This is the second: the Keeper's **own** Teleport
+identity, expired or refused by the proxy.
+
+Found on the WB stand on 2026-10-31 and 2026-11-01: `core.ssh.apply` waited out the
+whole `join_wait_timeout` twice — 15 minutes, 63–66 attempts on each of three hosts
+— and every attempt failed the same way, `opening proxy stream … remote error: tls:
+expired certificate`. The identity tbot issues for the Keeper had lapsed. The proxy
+judges the client certificate before it looks for the node, so it refuses every host
+alike and no join can change its answer; only a reissued identity does.
+
+**What changed.**
+
+- **Expiry is checked before the proxy is contacted.** Each attempt reads the TLS
+  client certificate the dial would present — `GetClientCertificate` before
+  `Certificates`, crypto/tls's own order — and fails at once when its `NotAfter` has
+  passed. The identity file is read on every attempt, so an identity that lapses in
+  the middle of a wait ends the wait, and one tbot renews is picked up without
+  restarting the Keeper.
+- **A refusal from the proxy is recognised by shape where one survives.** A
+  `trace.AccessDenied` (matched by its `IsAccessDeniedError` method, so the module
+  takes no dependency on `gravitational/trace` for one predicate); a gRPC
+  `PermissionDenied` or `Unauthenticated`; a TLS alert about the client certificate —
+  `bad_certificate`, `unsupported_certificate`, `certificate_revoked`,
+  `certificate_expired`, `certificate_unknown`, `unknown_ca`, `access_denied`,
+  `certificate_required`. ★ The alert is the one case matched by **text**: gRPC turns
+  a failed transport into `Unavailable` carrying the error's text, and no type of the
+  alert reaches the dialer. The text is rebuilt from the same stdlib values
+  crypto/tls prints it with, not written out by hand, and only an alert **received**
+  from the peer counts, not one the Keeper sent.
+- **Both are one typed error, `push.TeleportIdentityError {Path, NotAfter, Err}`**,
+  and the teleport join predicate stops on it. The message opens on the identity, not
+  on the host: `Keeper's own Teleport identity "<path>" expired at <RFC 3339, UTC>`,
+  or `Teleport proxy refused Keeper's own identity "<path>" (TLS certificate valid
+  until …): <proxy>: <cause>`.
+- **Still waited for:** a node the proxy reports as not there yet (`Unavailable` /
+  `NotFound`, "offline or does not exist") and a proxy that is not listening. The
+  `direct` transport is untouched.
+- **The Keeper still starts with an expired identity**, unlike an identity with no
+  SSH CA (NIM-905), which stops it: tbot may renew the certificate before the first
+  step needs it, and a missing CA no renewal can supply.
+
+**Bounds, accepted.**
+
+- Not observed live: that Teleport never answers `AccessDenied` for a node that has
+  not joined yet. Its router answers such a node with a connection problem or
+  not-found in the code read; if it ever answered a denial, a fresh VM would fail at
+  once instead of being waited for.
+- A 401/403 from an L7 balancer in front of the proxy reaches gRPC as
+  `Unauthenticated`/`PermissionDenied` and is reported as a refused identity — the
+  known case is a balancer reached with `alpn_upgrade` off, see
+  [the 2026-06-30 L7 balancer amendment](#amendment-2026-06-30--teleport-proxy-behind-an-l7-tls-load-balancer-use_system_trust--alpn_upgrade).
+  Stopping the wait is still right — waiting does not fix a balancer either — but
+  the attribution is imprecise; the HTTP status stays in the wrapped cause.
+- Expiry is judged by the **Keeper's** clock. A Keeper clock running ahead of the
+  proxy's refuses an identity the proxy would still accept, for as long as the skew;
+  a proxy clock running ahead is caught by the alert branch instead.
+- The refusal message opens on the identity, but its cause is the Teleport client's
+  error, which names the host it was dialing ("failed connecting to host …").
+- The alert is matched anywhere in the error's text, so a proxy error that quotes
+  such an alert from a hop of its own is reported as a refused identity too. Not
+  covered by a test; stopping the wait is presumed right there as well.
+
+Guards: `TestIsProxyRefusal` (the stand's line as gRPC flattened it, host name
+replaced),
+`TestTeleportDial_ExpiredIdentity_IsRefusedBeforeAnyDial`,
+`TestTeleportDial_IdentityExpiryIsReadOnEveryAttempt`,
+`TestTeleportDial_ProxyRefusingTheIdentity_IsAnIdentityError` (the real Teleport
+client over gRPC against a local mTLS listener: the stand's `expired certificate`
+alert, produced by a skew on the proxy's clock because an outright expiry no longer
+reaches the proxy; an unknown CA; and a `PermissionDenied` the proxy answers after
+accepting the certificate), `TestTeleportDial_NodeNotJoined_IsNotAnIdentityError`,
+`TestSSH_TeleportDoesNotRetryARefusedKeeperIdentity`.
