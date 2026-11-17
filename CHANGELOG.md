@@ -7,6 +7,22 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **A run task's `hosts[]` lists the hosts still at the task (NIM-1172).**
+  `GET /v1/incarnations/{id}/runs/{apply_id}/tasks` used to carry in `hosts[]` only hosts with a
+  result. It now also carries every host the Keeper saw start the task and that has not
+  reported it yet, with `status: TASK_STATUS_RUNNING` and its `started_at` alone (no `output`,
+  `error` or `finished_at`). The Keeper sets this status from the task's time row (NIM-1170); no
+  Soul sends it, and it is not a Keeper↔Soul `TaskStatus` value. A result in audit always wins
+  (a Keeper task now writes its result before it closes its time row, as a Soul task's
+  `TaskEvent` already did), a host whose run ended without reporting the task is not listed,
+  and `hosts[]` stays ordered by `sid`. While the task right after an `async:` one has no
+  start, a host at it is listed only once it reports. **Breaking for a client** that read every
+  `hosts[]` entry as a result or decodes its `status` as a closed enum: it must now skip
+  `TASK_STATUS_RUNNING`. The run page reads the status: a wave or the
+  host filter of a `serial:` step whose hosts are all still at it shows when it started and how
+  long it has been running, and the step's host table lists the running host with its growing
+  time.
+
 - **Scenario runs are linear by default (NIM-952, [ADR-0091](docs/adr/0091-scenario-linear-barrier.md)).**
   A run executes its steps in plan order — a step per top-level task and per child of a default
   block — each only after every host has finished the one before it; the derived Passages of

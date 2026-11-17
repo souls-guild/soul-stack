@@ -3995,6 +3995,7 @@ components:
           format: date-time
           type: string
         hosts:
+          description: "by sid: the hosts with a result, and the hosts the Keeper saw start the task and not report it yet (status TASK_STATUS_RUNNING). A host sent the task and not at it yet is not listed, nor is a host at the task right after an async: one while that task has no start"
           items:
             $ref: "#/components/schemas/RunTaskHostEntry"
           type:
@@ -4019,7 +4020,7 @@ components:
           format: int64
           type: integer
         started_at:
-          description: when the first host started the task, hosts still running it included (hosts[] lists only hosts with a result). Absent until a host started it
+          description: when the first host started the task, hosts still at it included. Absent until a host started it
           format: date-time
           type: string
         waves:
@@ -4059,7 +4060,7 @@ components:
         error:
           $ref: "#/components/schemas/RunTaskErrorEntry"
         finished_at:
-          description: "when the host finished the task: a Keeper task when it returned, a Soul task when its result arrived; for a host whose run ended without reporting the task, when that run ended. Absent when the Keeper recorded no finish"
+          description: "when the host finished the task: a Keeper task once it returned and the Keeper recorded its result (one a Cancel or the run timeout cut has a finish and may have no result), a Soul task when its result arrived; for a host whose run ended without reporting the task, when that run ended. Absent when the Keeper recorded no finish"
           format: date-time
           type: string
         output:
@@ -4074,6 +4075,7 @@ components:
           format: date-time
           type: string
         status:
+          description: "the host's result of the task, as its Soul reported it (the Keeper for a Keeper task). TASK_STATUS_RUNNING is the Keeper's own, never sent by a Soul: the host started the task and has not reported it yet, so the entry carries started_at alone - no output, error or finished_at. The result replaces it once it arrives; a host whose run ended without reporting the task is not listed"
           enum:
             - TASK_STATUS_UNSPECIFIED
             - TASK_STATUS_OK
@@ -4082,6 +4084,7 @@ components:
             - TASK_STATUS_FAILED
             - TASK_STATUS_TIMED_OUT
             - TASK_STATUS_CANCELLED
+            - TASK_STATUS_RUNNING
           type: string
       required:
         - sid

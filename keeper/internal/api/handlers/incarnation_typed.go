@@ -1537,9 +1537,15 @@ type RunTaskErrorView struct {
 	Message string
 }
 
+// TaskStatusRunning is the status of a host still at a task (NIM-1172). The Keeper
+// sets it from the host's time row; no Soul sends it, so it is not a
+// keeperv1.TaskStatus.
+const TaskStatusRunning = "TASK_STATUS_RUNNING"
+
 // RunTaskHostView — per-host result of one run task (projection of audit task.executed):
 // status + output (register_data) + error, and when the host started and finished
-// the task (NIM-1170). Output/Error/StartedAt/FinishedAt are nil if absent.
+// the task (NIM-1170). Output/Error/StartedAt/FinishedAt are nil if absent. A host
+// still at the task has [TaskStatusRunning] and its StartedAt alone.
 type RunTaskHostView struct {
 	SID        string
 	Status     string
@@ -1589,10 +1595,10 @@ type RunTasksView struct {
 // scope gate (out of scope → 404) via inScope; bad apply_id → 400; foreign/non-existent
 // run → 404. RBAC — incarnation.history (like RunDetail), NOT audit.read.
 //
-// A task's hosts[] — ONLY hosts with a result in audit (pending hosts are not included,
-// the frontend fills them in). A module's declared-secret output fields are masked on
-// the write path ([ADR-0083] §8) — the key is present, the value is not. The last
-// task.executed on (plan_index, sid) wins (retry).
+// A task's hosts[] — the hosts with a result in audit, and the hosts the Keeper saw
+// start the task and not report it yet ([runningHosts]). A module's declared-secret
+// output fields are masked on the write path ([ADR-0083] §8) — the key is present,
+// the value is not. The last task.executed on (plan_index, sid) wins (retry).
 func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID string, inScope func(*incarnation.Incarnation) bool) (RunTasksView, error) {
 	var zero RunTasksView
 
@@ -1640,7 +1646,10 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 		hostParamsByPlan[hp.PlanIndex] = append(hostParamsByPlan[hp.PlanIndex], hp)
 	}
 
-	// Best-effort too: without these rows the tasks answer with no times.
+	// Best-effort too: without these rows the tasks answer with no times and no
+	// host still at a task. Read before the audit results: the writers record a
+	// result before they close its row, so in this order a host that finishes
+	// between the two reads is running or done, never missing.
 	times, err := applyrun.SelectRunTaskTimes(ctx, h.db, applyID)
 	if err != nil {
 		h.logger.Warn("incarnation.run-tasks: task times select failed, showing the tasks without times",
@@ -1658,7 +1667,7 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 	}
 
 	// per-host results from audit (task.executed), grouped plan_index → sid.
-	// runTasksAudit=nil (unit without a reader) → plan WITHOUT hosts. The last result on
+	// runTasksAudit=nil (unit without a reader) → no results. The last result on
 	// (plan_index, sid) wins (execs are ordered by time, later overwrites).
 	byPlanHost := map[int]map[string]RunTaskHostView{}
 	if h.runTasksAudit != nil {
@@ -1692,13 +1701,15 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 	}
 	tasks := make([]RunTaskView, 0, len(plan))
 	for _, p := range plan {
-		hosts := make([]RunTaskHostView, 0, len(byPlanHost[p.PlanIndex]))
-		for _, hv := range byPlanHost[p.PlanIndex] {
+		results := byPlanHost[p.PlanIndex]
+		hosts := make([]RunTaskHostView, 0, len(results))
+		for _, hv := range results {
 			if tt, ok := timeOf[p.PlanIndex][hv.SID]; ok {
 				hv.StartedAt, hv.FinishedAt = tt.StartedAt, tt.FinishedAt
 			}
 			hosts = append(hosts, hv)
 		}
+		hosts = append(hosts, runningHosts(timesByPlan[p.PlanIndex], results)...)
 		sort.Slice(hosts, func(i, j int) bool { return hosts[i].SID < hosts[j].SID })
 		byHost, gerr := applyrun.GroupParamsByHostWithin(p.Params, hostParamsByPlan[p.PlanIndex], &diffBudget)
 		if gerr != nil {
@@ -1721,6 +1732,24 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 		})
 	}
 	return RunTasksView{Tasks: tasks}, nil
+}
+
+// runningHosts — the hosts at a task: a time row started and not finished as
+// SelectRunTaskTimes settled it, so a host whose run ended is never among them, and
+// no result in audit. The result wins: a Soul task's and a Keeper task's audit
+// event are both written before the row is closed.
+func runningHosts(rows []applyrun.RunTaskTime, results map[string]RunTaskHostView) []RunTaskHostView {
+	var out []RunTaskHostView
+	for _, r := range rows {
+		if r.StartedAt == nil || r.FinishedAt != nil {
+			continue
+		}
+		if _, done := results[r.SID]; done {
+			continue
+		}
+		out = append(out, RunTaskHostView{SID: r.SID, Status: TaskStatusRunning, StartedAt: r.StartedAt})
+	}
+	return out
 }
 
 // taskTimes folds a task's host time rows into the task's own: it started when its

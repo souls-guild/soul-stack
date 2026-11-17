@@ -13,11 +13,15 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
+	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
 func goldenIncarnationWire(t *testing.T, name string, native any, want string) {
@@ -320,5 +324,55 @@ func TestGoldenWire_RunServiceVersion(t *testing.T) {
 	want = `{"apply_id":"01M4XGKBF2WQS7SBZP6QDKV9GA","scenario":"create","status":"success","started_at":"2026-11-04T10:00:00Z","hosts":[]}`
 	if got := encode(base); got != want {
 		t.Errorf("wire without a recorded ref =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// NIM-1172: a host still at a task rides the wire as its sid, TASK_STATUS_RUNNING and
+// its start — no output, error or finished_at key — beside the hosts with a result.
+func TestGoldenWire_RunTaskRunningHost(t *testing.T) {
+	start := time.Date(2026, 11, 2, 9, 30, 0, 0, time.UTC)
+	end := start.Add(4 * time.Second)
+	reply := newRunTasksReply(handlers.RunTasksView{Tasks: []handlers.RunTaskView{
+		{PlanIndex: 0, Name: "restart", Module: "core.service.restarted", StartedAt: &start,
+			Hosts: []handlers.RunTaskHostView{
+				{SID: "a.example", Status: "TASK_STATUS_OK", StartedAt: &start, FinishedAt: &end},
+				{SID: "b.example", Status: handlers.TaskStatusRunning, StartedAt: &start},
+			}},
+	}})
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(reply); err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := `{"tasks":[{"plan_index":0,"passage":0,"id":"restart","module":"core.service.restarted","started_at":"2026-11-02T09:30:00Z","hosts":[` +
+		`{"sid":"a.example","status":"TASK_STATUS_OK","started_at":"2026-11-02T09:30:00Z","finished_at":"2026-11-02T09:30:04Z"},` +
+		`{"sid":"b.example","status":"TASK_STATUS_RUNNING","started_at":"2026-11-02T09:30:00Z"}]}]}`
+	if got := string(bytes.TrimSpace(buf.Bytes())); got != want {
+		t.Errorf("wire =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// The statuses hosts[] may carry are every status a Soul reports plus the Keeper's
+// own TASK_STATUS_RUNNING, which no Soul can send: a proto value of that name would
+// make a reported status and the Keeper's read of an open row indistinguishable.
+func TestRunTaskHostStatusEnum_ProtoPlusKeeperRunning(t *testing.T) {
+	if _, clash := keeperv1.TaskStatus_value[handlers.TaskStatusRunning]; clash {
+		t.Fatalf("keeperv1.TaskStatus has %s: a Soul could send the status the Keeper reserves for a host still at a task", handlers.TaskStatusRunning)
+	}
+	field, ok := reflect.TypeOf(RunTaskHostEntry{}).FieldByName("Status")
+	if !ok {
+		t.Fatal("RunTaskHostEntry has no Status field")
+	}
+	got := strings.Split(field.Tag.Get("enum"), ",")
+	want := make([]string, 0, len(keeperv1.TaskStatus_name)+1)
+	for _, name := range keeperv1.TaskStatus_name {
+		want = append(want, name)
+	}
+	want = append(want, handlers.TaskStatusRunning)
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("hosts[].status enum = %v, want keeperv1.TaskStatus + %s = %v", got, handlers.TaskStatusRunning, want)
 	}
 }

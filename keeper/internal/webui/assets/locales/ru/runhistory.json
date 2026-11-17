@@ -108,7 +108,7 @@
   "runHostNotices": "уведомления",
   "runHostOutcomesMore": "успех: {{count}} — показать",
   "runHostOutcomesTitle": "Хосты",
-  "runHostRunning": "в работе",
+  "runHostRunning": "идёт",
   "runHostSuccess": "успех",
   "runInputDefault": "по умолчанию",
   "runInputDefaultWas": "по умолчанию: {{value}}",

@@ -264,7 +264,7 @@ Masked on the write path: a field quoting a vault reference (`vault:<mount>/…`
 
 Permission: `incarnation.history` (same read-tier as RunDetail - **NOT** `audit.read`). **REST-only - MCP-tool, but not.** Path-params: `id`, `apply_id` (ULID; non-ULID → `400 malformed-request`). OperationID: `getIncarnationRunTasks`.
 
-**Per-task** run slice (unlike the detail endpoint above - it gives the host lines `apply_runs`): task plan (`apply_run_plan`) + the result of each task on each host from the audit log (`task.executed`), join by `plan_index`. Under the UI tab is the "run progress": which scenario was used, from which tasks, what changed. `hosts[]` carries only hosts with a result in audit (pending is not included - the front will finish it off).
+**Per-task** run slice (unlike the detail endpoint above - it gives the host lines `apply_runs`): task plan (`apply_run_plan`) + the result of each task on each host from the audit log (`task.executed`), join by `plan_index`. Under the UI tab is the "run progress": which scenario was used, from which tasks, what changed. `hosts[]` carries the hosts with a result in audit and the hosts still at the task (`TASK_STATUS_RUNNING`, see *A host still at a task* below); a host sent the task and not at it yet is not included.
 
 **Response `200 RunTasksReply`:** `{tasks: [RunTaskEntry]}` (empty plan → `[]`), order - `plan_index`:
 
@@ -277,16 +277,17 @@ Permission: `incarnation.history` (same read-tier as RunDetail - **NOT** `audit.
 | `params` | `object` (optional) | Rendered operator input parameters of the task, **secret-masked** (secret note below). The key is omitted for tasks without params. A top-level key whose value differs between hosts reads `<per-host>`; its values are in `params_by_host`. |
 | `params_by_host` | `RunTaskParamsByHost` (optional) | Present only when the task's masked input differs between hosts (NIM-985). `hosts` - how many hosts the task was rendered for. `cells[]` - every leaf of the input in path order (`path`: `config.replication.role`, `acl.users[0].name`; a key that holds a dot, a bracket or a quote reads `["a.b"]`; past 32 path segments - keys and list indices, the top-level key included - the rest of a value is one cell whose value is that subtree): `same: true` with one `values[]` entry and no `sids` for a leaf every host shares, otherwise `values[]` of `{value, sids[]}` (`absent: true` for hosts that lack the leaf), largest group first. A leaf that is a string on **every** host, multi-line on at least one and within the diff bounds (5000 lines per host, 200000 over all hosts, 500 edits of any host from the base text - a changed line counts as two, one removed and one added - and a step budget per leaf and per read of the run) is split into **hunks**: cells with `line` (1-based, in the base text) and `line_count` (`0` = an insertion before `line`), variants carrying `lines[]` (`absent: true` = no lines on those hosts); `texts[]` holds each such path's base text, and replacing every hunk's range by a host's variant gives that host's text. Any other leaf that differs - including a text one host lacks or one past the bound - is a whole-value cell. |
 | `waves` | `array` of `array` of `string` (optional) | Present only on a host task of a `serial:` step sent in more than one wave (NIM-996, [orchestration.md §2.2.1](../../scenario/orchestration.md)): the step's hosts per wave, in dispatch order, the same on every host task of the step (a keeper task sharing a staged Passage carries none) - for a block rolled as one group (`serial_scope: block`) that is every child of the block. Recorded before the first wave, so a wave the run ended before still lists its hosts, which then have no entry in the `hosts[]` of the step's ordinary tasks (a rescue the run still sends them is reported as usual). A host the Keeper settled before the first wave without sending it anything (every task skipped) is in no wave. Runs started before NIM-996 carry no `waves`. |
-| `started_at` | `string` (RFC 3339, optional) | When the first host started the task, hosts still running it included (they are not in `hosts[]` yet). Omitted until a host started it (NIM-1170, see *Task times* below). |
+| `started_at` | `string` (RFC 3339, optional) | When the first host started the task, hosts still at it included. Omitted until a host started it (NIM-1170, see *Task times* below). |
 | `finished_at` | `string` (RFC 3339, optional) | When the last host finished the task. Omitted while any host it was sent to has not finished it. A host in a later wave of a `serial:` step is sent the task only with its wave, so between waves the task reads finished and the next wave takes the finish back. |
-| `hosts[]` | `RunTaskHostEntry` | Per-host total: `sid` (FQDN or synthetic `keeper` for step `on: keeper`), `status` (`TASK_STATUS_*`), `output` (register data, optional - the fields the module declared `secret: true` are masked in it, [ADR-0083](../../adr/0083-declared-secret-state-fields.md) §8), `error` (`{code, module, message?}` - only on the failed host), `started_at` / `finished_at` (optional, below). |
+| `hosts[]` | `RunTaskHostEntry` | Per-host total, by `sid`: `sid` (FQDN or synthetic `keeper` for step `on: keeper`), `status` (`TASK_STATUS_*` as the Soul reported it, or the Keeper's own `TASK_STATUS_RUNNING` for a host still at the task), `output` (register data, optional - the fields the module declared `secret: true` are masked in it, [ADR-0083](../../adr/0083-declared-secret-state-fields.md) §8), `error` (`{code, module, message?}` - only on the failed host), `started_at` / `finished_at` (optional, below). |
 
 **Task times (NIM-1170).** The Keeper stamps them itself, by the database clock, in
 `apply_run_plan_host_times` (one row per host and task it ran or sent, cascading from
 `apply_run_plan`):
 
-- a Keeper task (`on: keeper`) starts before its module runs and finishes when it returns, so a
-  hanging one reads as running from its first second;
+- a Keeper task (`on: keeper`) starts before its module runs and finishes once it returned and
+  the Keeper recorded its result, so a hanging one reads as running from its first second. One
+  a Cancel or the run timeout cut still finishes, though its result may not be recorded;
 - a Soul task's row is written when the host is sent its tasks, the first of them started; the
   task's result (`TaskEvent`) finishes its row and starts the host's next one. A Soul task's
   start is therefore the Keeper's view - it includes the network. An `async:` task runs beside
@@ -300,6 +301,18 @@ Permission: `incarnation.history` (same read-tier as RunDetail - **NOT** `audit.
   times.
 
 Runs started before NIM-1170 carry no times.
+
+**A host still at a task (NIM-1172).** A host whose time row for the task has a start and no
+finish, and which has no result in audit, is in `hosts[]` with `status: TASK_STATUS_RUNNING`
+and its `started_at` alone - no `output`, `error` or `finished_at`. The Keeper sets this
+status itself; no Soul sends it, and it is not a value of the Keeper↔Soul `TaskStatus`. The
+result always wins: a task's audit event is written before its time row is closed - by the
+Soul task's `TaskEvent`, or by the Keeper task once it returned - so for that moment the entry
+already carries the result and its `started_at`. A host whose run
+ended without reporting the task has the row settled as above and is not listed at all; a host
+sent the task and not at it yet (its row has no start) is not listed either. The task right
+after an `async:` one may have no start, and then a host at it is not listed until it reports. Runs
+started before NIM-1170 have no rows, so they carry no running hosts.
 
 There is no `no_log` field. It carried the per-task flag that blanked `params`, `output` and
 `error.message` wholesale; [ADR-0083](../../adr/0083-declared-secret-state-fields.md) §8 removed

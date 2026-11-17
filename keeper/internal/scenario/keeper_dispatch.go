@@ -91,7 +91,6 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, stateSch
 	for _, rt := range keeperTasks {
 		r.stampKeeperTask(ctx, spec.ApplyID, rt, false, log)
 		changed, failed, output, msg := r.applyKeeperStep(ctx, spec, stateSchema, rt, sealedPaths)
-		r.stampKeeperTask(ctx, spec.ApplyID, rt, true, log)
 		log.Info("scenario: keeper-side task executed",
 			slog.String("module", rt.Module),
 			slog.Int("task_idx", rt.Index),
@@ -104,6 +103,10 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, stateSch
 		// (ADR-052 §k) silently misses them. Emitted BEFORE the failed-return so a
 		// failing keeper task is logged too (status FAILED, not CHANGED).
 		r.emitKeeperTaskExecuted(ctx, spec.ApplyID, passage, rt, changed, failed, msg, log)
+		// After the audit event, as a Soul task's TaskEvent does it: the run view lists
+		// a host whose row has finished only by its result, so a row closed first
+		// would drop the task's host from it for that moment.
+		r.stampKeeperTask(ctx, spec.ApplyID, rt, true, log)
 		// applybus publish (ADR-068 §A2) — ALONGSIDE audit, not instead: keeper-side
 		// `on: keeper` progress is visible on operator SSE just like Soul-side.
 		r.publishKeeperTaskExecuted(spec.ApplyID, passage, rt, changed, failed)

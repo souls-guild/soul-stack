@@ -13,6 +13,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"github.com/souls-guild/soul-stack/sdk/module"
+	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
 // heldKeeperModule holds its Apply until released, so a test reads what the run
@@ -78,6 +79,66 @@ func TestIntegration_KeeperTaskTimes_StartedWhileItRuns(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].FinishedAt == nil || rows[0].FinishedAt.Before(*rows[0].StartedAt) {
 		t.Fatalf("after the task returned: rows = %+v, want it finished, not before it started", rows)
+	}
+}
+
+// openRowWitness passes every audit event on and, at each task.executed, notes
+// whether the Keeper task's time row had already finished.
+type openRowWitness struct {
+	audit.Writer
+	t        *testing.T
+	applyID  string
+	finished []bool
+}
+
+func (w *openRowWitness) Write(ctx context.Context, ev *audit.Event) error {
+	if ev.EventType == audit.EventTaskExecuted {
+		rows, err := applyrun.SelectRunTaskTimes(ctx, integrationPool, w.applyID)
+		if err != nil {
+			w.t.Errorf("SelectRunTaskTimes at task.executed: %v", err)
+		}
+		for _, r := range rows {
+			if r.SID == render.KeeperTargetSID {
+				w.finished = append(w.finished, r.FinishedAt != nil)
+			}
+		}
+	}
+	return w.Writer.Write(ctx, ev)
+}
+
+// NIM-1172: the run view lists a host still at a task by its open row and a host
+// done with it by its result, so the result must be written before the row closes,
+// or for that moment the task has no Keeper host at all.
+func TestIntegration_KeeperTaskTimes_ResultBeforeTheFinish(t *testing.T) {
+	resetAll(t)
+	seedIncarnation(t, "redis-prod")
+	ctx := context.Background()
+
+	const applyID = "apply-keeper-times-order"
+	if err := applyrun.InsertRunPlan(ctx, integrationPool, applyID, []applyrun.RunPlanTask{
+		{PlanIndex: 0, Name: "provision_vm", Module: "core.cloud.created"},
+	}); err != nil {
+		t.Fatalf("InsertRunPlan: %v", err)
+	}
+	r := keeperDispatchRunner(fakeKeeperRegistry{"core.cloud": &fakeKeeperModule{final: &pluginv1.ApplyEvent{Changed: true}}})
+	r.applyDB = integrationPool
+	witness := &openRowWitness{Writer: r.deps.Audit, t: t, applyID: applyID}
+	r.deps.Audit = witness
+
+	spec := RunSpec{ApplyID: applyID, IncarnationName: "redis-prod", ScenarioName: "create"}
+	tasks := []*render.RenderedTask{
+		{Index: 0, Name: "provision_vm", Module: "core.cloud.created", Params: mustStruct(t, map[string]any{"provider": "fake"})},
+	}
+	plans := []render.DispatchPlan{{TaskIndex: 0, Keeper: true, TargetSIDs: []string{render.KeeperTargetSID}}}
+	if err := r.dispatchKeeperTasks(ctx, spec, nil, slog.New(slog.DiscardHandler), 0, tasks, plans, nil); err != nil {
+		t.Fatalf("dispatchKeeperTasks: %v", err)
+	}
+	if len(witness.finished) != 1 || witness.finished[0] {
+		t.Fatalf("keeper row finished at task.executed = %v, want one write with the row still open", witness.finished)
+	}
+	rows, err := applyrun.SelectRunTaskTimes(ctx, integrationPool, applyID)
+	if err != nil || len(rows) != 1 || rows[0].FinishedAt == nil {
+		t.Fatalf("after the task: rows = %+v, err = %v; want it finished", rows, err)
 	}
 }
 
